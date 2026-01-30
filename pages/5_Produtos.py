@@ -335,10 +335,14 @@ with tab2:
             st.write("Impacto no Estoque de Insumos:")
             st.dataframe(recipe)
             
-            # Check sufficient stock (Skip Labor)
+            # Check sufficient stock (Skip Labor & Firing)
             # Labor items: type='Mão de Obra' OR unit='hora (mão de obra)'
+            # Firing items: type='Queima' OR unit='fornada' OR name starts with 'Queima'
             # We create a mask for physical items
-            is_physical = (recipe['type'] != 'Mão de Obra') & (recipe['unit'] != 'hora (mão de obra)')
+            is_burning = (recipe['unit'] == 'fornada') | (recipe['name'].str.startswith('Queima')) | (recipe['type'] == 'Queima')
+            is_labor = (recipe['type'] == 'Mão de Obra') | (recipe['unit'] == 'hora (mão de obra)')
+            
+            is_physical = ~(is_burning | is_labor)
             
             insufficient = recipe[is_physical & (recipe['stock_level'] < recipe['needed'])]
             
@@ -353,7 +357,7 @@ with tab2:
                 
                 # Re-fetch with ID for safe updates
                 recipe_w_id = pd.read_sql(f"""
-                    SELECT m.id, (pr.quantity * {qty_to_make}) as needed, m.type, m.unit
+                    SELECT m.id, m.name, (pr.quantity * {qty_to_make}) as needed, m.type, m.unit
                     FROM product_recipes pr
                     JOIN materials m ON pr.material_id = m.id
                     WHERE pr.product_id = {prod_id_prod}
@@ -361,7 +365,11 @@ with tab2:
                 
                 for _, row in recipe_w_id.iterrows():
                     # Only deduct if physical
-                    if row['type'] != 'Mão de Obra' and row['unit'] != 'hora (mão de obra)':
+                    # Same logic as above
+                    is_burning = (row['unit'] == 'fornada') or (str(row['name']).startswith('Queima')) or (row['type'] == 'Queima')
+                    is_labor = (row['type'] == 'Mão de Obra') or (row['unit'] == 'hora (mão de obra)')
+                    
+                    if not (is_burning or is_labor):
                          cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (row['needed'], row['id']))
                 
                 # Add Product Stock

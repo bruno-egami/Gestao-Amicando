@@ -13,22 +13,27 @@ def run_migrations(conn):
     
     # --- Migrations for Existing Tables ---
     
-    # 1. Materials: Add 'type' and 'supplier_id'
+    # 1. Materials: Add 'type', 'supplier_id', 'category_id', 'image_path'
     try:
         cursor.execute("ALTER TABLE materials ADD COLUMN type TEXT DEFAULT 'Material'")
-    except sqlite3.OperationalError:
-        pass # Already exists
+    except sqlite3.OperationalError: pass
         
     try:
         cursor.execute("ALTER TABLE materials ADD COLUMN supplier_id INTEGER")
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN category_id INTEGER")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN image_path TEXT")
+    except sqlite3.OperationalError: pass
 
     # 2. Sales: Add 'client_id'
     try:
         cursor.execute("ALTER TABLE sales ADD COLUMN client_id INTEGER")
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError: pass
 
     conn.commit()
 
@@ -39,7 +44,15 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # --- New Tables ---
+    # --- Table Creations ---
+
+    # Material Categories
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS material_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
 
     # Suppliers
     cursor.execute('''
@@ -52,7 +65,7 @@ def init_db():
             notes TEXT
         )
     ''')
-
+    
     # Clients
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clients (
@@ -65,39 +78,7 @@ def init_db():
         )
     ''')
 
-    # Product Recipes (Ingredients for Products)
-    # Replaces 'formula_ingredients' but linked directly to products now (custom recipes per product)
-    # Or we can keep 'formulas' as templates. 
-    # User asked for: "incremental product items... addition of items from insumos... reflect in consumption"
-    # So each product has a recipe.
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS product_recipes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER,
-            material_id INTEGER,
-            quantity REAL, -- Amount needed for 1 unit of product
-            FOREIGN KEY (product_id) REFERENCES products (id),
-            FOREIGN KEY (material_id) REFERENCES materials (id)
-        )
-    ''')
-    
-    # Expenses (Recurring & Eventual)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            description TEXT,
-            amount REAL,
-            category TEXT, -- 'Fixo', 'Eventual'
-            supplier_id INTEGER,
-            linked_material_id INTEGER, -- If stocking up material
-            FOREIGN KEY (supplier_id) REFERENCES suppliers (id),
-            FOREIGN KEY (linked_material_id) REFERENCES materials (id)
-        )
-    ''')
-
-    # --- Existing Tables (Ensure they exist) ---
-    
+    # Materials
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS materials (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,28 +89,144 @@ def init_db():
             stock_level REAL DEFAULT 0,
             min_stock_alert REAL DEFAULT 0,
             type TEXT DEFAULT 'Material',
-            supplier_id INTEGER
+            supplier_id INTEGER,
+            category_id INTEGER,
+            image_path TEXT
         )
     ''')
 
+    # Fixed Costs
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS fixed_costs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            description TEXT NOT NULL,
-            value REAL NOT NULL
+            description TEXT NOT NULL UNIQUE,
+            value REAL NOT NULL,
+            due_day INTEGER,
+            periodicity TEXT, -- 'Mensal', 'Anual', 'Semanal'
+            category TEXT
         )
     ''')
 
-    # Firings
+    # Kilns
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kilns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
+
+    # Kiln Maintenance
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kiln_maintenance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kiln_id INTEGER,
+            date TEXT,
+            category TEXT, -- 'Resistência', 'Termopar', 'Estrutura'
+            description TEXT,
+            observation TEXT,
+            image_path TEXT,
+            FOREIGN KEY (kiln_id) REFERENCES kilns (id)
+        )
+    ''')
+
+    # Expense Categories
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS expense_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
+
+    # ... (rest of tables)
+
+    # Seed Categories
+    cursor.execute("SELECT count(*) FROM expense_categories")
+    if cursor.fetchone()[0] == 0:
+        defaults = ["Gasto Eventual", "Custo Fixo Mensal (Pagamento)", "Compra de Insumo", "Manutenção", "Impostos", "Outros", "Aluguel", "Energia", "Água", "Internet", "Transporte", "Marketing"]
+        for d in defaults:
+            try:
+                cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (d,))
+            except: pass
+        conn.commit()
+
+    # Firings (Update existing if needed, else created above)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS firings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT,
             type TEXT,
             power_consumption_kwh REAL,
-            cost REAL
+            cost REAL,
+            kiln_id INTEGER,
+            observation TEXT,
+            image_path TEXT,
+            FOREIGN KEY (kiln_id) REFERENCES kilns (id)
         )
     ''')
+    
+    # ...
+
+    # --- Migrations for Existing Tables ---
+    
+    # ... (previous materials migrations)
+
+    # 3. Firings: Add 'kiln_id', 'observation', 'image_path'
+    try:
+        cursor.execute("ALTER TABLE firings ADD COLUMN kiln_id INTEGER")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE firings ADD COLUMN observation TEXT")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE firings ADD COLUMN image_path TEXT")
+    except sqlite3.OperationalError: pass
+
+    # 4. Fixed Costs: Add 'due_day', 'periodicity', 'category'
+    try:
+        cursor.execute("ALTER TABLE fixed_costs ADD COLUMN due_day INTEGER")
+    except sqlite3.OperationalError: pass
+    
+    try:
+        cursor.execute("ALTER TABLE fixed_costs ADD COLUMN periodicity TEXT")
+    except sqlite3.OperationalError: pass
+    
+    try:
+        cursor.execute("ALTER TABLE fixed_costs ADD COLUMN category TEXT")
+    except sqlite3.OperationalError: pass
+
+    # 5. Sales: Add 'discount', 'payment_method', 'notes', 'salesperson'
+    try:
+        cursor.execute("ALTER TABLE sales ADD COLUMN discount REAL DEFAULT 0")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE sales ADD COLUMN payment_method TEXT")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE sales ADD COLUMN notes TEXT")
+    except sqlite3.OperationalError: pass
+    
+    try:
+        cursor.execute("ALTER TABLE sales ADD COLUMN salesperson TEXT")
+    except sqlite3.OperationalError: pass
+
+    conn.commit()
+    
+    # Seed Kilns
+    cursor.execute("SELECT count(*) FROM kilns")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO kilns (name) VALUES ('Jung (Pequeno)')")
+        cursor.execute("INSERT INTO kilns (name) VALUES ('Arimbá (Grande)')")
+        conn.commit()
+
+    # Ensure default data for categories (previous)
+    cursor.execute("SELECT count(*) FROM material_categories")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO material_categories (name) VALUES ('Geral')")
+        conn.commit()
 
     # Products
     cursor.execute('''
@@ -144,6 +241,33 @@ def init_db():
             markup REAL DEFAULT 0,
             image_paths TEXT,
             stock_quantity INTEGER DEFAULT 0
+        )
+    ''')
+
+    # Product Recipes
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS product_recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            material_id INTEGER,
+            quantity REAL,
+            FOREIGN KEY (product_id) REFERENCES products (id),
+            FOREIGN KEY (material_id) REFERENCES materials (id)
+        )
+    ''')
+    
+    # Expenses
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            description TEXT,
+            amount REAL,
+            category TEXT,
+            supplier_id INTEGER,
+            linked_material_id INTEGER,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id),
+            FOREIGN KEY (linked_material_id) REFERENCES materials (id)
         )
     ''')
 
@@ -167,9 +291,15 @@ def init_db():
     
     conn.commit()
     
-    # Run migrations for columns in existing tables
+    # Run migrations for existing databases that might miss new columns
     run_migrations(conn)
     
+    # Ensure default data for categories
+    cursor.execute("SELECT count(*) FROM material_categories")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO material_categories (name) VALUES ('Geral')")
+        conn.commit()
+
     conn.close()
     print(f"Database initialized and migrated at {DB_PATH}")
 
