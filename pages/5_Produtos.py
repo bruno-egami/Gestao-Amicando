@@ -324,8 +324,9 @@ with tab2:
         # Preview Materials
         # Use try/except just in case
         try:
+            # We fetch 'type' and 'unit' to filter out Labor
             recipe = pd.read_sql(f"""
-                SELECT m.name, m.stock_level, (pr.quantity * {qty_to_make}) as needed, m.unit
+                SELECT m.name, m.stock_level, (pr.quantity * {qty_to_make}) as needed, m.unit, m.type
                 FROM product_recipes pr
                 JOIN materials m ON pr.material_id = m.id
                 WHERE pr.product_id = {prod_id_prod}
@@ -334,10 +335,15 @@ with tab2:
             st.write("Impacto no Estoque de Insumos:")
             st.dataframe(recipe)
             
-            # Check sufficient stock
-            insufficient = recipe[recipe['stock_level'] < recipe['needed']]
+            # Check sufficient stock (Skip Labor)
+            # Labor items: type='Mão de Obra' OR unit='hora (mão de obra)'
+            # We create a mask for physical items
+            is_physical = (recipe['type'] != 'Mão de Obra') & (recipe['unit'] != 'hora (mão de obra)')
+            
+            insufficient = recipe[is_physical & (recipe['stock_level'] < recipe['needed'])]
+            
             if not insufficient.empty:
-                st.error("Estoque insuficiente de insumos:")
+                st.error("Estoque insuficiente de insumos físicos:")
                 st.dataframe(insufficient)
                 disable_prod = True
             else:
@@ -347,14 +353,16 @@ with tab2:
                 
                 # Re-fetch with ID for safe updates
                 recipe_w_id = pd.read_sql(f"""
-                    SELECT m.id, (pr.quantity * {qty_to_make}) as needed
+                    SELECT m.id, (pr.quantity * {qty_to_make}) as needed, m.type, m.unit
                     FROM product_recipes pr
                     JOIN materials m ON pr.material_id = m.id
                     WHERE pr.product_id = {prod_id_prod}
                 """, conn)
                 
                 for _, row in recipe_w_id.iterrows():
-                    cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (row['needed'], row['id']))
+                    # Only deduct if physical
+                    if row['type'] != 'Mão de Obra' and row['unit'] != 'hora (mão de obra)':
+                         cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (row['needed'], row['id']))
                 
                 # Add Product Stock
                 cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_to_make, prod_id_prod))

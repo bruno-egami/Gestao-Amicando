@@ -64,6 +64,9 @@ try:
     """, conn)
     
     if not df.empty:
+        # Add 'remove' column for explicit deletion
+        df['remove'] = False
+        
         # Use data_editor for Edit/Delete capability
         edited_df = st.data_editor(
             df,
@@ -76,40 +79,43 @@ try:
                     label="Unidade",
                     options=["kg", "L", "unidade", "hora (mão de obra)"],
                     required=True
-                )
+                ),
+                "remove": st.column_config.CheckboxColumn(label="Excluir?", help="Marque para excluir este insumo")
             },
             hide_index=True,
             num_rows="dynamic",
-            key="materials_editor"
+            key="materials_editor",
+            use_container_width=True
         )
         
         if st.button("Salvar Alterações de Estoque/Preço"):
              cursor = conn.cursor()
-             # Handling updates. 
-             # Note: data_editor allows adding rows too, but logic might be complex with foreign keys in UI.
-             # Best to treat data_editor mainly for updates here.
              
+             # Identify explicit deletes (Checkbox)
+             to_delete_ids = set(edited_df[edited_df['remove'] == True]['id'])
+             
+             # Identify implicit deletes (Removed row in UI)
+             orig_ids = set(df['id'])
+             present_ids = set(edited_df[edited_df['id'].notna()]['id'])
+             missing_ids = orig_ids - present_ids
+             
+             all_deletes = to_delete_ids.union(missing_ids)
+             
+             if all_deletes:
+                 for did in all_deletes:
+                     cursor.execute("DELETE FROM materials WHERE id=?", (did,))
+             
+             # Updates (Skip deleted)
              for index, row in edited_df.iterrows():
-                 if row['id']:
+                 if row['id'] and row['id'] not in all_deletes:
                      cursor.execute("""
                         UPDATE materials 
                         SET name=?, price_per_unit=?, unit=?, stock_level=?, min_stock_alert=?, type=?
                         WHERE id=?
                      """, (row['name'], row['price_per_unit'], row['unit'], row['stock_level'], row['min_stock_alert'], row['type'], row['id']))
              
-             # Check for deleted rows? Streamlit data_editor returns the current state. 
-             # To handle deletes:
-             # Identify IDs in original vs edited.
-             original_ids = set(df['id'])
-             new_ids = set(edited_df[edited_df['id'].notna()]['id'])
-             deleted_ids = original_ids - new_ids
-             
-             if deleted_ids:
-                 for did in deleted_ids:
-                     cursor.execute("DELETE FROM materials WHERE id=?", (did,))
-             
              conn.commit()
-             st.success("Dados atualizados!")
+             st.success("Dados atualizados! (Obs: Estoque de 'Mão de Obra' é ignorado na produção)")
              st.rerun()
 
     else:
