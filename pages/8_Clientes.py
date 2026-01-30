@@ -5,6 +5,8 @@ import admin_utils
 
 st.set_page_config(page_title="Clientes", page_icon="👥")
 
+admin_utils.render_sidebar_logo()
+
 # Auth Check (Admin or Sales view? Sales needs to SELECT clients, but maybe creating them is okay?
 # User said "create 2 distinct accesses... when registering a sale... not view general data".
 # So Sales person needs to SEE clients. But maybe this page is for full management.

@@ -5,7 +5,9 @@ import admin_utils
 from datetime import datetime
 import os
 
-st.set_page_config(page_title="Queimas e Fornos", page_icon="🔥", layout="wide")
+st.set_page_config(page_title="Queimas", page_icon="🔥", layout="wide")
+
+admin_utils.render_sidebar_logo()
 
 if not admin_utils.check_password():
     st.stop()

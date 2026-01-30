@@ -6,6 +6,8 @@ from datetime import datetime, date
 
 st.set_page_config(page_title="Despesas", page_icon="💸", layout="wide")
 
+admin_utils.render_sidebar_logo()
+
 if not admin_utils.check_password():
     st.stop()
 

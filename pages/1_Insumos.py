@@ -8,6 +8,8 @@ import admin_utils
 
 st.set_page_config(page_title="Insumos", page_icon="🧱", layout="wide")
 
+admin_utils.render_sidebar_logo()
+
 if not admin_utils.check_password():
     st.stop()
 

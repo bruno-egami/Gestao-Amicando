@@ -4,8 +4,10 @@ import sqlite3
 import os
 import time
 import database  # Use centralized DB connection
+import admin_utils
 
-st.set_page_config(page_title="Gestão de Produtos", layout="wide")
+st.set_page_config(page_title="Produtos", page_icon="🏺", layout="wide")
+admin_utils.render_sidebar_logo()
 
 # Database Connection
 conn = database.get_connection()
@@ -17,12 +19,87 @@ tab1, tab2 = st.tabs(["Configuração (Cadastro/Receita)", "Produção"])
 
 # --- Tab 1: Configuração ---
 with tab1:
+    # Load Categories
+    try:
+        cat_df = pd.read_sql("SELECT name FROM product_categories", conn)
+        cat_opts = cat_df['name'].tolist()
+    except:
+        cat_opts = ["Utilitário", "Decorativo", "Outros"]
+
+    with st.expander("Gerenciar Categorias", expanded=False):
+        c_cat1, c_cat2 = st.columns([2, 1])
+        new_cat_name = c_cat1.text_input("Nova Categoria", placeholder="Nome da categoria...")
+        if c_cat2.button("Adicionar Categoria"):
+            if new_cat_name and new_cat_name not in cat_opts:
+                try:
+                    cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (new_cat_name,))
+                    conn.commit()
+                    st.success(f"Categoria '{new_cat_name}' adicionada!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro: {e}")
+            elif new_cat_name in cat_opts:
+                st.warning("Categoria já existe.")
+        
+        # List to delete
+        if cat_opts:
+            st.divider()
+            st.write("Categorias Existentes:")
+            st.write(", ".join(cat_opts))
+            
+            del_cat = st.selectbox("Apagar Categoria", [""] + cat_opts)
+            if st.button("Excluir Categoria Selecionada"):
+                 if del_cat:
+                    cursor.execute("DELETE FROM product_categories WHERE name=?", (del_cat,))
+                    conn.commit()
+                    st.success(f"Categoria '{del_cat}' removida!")
+                    st.rerun()
+
+    # --- SHARED DATA FETCH (For Catalog and Production Tab) ---
+    try:
+        products = pd.read_sql("SELECT * FROM products", conn)
+    except Exception as e:
+        st.error(f"Erro ao ler banco de dados: {e}")
+        products = pd.DataFrame()
+
+    prod_dict = {}
+    if not products.empty:
+        prod_dict = {f"[{row['id']}] {row['name']} (Est: {row['stock_quantity']})": row['id'] for _, row in products.iterrows()}
+
+    if "editing_product_id" not in st.session_state:
+        st.session_state.editing_product_id = None
+
     with st.expander("Cadastrar Novo Produto", expanded=False):
+        # COPY SOURCE LOGIC
+        copy_source_id = None
+        base_name = ""
+        base_desc = ""
+        base_cat_idx = 0
+        base_markup = 2.0
+        
+        # Selectbox for copy
+        copy_choice = st.selectbox("Copiar dados de (opcional):", ["(Nenhum)"] + list(prod_dict.keys()))
+        
+        if copy_choice != "(Nenhum)":
+            copy_source_id = prod_dict[copy_choice]
+            # Fetch base data
+            base_row = products[products['id'] == copy_source_id].iloc[0]
+            base_name = f"{base_row['name']} (Cópia)"
+            base_desc = base_row['description'] or ""
+            base_markup = float(base_row['markup']) if base_row['markup'] else 2.0
+            
+            # Cat index
+            if base_row['category'] in cat_opts:
+                base_cat_idx = cat_opts.index(base_row['category'])
+
         with st.form("new_prod"):
-            name = st.text_input("Nome do Produto")
-            desc = st.text_area("Descrição")
-            category = st.selectbox("Categoria", ["Utilitário", "Decorativo", "Outros"])
-            markup = st.number_input("Markup Padrão", value=2.0, step=0.1)
+            name = st.text_input("Nome do Produto", value=base_name)
+            desc = st.text_area("Descrição", value=base_desc)
+            
+            # Use dynamic options
+            category = st.selectbox("Categoria", cat_opts, index=base_cat_idx)
+            
+            markup = st.number_input("Markup Padrão", value=base_markup, step=0.1)
             image_paths = "[]"
              
             if st.form_submit_button("Cadastrar"):
@@ -37,6 +114,17 @@ with tab1:
                         # Get ID of new product
                         new_id = cursor.lastrowid
                         
+                        # IF COPYING: Copy Recipe
+                        if copy_source_id:
+                            # Fetch recipe logic
+                            base_recipe = pd.read_sql(f"SELECT material_id, quantity FROM product_recipes WHERE product_id={copy_source_id}", conn)
+                            if not base_recipe.empty:
+                                for _, br in base_recipe.iterrows():
+                                    cursor.execute("INSERT INTO product_recipes (product_id, material_id, quantity) VALUES (?, ?, ?)",
+                                                   (new_id, br['material_id'], br['quantity']))
+                                conn.commit()
+                                st.success("Receita copiada com sucesso!")
+
                         # Auto-select for editing
                         st.session_state.editing_product_id = new_id
                         
@@ -48,16 +136,7 @@ with tab1:
 
     st.divider()
 
-    # --- SHARED DATA FETCH (For Catalog and Production Tab) ---
-    try:
-        products = pd.read_sql("SELECT * FROM products", conn)
-    except Exception as e:
-        st.error(f"Erro ao ler banco de dados: {e}")
-        products = pd.DataFrame()
 
-    prod_dict = {}
-    if not products.empty:
-        prod_dict = {f"{row['name']} (Est: {row['stock_quantity']})": row['id'] for _, row in products.iterrows()}
 
     if "editing_product_id" not in st.session_state:
         st.session_state.editing_product_id = None
@@ -66,8 +145,29 @@ with tab1:
     if st.session_state.editing_product_id is None:
         # VISUAL CATALOG
         st.subheader("Catálogo de Produtos")
-        if not products.empty:
-            for i, row in products.iterrows():
+        
+        # --- Filters ---
+        c_filt1, c_filt2 = st.columns([2, 1])
+        search_term = c_filt1.text_input("🔍 Buscar", placeholder="Nome...")
+        
+        # Load Categories
+        try:
+            cat_opts = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
+        except: 
+            cat_opts = [] # Fallback
+            
+        sel_cat_filt = c_filt2.selectbox("Filtrar Categoria", ["Todas"] + cat_opts)
+        
+        # Apply Filters
+        filtered_products = products.copy()
+        if search_term:
+            filtered_products = filtered_products[filtered_products['name'].str.contains(search_term, case=False, na=False)]
+        
+        if sel_cat_filt != "Todas":
+            filtered_products = filtered_products[filtered_products['category'] == sel_cat_filt]
+
+        if not filtered_products.empty:
+            for i, row in filtered_products.iterrows():
                 with st.container(border=True):
                     c1, c2, c3, c4 = st.columns([1, 2, 1, 1])
                     
@@ -82,7 +182,7 @@ with tab1:
                     # Info
                     with c2:
                         st.write(f"**{row['name']}**")
-                        st.caption(f"{row['category']} | Est: {row['stock_quantity']}")
+                        st.caption(f"ID: {row['id']} | {row['category']} | Est: {row['stock_quantity']}")
                     
                     # Price
                     with c3:
@@ -95,7 +195,7 @@ with tab1:
                             st.session_state.editing_product_id = row['id']
                             st.rerun()
         else:
-            st.info("Nenhum produto cadastrado. Use o formulário acima para adicionar.")
+            st.info("Nenhum produto encontrado.")
 
     else:
         # EDITING INTERFACE
@@ -124,11 +224,15 @@ with tab1:
                 new_name = st.text_input("Nome", value=curr_prod['name'])
                 
                 # Safe category index logic
-                cats = ["Utilitário", "Decorativo", "Outros"]
+                # Ensure cat_opts available (fetched at top of tab)
+                if 'cat_opts' not in locals():
+                     try: cat_opts = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
+                     except: cat_opts = ["Utilitário", "Decorativo", "Outros"]
+
                 curr_cat = curr_prod['category']
-                cat_idx = cats.index(curr_cat) if curr_cat in cats else 0
+                cat_idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 0
                 
-                new_cat = st.selectbox("Categoria", cats, index=cat_idx)
+                new_cat = st.selectbox("Categoria", cat_opts, index=cat_idx)
                 new_desc = st.text_area("Descrição", value=curr_prod['description'] or "")
                 
                 if st.form_submit_button("Salvar Detalhes"):

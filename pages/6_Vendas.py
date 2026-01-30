@@ -2,9 +2,12 @@ import streamlit as st
 import pandas as pd
 import database
 import admin_utils
+import time
 from datetime import datetime
 
 st.set_page_config(page_title="Vendas", page_icon="💰")
+
+admin_utils.render_sidebar_logo()
 
 # Sales view matches logic: Salesperson can access this.
 # But Admin can too.
@@ -25,34 +28,66 @@ client_opts = [""] + list(client_dict.keys())
 # 2. Select Product (Visual Catalog) - OUTSIDE FORM for interactivity
 products_df = pd.read_sql("SELECT id, name, base_price, stock_quantity, image_paths, category FROM products", conn)
 
-with st.expander("Nova Venda", expanded=True):
+# --- Application State ---
+if 'cart' not in st.session_state:
+    st.session_state['cart'] = []
+
+if 'selected_product_id' not in st.session_state:
+    st.session_state['selected_product_id'] = None
+
+# --- Layout: 2 Columns (Catalog vs Cart/Checkout) ---
+col_catalog, col_cart = st.columns([1.2, 0.8], gap="large")
+
+# ==========================
+# LEFT COL: CATALOG
+# ==========================
+with col_catalog:
+    st.subheader("📦 Catálogo de Produtos")
     
-    if products_df.empty:
-        st.warning("Sem produtos.")
-        sel_row = None
-    else:
-        st.markdown("### 1. Selecione o Produto:")
-        
-        # Prepare helper for images
-        def get_valid_path(paths_str):
-            try:
-                p = eval(paths_str)
-                if p and len(p) > 0: return p[0]
-                return None
-            except: return None
-            
+    # --- Filters ---
+    c_filt1, c_filt2 = st.columns([1, 1])
+    search_term = c_filt1.text_input("🔍 Buscar Produto", placeholder="Nome do produto...")
+    
+    # Helper for images (Defined locally or globally)
+    def get_valid_path(paths_str):
+        try:
+            p = eval(paths_str)
+            if p and len(p) > 0: return p[0]
+            return None
+        except: return None
+
+    # Compute Thumbs globally on products_df so it is available for selection
+    if not products_df.empty:
         products_df['thumb_path'] = products_df['image_paths'].apply(get_valid_path)
+    else:
+        products_df['thumb_path'] = None
+
+    # Get Categories from DB
+    try:
+        all_cats = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
+    except:
+        all_cats = products_df['category'].dropna().unique().tolist()
         
-        # --- Grid Layout Selector ---
-        # Initialize selection state if needed (using query params logic or session state for selection?)
-        # Simply use buttons that set a session state 'selected_product_id'
-        
-        if 'selected_product_id' not in st.session_state:
-            st.session_state['selected_product_id'] = None
-            
-        # Display in chunks of 4 columns
-        cols_per_row = 4
-        rows = [products_df.iloc[i:i+cols_per_row] for i in range(0, len(products_df), cols_per_row)]
+    if all_cats:
+        sel_cats = c_filt2.multiselect("📂 Filtrar Categoria", options=all_cats, placeholder="Todas")
+    else:
+        sel_cats = []
+
+    # --- Apply Filters ---
+    filtered_df = products_df.copy()
+    
+    if search_term:
+        filtered_df = filtered_df[filtered_df['name'].str.contains(search_term, case=False, na=False)]
+    
+    if sel_cats:
+        filtered_df = filtered_df[filtered_df['category'].isin(sel_cats)]
+    
+    if filtered_df.empty:
+        st.warning("Nenhum produto encontrado.")
+    else:
+        # Grid Layout
+        cols_per_row = 3
+        rows = [filtered_df.iloc[i:i+cols_per_row] for i in range(0, len(filtered_df), cols_per_row)]
         
         for row_chunk in rows:
             cols = st.columns(cols_per_row)
@@ -66,254 +101,323 @@ with st.expander("Nova Venda", expanded=True):
                             st.markdown("🖼️ *Sem Foto*")
                         
                         st.markdown(f"**{product.name}**")
-                        st.caption(f"{product.category} | Est: {product.stock_quantity}")
+                        st.caption(f"ID: {product.id} | Est: {product.stock_quantity}")
                         st.markdown(f"**R$ {product.base_price:.2f}**")
                         
-                        # Selection Button
-                        # Logic: If this product is selected, show "Selected" styling or disabled button?
+                        # Selection Logic
                         is_selected = (st.session_state['selected_product_id'] == product.id)
-                        if st.button("Selecionar" if not is_selected else "✅ Selecionado", 
-                                     key=f"btn_sel_{product.id}", 
-                                     type="primary" if is_selected else "secondary"):
+                        if st.button("Selecionar", key=f"btn_sel_{product.id}", 
+                                     type="primary" if is_selected else "secondary",
+                                     use_container_width=True):
                             st.session_state['selected_product_id'] = product.id
                             st.rerun()
 
-        # Resolve selected row from Session State
-        if st.session_state['selected_product_id']:
-            sel_row = products_df[products_df['id'] == st.session_state['selected_product_id']].iloc[0]
-        else:
-            sel_row = None
-            st.info("👆 Clique em 'Selecionar' no produto desejado.")
-
-    # 3. Form (Only shows if product selected)
-    if sel_row is not None:
-        st.divider()
-        st.markdown(f"**Produto Selecionado:** {sel_row['name']} (Estoque: {sel_row['stock_quantity']})")
-        
-        # Store temporary preview
-        if 'pending_sale' not in st.session_state:
-            st.session_state['pending_sale'] = None
-            
-        with st.form("new_sale_form"):
-            default_client_idx = 0
-            # Try to persist client choice if in pending
-            if st.session_state['pending_sale']:
-                try: default_client_idx = client_opts.index(st.session_state['pending_sale']['client_name'])
-                except: pass
-                
-            client_choice = st.selectbox("Cliente", client_opts, index=default_client_idx)
-            
-            c1, c2 = st.columns(2)
-            qty = c1.number_input("Quantidade", min_value=1, step=1, value=1)
-            salesperson = c2.selectbox("Vendedora", ["", "Ira", "Neli"])
-            
-            c3, c4 = st.columns(2)
-            discount = c3.number_input("Desconto (R$)", min_value=0.0, step=0.1, value=0.0)
-            pay_method = c4.selectbox("Forma de Pagamento", ["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"])
-            
-            notes = st.text_area("Observações", height=1)
-            date_sale = st.date_input("Data da Venda", datetime.now())
-            
-            # Calc
-            item_total = sel_row['base_price'] * qty
-            final_total = max(0.0, item_total - discount)
-            
-            st.markdown(f"### Total Final: **R$ {final_total:.2f}**")
-            
-            # Button 1: Review
-            if st.form_submit_button("Revisar Pedido"):
-                if not client_choice:
-                    st.error("Selecione o Cliente.")
-                elif not salesperson:
-                    st.error("Selecione a Vendedora.")
-                elif sel_row['stock_quantity'] < qty:
-                    st.error(f"Estoque insuficiente! Disponível: {sel_row['stock_quantity']}")
-                else:
-                    # Save to Pending State
-                    st.session_state['pending_sale'] = {
-                        "date": date_sale,
-                        "product_id": int(sel_row['id']),
-                        "product_name": sel_row['name'],
-                        "product_thumb": sel_row['thumb_path'], # Save thumb
-                        "qty": qty,
-                        "total": final_total,
-                        "client_name": client_choice,
-                        "client_id": client_dict[client_choice],
-                        "discount": discount,
-                        "payment": pay_method,
-                        "notes": notes,
-                        "salesperson": salesperson
-                    }
-                    st.rerun()
-
-    # 4. Confirmation Section (Outside Form)
-    if st.session_state.get('pending_sale'):
-        ps = st.session_state['pending_sale']
-        
-        # Check if product matches currently selected (sanity check)
-        if sel_row is None or ps['product_id'] != sel_row['id']:
-             st.warning("Produto alterado. Revise o pedido.")
-             st.session_state['pending_sale'] = None
-             st.rerun()
+# ==========================
+# RIGHT COL: CART & ACTION
+# ==========================
+with col_cart:
+    # A. ITEM FORM (If product selected)
+    if st.session_state['selected_product_id']:
+        sel_row = products_df[products_df['id'] == st.session_state['selected_product_id']].iloc[0]
         
         with st.container(border=True):
-            st.markdown("### 📝 Confirmar Detalhes da Venda")
-            c_conf1, c_conf2 = st.columns([1, 2])
-            with c_conf1:
-                if ps.get('product_thumb'):
-                    st.image(ps['product_thumb'], use_container_width=True)
+            st.markdown(f"### Adicionar: {sel_row['name']}")
+            
+            c_qty, c_disc = st.columns(2)
+            item_qty = c_qty.number_input("Qtd", min_value=1, step=1, value=1, key="item_qty")
+            item_disc = c_disc.number_input("Desconto (Item)", min_value=0.0, step=0.1, value=0.0, key="item_disc")
+            
+            # Calc Preview
+            base_total = sel_row['base_price'] * item_qty
+            item_final = max(0.0, base_total - item_disc)
+            
+            st.write(f"Total Item: **R$ {item_final:.2f}**")
+            
+            # Check cart for this product
+            in_cart = sum(i['qty'] for i in st.session_state['cart'] if i['product_id'] == sel_row['id'])
+            
+            if st.button("➕ Adicionar ao Carrinho", type="primary", use_container_width=True):
+                if (in_cart + item_qty) > sel_row['stock_quantity']:
+                    st.error(f"Estoque insuficiente! (Estoque: {sel_row['stock_quantity']}, No Carrinho: {in_cart})")
                 else:
-                    st.write("🖼️ *Sem Foto*")
-            
-            with c_conf2:
-                st.write(f"**Produto:** {ps['product_name']}")
-                st.write(f"**Cliente:** {ps['client_name']}")
-                st.write(f"**Vendedora:** {ps['salesperson']}")
-                st.write(f"**Qtd:** {ps['qty']}")
-                st.write(f"**Total:** R$ {ps['total']:.2f}")
-                st.write(f"**Pagamento:** {ps['payment']}")
-            
-            c_btn1, c_btn2 = st.columns(2)
-            if c_btn1.button("✅ CONFIRMAR VENDA", type="primary", use_container_width=True):
-                # Save to DB
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (ps['date'], ps['product_id'], ps['qty'], ps['total'], "Finalizada", ps['client_id'], ps['discount'], ps['payment'], ps['notes'], ps['salesperson']))
-                
-                # Update Stock
-                cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
-                               (ps['qty'], ps['product_id']))
-                
-                conn.commit()
-                
-                # Move to Receipt
-                st.session_state['last_sale'] = {
-                    "product": ps['product_name'],
-                    "thumb": ps['product_thumb'],
-                    "qty": ps['qty'],
-                    "salesperson": ps['salesperson'],
-                    "total": ps['total'],
-                    "client": ps['client_name'],
-                    "time": datetime.now().strftime("%H:%M:%S")
-                }
-                st.session_state['pending_sale'] = None # Clear pending
-                st.session_state['selected_product_id'] = None # Clear Selection to reset flow
-                st.rerun()
-            
-            if c_btn2.button("❌ Cancelar / Editar", use_container_width=True):
-                st.session_state['pending_sale'] = None
-                st.rerun()
+                    # Add to Cart
+                    cart_item = {
+                        "product_id": sel_row['id'],
+                        "product_name": sel_row['name'],
+                        "thumb": sel_row['thumb_path'],
+                        "qty": item_qty,
+                        "base_price": sel_row['base_price'],
+                        "discount": item_disc,
+                        "total": item_final
+                    }
+                    st.session_state['cart'].append(cart_item)
+                    st.session_state['selected_product_id'] = None # Deselect
+                    st.rerun()
 
-# --- Receipt Section ---
-if 'last_sale' in st.session_state:
-    ls = st.session_state['last_sale']
-    with st.container(border=True):
-        st.success("✅ Venda Realizada com Sucesso!")
+    # B. CART DISPLAY
+    st.divider()
+    st.subheader(f"🛒 Carrinho ({len(st.session_state['cart'])})")
+    
+    if st.session_state['cart']:
+        # Convert to DF for editor (allow delete)
+        cart_df = pd.DataFrame(st.session_state['cart'])
         
-        rc1, rc2 = st.columns([1, 3])
-        with rc1:
-            if ls.get('thumb'):
-                st.image(ls['thumb'], use_container_width=True)
-                
-        with rc2:
-            st.markdown(f"""
-            **Resumo da Transação**:
-            - **Produto**: {ls['product']} (x{ls['qty']})
-            - **Cliente**: {ls['client']}
-            - **Total**: **R$ {ls['total']:.2f}**
-            - **Vendedora**: {ls['salesperson']}
-            
-            *Registrado às {ls['time']}*
-            """)
-            
-        # Button to clear receipt
-        if st.button("Nova Venda (Limpar)", type="primary"):
-            del st.session_state['last_sale']
+        # Interactive Editor to allow deletion
+        edited_cart = st.data_editor(
+            cart_df,
+            column_config={
+                "product_name": st.column_config.TextColumn("Produto", width="medium"),
+                "qty": st.column_config.NumberColumn("Qtd", width="small"),
+                "total": st.column_config.NumberColumn("Total", format="R$ %.2f", width="small"),
+                "product_id": None, "thumb": None, "base_price": None, "discount": None # Hide internals
+            },
+            num_rows="dynamic", # Allow delete
+            hide_index=True,
+            use_container_width=True,
+            key="cart_editor"
+        )
+        
+        # Sync Deletions
+        if len(edited_cart) < len(st.session_state['cart']):
+            # Rebuild cart from edited_cart data to allow deletion
+            # But data_editor returns a dataframe. We need to convert back to list of dicts.
+            # However, data_editor modifications (edits) are complex.
+            # Simplification: Just overwrite cart with edited data (if just deleted/qty changed).
+            st.session_state['cart'] = edited_cart.to_dict('records')
             st.rerun()
+        
+        # Total Cart
+        cart_total = sum(item['total'] for item in st.session_state['cart'])
+        st.markdown(f"## Total Pedido: R$ {cart_total:.2f}")
+        
+        st.divider()
+        st.markdown("### 📝 Dados do Pedido")
+        
+        with st.form("checkout_form"):
+            # Order Details
+            cli_choice = st.selectbox("Cliente", client_opts + ["++ Cadastrar Novo ++"])
+            
+            new_cli_name = None
+            new_cli_phone = None
+            if cli_choice == "++ Cadastrar Novo ++":
+                c_nc1, c_nc2 = st.columns(2)
+                new_cli_name = c_nc1.text_input("Nome Completo", placeholder="Nome do Cliente")
+                new_cli_phone = c_nc2.text_input("Telefone", placeholder="(XX) 99999-9999")
+            
+            salesperson_choice = st.selectbox("Vendedora", ["", "Ira", "Neli"])
+            pay_method_choice = st.selectbox("Pagamento", ["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"])
+            notes_order = st.text_area("Observações Gerais")
+            date_order = st.date_input("Data do Pedido", datetime.now())
+            
+            if st.form_submit_button("✅ Finalizar Venda", type="primary", use_container_width=True):
+                # 1. Validate Client
+                final_client_id = None
+                final_client_name = None
+                
+                if cli_choice == "++ Cadastrar Novo ++":
+                    if not new_cli_name:
+                        st.error("Digite o nome do novo cliente.")
+                    else:
+                        # Create Client
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", (new_cli_name, new_cli_phone))
+                        conn.commit()
+                        final_client_id = cursor.lastrowid
+                        final_client_name = new_cli_name
+                elif not cli_choice:
+                    st.error("Selecione o Cliente.")
+                else:
+                    final_client_id = client_dict[cli_choice]
+                    final_client_name = cli_choice
+
+                # 2. Validate Other Fields
+                if final_client_id and not salesperson_choice:
+                    st.error("Selecione a Vendedora.")
+                elif final_client_id and salesperson_choice:
+                    # PROCESS ORDER
+                    import uuid
+                    # Generate unique Order ID for this transaction
+                    # Short ID for readability or UUID? user wants to see it. 
+                    # Let's use a simpler timestamp based or short UUID.
+                    # e.g ORD-YYYYMMDD-XXXX
+                    order_uuid = f"ORD-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}"
+                    
+                    cursor = conn.cursor()
+                    
+                    # Iterate Items
+                    for item in st.session_state['cart']:
+                        cursor.execute("""
+                            INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (date_order, int(item['product_id']), item['qty'], item['total'], "Finalizada", final_client_id, item['discount'], pay_method_choice, notes_order, salesperson_choice, order_uuid))
+                        
+                        # Stock Update
+                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
+                                       (item['qty'], int(item['product_id'])))
+                    
+                    conn.commit()
+                    
+                    # Save Receipt Data
+                    st.session_state['last_order'] = {
+                        "id": order_uuid,
+                        "client": final_client_name,
+                        "salesperson": salesperson_choice,
+                        "items": st.session_state['cart'],
+                        "total": cart_total,
+                        "time": datetime.now().strftime("%H:%M:%S")
+                    }
+                    
+                    # Clear Cart
+                    st.session_state['cart'] = []
+                    st.rerun()
+                    
+    else:
+        st.info("Seu carrinho está vazio.")
+
+# --- Receipt Section (Order Level) ---
+# --- Receipt Section (Order Level) ---
+if 'last_order' in st.session_state:
+    lo = st.session_state['last_order']
+    
+    # Using container for Receipt instead of experimental dialog
+    with st.container(border=True):
+        st.success("✅ Pedido Finalizado!")
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            st.write(f"**Cliente:** {lo['client']}")
+            st.write(f"**Vendedora:** {lo['salesperson']}")
+        with col_r2:
+            st.metric("Total", f"R$ {lo['total']:.2f}")
+            
+        st.caption("Itens:")
+        for item in lo['items']:
+             st.text(f"{item['qty']}x {item['product_name']} (R$ {item['total']:.2f})")
+             
+        if st.button("Nova Venda (Limpar Comprovante)"):
+             del st.session_state['last_order']
+             st.rerun()
 
 
 # --- History & Edit ---
-    st.divider()
-    
-    # Secure History
-    with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
-        if admin_utils.check_password():
-            st.subheader("Gerenciar Vendas")
+st.divider()
+
+# Secure History
+with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
+    if admin_utils.check_password():
+        st.subheader("Gerenciar Vendas")
+        
+        # Filters
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        fil_date = fc1.date_input("Período", [], key="hist_dates")
+        fil_client = fc2.selectbox("Cliente", client_opts, key="hist_cli")
+        fil_pay = fc3.selectbox("Pagamento", ["Todas"] + ["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"], key="hist_pay")
+        fil_salesp = fc4.selectbox("Vendedora", ["Todas", "Ira", "Neli"], key="hist_sp")
+        
+        # Query Construction
+        query = """
+            SELECT s.id, s.order_id, s.date, c.name as cliente, p.name as produto, s.quantity, s.total_price, 
+                   s.salesperson, s.payment_method, s.discount, s.notes, s.product_id
+            FROM sales s
+            LEFT JOIN clients c ON s.client_id = c.id
+            JOIN products p ON s.product_id = p.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if len(fil_date) == 2:
+            query += " AND s.date BETWEEN ? AND ?"
+            params.append(fil_date[0])
+            params.append(fil_date[1])
+        if fil_client:
+            query += " AND c.name = ?"
+            params.append(fil_client)
+        if fil_pay != "Todas":
+            query += " AND s.payment_method = ?"
+            params.append(fil_pay)
+        if fil_salesp != "Todas":
+            query += " AND s.salesperson = ?"
+            params.append(fil_salesp)
+        
+        query += " ORDER BY s.date DESC"
+        
+        sales_view = pd.read_sql(query, conn, params=params)
+        
+        # TOGGLE VIEW
+        group_by_order = st.checkbox("📂 Agrupar por Pedido", value=True)
+        
+        if not sales_view.empty:
+            # Fix Date Type
+            sales_view['date'] = pd.to_datetime(sales_view['date'])
             
-            # Filters
-            fc1, fc2, fc3, fc4 = st.columns(4)
-            fil_date = fc1.date_input("Período", [], key="hist_dates")
-            fil_client = fc2.selectbox("Cliente", client_opts, key="hist_cli")
-            fil_pay = fc3.selectbox("Pagamento", ["Todas"] + ["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"], key="hist_pay")
-            fil_salesp = fc4.selectbox("Vendedora", ["Todas", "Ira", "Neli"], key="hist_sp")
-            
-            # Query Construction
-            query = """
-                SELECT s.id, s.date, c.name as cliente, p.name as produto, s.quantity, s.total_price, 
-                       s.salesperson, s.payment_method, s.discount, s.notes, s.product_id
-                FROM sales s
-                LEFT JOIN clients c ON s.client_id = c.id
-                JOIN products p ON s.product_id = p.id
-                WHERE 1=1
-            """
-            params = []
-            
-            if len(fil_date) == 2:
-                query += " AND s.date BETWEEN ? AND ?"
-                params.append(fil_date[0])
-                params.append(fil_date[1])
-            if fil_client:
-                query += " AND c.name = ?"
-                params.append(fil_client)
-            if fil_pay != "Todas":
-                query += " AND s.payment_method = ?"
-                params.append(fil_pay)
-            if fil_salesp != "Todas":
-                query += " AND s.salesperson = ?"
-                params.append(fil_salesp)
-            
-            query += " ORDER BY s.date DESC"
-            
-            sales_view = pd.read_sql(query, conn, params=params)
-            
-            if not sales_view.empty:
-                # Fix Date Type
-                sales_view['date'] = pd.to_datetime(sales_view['date'])
+            # --- GROUPED VIEW LOGIC ---
+            if group_by_order:
+                # Aggregate
+                grouped = sales_view.groupby('order_id').agg({
+                    'date': 'first',
+                    'cliente': 'first',
+                    'produto': lambda x: ", ".join(x),
+                    'quantity': 'sum',
+                    'total_price': 'sum',
+                    'salesperson': 'first',
+                    'payment_method': 'first',
+                    'notes': 'first',
+                    'id': 'first' # Just for key
+                }).reset_index()
                 
+                # Sort by date
+                grouped = grouped.sort_values(by='date', ascending=False)
+                
+                st.data_editor(
+                    grouped,
+                    column_config={
+                        "order_id": st.column_config.TextColumn("Pedido", disabled=True),
+                        "date": st.column_config.DateColumn("Data", disabled=True, format="DD/MM/YYYY"),
+                        "cliente": "Cliente",
+                        "produto": st.column_config.TextColumn("Produtos", disabled=True),
+                        "quantity": st.column_config.NumberColumn("Qtd Itens", disabled=True),
+                        "total_price": st.column_config.NumberColumn("Total", format="R$ %.2f", disabled=True),
+                        "id": None # Hide ID
+                    },
+                    hide_index=True,
+                    key="grouped_sales_editor"
+                )
+                st.caption("ℹ️ Para editar ou excluir itens individuais, desmarque 'Agrupar por Pedido'.")
+            
+            else:
+                # --- DETAILED VIEW (Original) ---
                 # Add Delete col
                 sales_view['remove'] = False 
                 
                 # Display Editor
                 edited_sales = st.data_editor(
-                    sales_view,
-                    column_config={
-                        "id": st.column_config.NumberColumn(disabled=True),
-                        "date": st.column_config.DateColumn("Data"),
-                        "cliente": st.column_config.TextColumn("Cliente", disabled=True), # Simplify client edit to avoid ID complex logic or allow? Let's keep disabled for safety or just Text. Actually user might want to edit. But Selectbox logic in editor is tricky if not mapped perfectly. Let's keep Read-Only for Client Name in History for now or use Selectbox if easy.
-                        # Using Text for Client Name (Not ID) means we can't easily change client ID back. 
-                        # Ideally we load Client Name. If they change Name, it doesn't change ID. 
-                        # We need client_id in query to allow re-assignment? 
-                        # Let's keep it simple: Read Only meta data, allow Date/Notes edit.
-                        
-                        "produto": st.column_config.TextColumn("Produto", disabled=True),
-                        "quantity": st.column_config.NumberColumn("Qtd", disabled=True),
-                        "total_price": st.column_config.NumberColumn("Total", format="R$ %.2f", disabled=True),
-                        "salesperson": st.column_config.SelectboxColumn("Vendedora", options=["Ira", "Neli"]),
-                        "payment_method": st.column_config.SelectboxColumn("Pagamento", options=["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"]),
-                        "discount": st.column_config.NumberColumn("Desc.", format="R$ %.2f", disabled=True),
-                        "notes": st.column_config.TextColumn("Obs"),
-                        
-                        "product_id": st.column_config.NumberColumn(disabled=True, width=None), 
-                        "remove": st.column_config.CheckboxColumn("Cancelar?", help="Estorna estoque")
-                    },
-                    hide_index=True,
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key="sales_editor"
-                )
-                
+                sales_view,
+                column_config={
+                    "id": st.column_config.NumberColumn(disabled=True),
+                    "order_id": st.column_config.TextColumn("Pedido", disabled=True, width="medium"),
+                    "date": st.column_config.DateColumn("Data"),
+                    "cliente": st.column_config.TextColumn("Cliente", disabled=True), # Simplify client edit to avoid ID complex logic or allow? Let's keep disabled for safety or just Text. Actually user might want to edit. But Selectbox logic in editor is tricky if not mapped perfectly. Let's keep Read-Only for Client Name in History for now or use Selectbox if easy.
+                    # Using Text for Client Name (Not ID) means we can't easily change client ID back. 
+                    # Ideally we load Client Name. If they change Name, it doesn't change ID. 
+                    # We need client_id in query to allow re-assignment? 
+                    # Let's keep it simple: Read Only meta data, allow Date/Notes edit.
+                    
+                    "produto": st.column_config.TextColumn("Produto", disabled=True),
+                    "quantity": st.column_config.NumberColumn("Qtd", disabled=True),
+                    "total_price": st.column_config.NumberColumn("Total", format="R$ %.2f", disabled=True),
+                    "salesperson": st.column_config.SelectboxColumn("Vendedora", options=["Ira", "Neli"]),
+                    "payment_method": st.column_config.SelectboxColumn("Pagamento", options=["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"]),
+                    "discount": st.column_config.NumberColumn("Desc.", format="R$ %.2f", disabled=True),
+                    "notes": st.column_config.TextColumn("Obs"),
+                    
+                    "product_id": st.column_config.NumberColumn(disabled=True, width=None), 
+                    "remove": st.column_config.CheckboxColumn("Cancelar?", help="Estorna estoque")
+                },
+                hide_index=True,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="sales_editor"
+            )
+            
                 if st.button("Salvar Alterações (Histórico)"):
                     cursor = conn.cursor()
                     
@@ -336,16 +440,22 @@ if 'last_sale' in st.session_state:
                     # 2. Handle Updates (Date, Salesperson, Payment, Notes)
                     for i, row in edited_sales.iterrows():
                         if row['id'] and row['id'] not in all_deletes:
+                            # Fix Date binding (Pandas Timestamp -> Python Date/String)
+                            dv = row['date']
+                            if hasattr(dv, 'date'):
+                                dv = dv.date()
+                            
                             cursor.execute("""
                                 UPDATE sales SET date=?, salesperson=?, payment_method=?, notes=?
                                 WHERE id=?
-                            """, (row['date'], row['salesperson'], row['payment_method'], row['notes'], row['id']))
+                            """, (dv, row['salesperson'], row['payment_method'], row['notes'], row['id']))
                     
                     conn.commit()
-                    st.success("Histórico atualizado!")
+                    st.success("Histórico atualizado com sucesso!")
+                    time.sleep(1)
                     st.rerun()
+        
+        else:
+            st.info("Nenhuma venda encontrada com estes filtros.")
 
-            else:
-                st.info("Nenhuma venda encontrada com estes filtros.")
-    
-    conn.close()
+conn.close()

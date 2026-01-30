@@ -5,6 +5,8 @@ import admin_utils
 
 st.set_page_config(page_title="Fornecedores", page_icon="🚚")
 
+admin_utils.render_sidebar_logo()
+
 # Auth Check (Admin only)
 if not admin_utils.check_password():
     st.stop()
