@@ -88,6 +88,54 @@ def init_db():
         )
     ''')
 
+    # Users (Authentication & Authorization)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'vendedor',
+            name TEXT,
+            active INTEGER DEFAULT 1,
+            created_at TEXT,
+            last_login TEXT
+        )
+    ''')
+
+    # Audit Log (Track all changes for rollback)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            user_id INTEGER,
+            username TEXT,
+            action TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            record_id INTEGER,
+            old_data TEXT,
+            new_data TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
+    # Production History (Log each production event)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS production_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            product_id INTEGER NOT NULL,
+            product_name TEXT,
+            quantity INTEGER NOT NULL,
+            order_id INTEGER,
+            user_id INTEGER,
+            username TEXT,
+            notes TEXT,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (order_id) REFERENCES commission_orders(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
     # Materials
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS materials (

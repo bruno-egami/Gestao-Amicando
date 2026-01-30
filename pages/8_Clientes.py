@@ -2,65 +2,155 @@ import streamlit as st
 import pandas as pd
 import database
 import admin_utils
+import audit
+import time
 
-st.set_page_config(page_title="Clientes", page_icon="👥")
+st.set_page_config(page_title="Clientes", page_icon="👥", layout="wide")
 
 admin_utils.render_sidebar_logo()
 
-# Auth Check (Admin or Sales view? Sales needs to SELECT clients, but maybe creating them is okay?
-# User said "create 2 distinct accesses... when registering a sale... not view general data".
-# So Sales person needs to SEE clients. But maybe this page is for full management.
-# Let's allow access but maybe restrict deleting? For now, assume Admin needed for full management, 
-# but Sales module will have a "Create Client" shortcut possibly.
-# Let's keep this as Admin Management for now.
-
+# Auth Check
 if not admin_utils.check_password():
     st.stop()
 
-st.title("Gestão de Clientes")
+admin_utils.render_header_logo()
+st.title("👥 Gestão de Clientes")
 
 conn = database.get_connection()
+cursor = conn.cursor()
 
-# --- Form ---
-with st.expander("Novo Cliente", expanded=False):
-    with st.form("new_client"):
-        name = st.text_input("Nome")
-        contact = st.text_input("Contato")
-        phone = st.text_input("Telefone")
-        email = st.text_input("Email")
-        notes = st.text_area("Observações")
-        
-        if st.form_submit_button("Salvar"):
-            if name:
-                cursor = conn.cursor()
-                cursor.execute("INSERT INTO clients (name, contact, phone, email, notes) VALUES (?, ?, ?, ?, ?)",
-                               (name, contact, phone, email, notes))
-                conn.commit()
-                st.success("Cliente cadastrado!")
-                st.rerun()
-            else:
-                st.error("Nome é obrigatório")
+# Session State for Edit Mode
+if "cli_edit_id" not in st.session_state:
+    st.session_state.cli_edit_id = None
 
-# --- List ---
-st.divider()
+# --- LAYOUT: NEW + LIST ---
+col_form, col_list = st.columns([1, 2], gap="large")
 
-df = pd.read_sql("SELECT * FROM clients", conn)
-
-if not df.empty:
-    st.subheader("Lista de Clientes")
-    edited = st.data_editor(df, num_rows="dynamic", key="editor_clients", hide_index=True)
+# === LEFT: NEW CLIENT FORM ===
+with col_form:
+    is_edit = st.session_state.cli_edit_id is not None
+    form_title = "✏️ Editar Cliente" if is_edit else "➕ Novo Cliente"
+    st.subheader(form_title)
     
-    if st.button("Salvar Alterações"):
-        cursor = conn.cursor()
-        for i, row in edited.iterrows():
-            if row['id']:
-                 cursor.execute("""
-                    UPDATE clients SET name=?, contact=?, phone=?, email=?, notes=? WHERE id=?
-                """, (row['name'], row['contact'], row['phone'], row['email'], row['notes'], row['id']))
-        conn.commit()
-        st.success("Atualizado!")
-        st.rerun()
-else:
-    st.info("Nenhum cliente.")
+    # Defaults
+    def_name, def_contact, def_phone, def_email, def_notes = "", "", "", "", ""
+    
+    if is_edit:
+        try:
+            edit_row = pd.read_sql("SELECT * FROM clients WHERE id=?", conn, params=(st.session_state.cli_edit_id,)).iloc[0]
+            def_name = edit_row['name'] or ""
+            def_contact = edit_row['contact'] or ""
+            def_phone = edit_row['phone'] or ""
+            def_email = edit_row['email'] or ""
+            def_notes = edit_row['notes'] or ""
+        except:
+            st.session_state.cli_edit_id = None
+            st.rerun()
+    
+    if is_edit:
+        if st.button("⬅️ Cancelar Edição"):
+            st.session_state.cli_edit_id = None
+            st.rerun()
+    
+    with st.form("client_form", clear_on_submit=not is_edit):
+        f_name = st.text_input("Nome *", value=def_name)
+        f_contact = st.text_input("Contato", value=def_contact)
+        f_phone = st.text_input("Telefone", value=def_phone)
+        f_email = st.text_input("Email", value=def_email)
+        f_notes = st.text_area("Observações", value=def_notes)
+        
+        btn_label = "💾 Salvar Alterações" if is_edit else "💾 Cadastrar"
+        if st.form_submit_button(btn_label, type="primary", use_container_width=True):
+            if not f_name:
+                st.error("Nome é obrigatório.")
+            else:
+                new_data = {'name': f_name, 'contact': f_contact, 'phone': f_phone, 'email': f_email, 'notes': f_notes}
+                
+                if is_edit:
+                    # Capture old data for audit
+                    old_data = {'name': def_name, 'contact': def_contact, 'phone': def_phone, 'email': def_email, 'notes': def_notes}
+                    
+                    cursor.execute("""
+                        UPDATE clients SET name=?, contact=?, phone=?, email=?, notes=? WHERE id=?
+                    """, (f_name, f_contact, f_phone, f_email, f_notes, st.session_state.cli_edit_id))
+                    conn.commit()
+                    
+                    # Log UPDATE
+                    audit.log_action(conn, 'UPDATE', 'clients', st.session_state.cli_edit_id, old_data, new_data)
+                    
+                    st.success("Cliente atualizado!")
+                    st.session_state.cli_edit_id = None
+                else:
+                    cursor.execute("""
+                        INSERT INTO clients (name, contact, phone, email, notes) VALUES (?, ?, ?, ?, ?)
+                    """, (f_name, f_contact, f_phone, f_email, f_notes))
+                    conn.commit()
+                    new_id = cursor.lastrowid
+                    
+                    # Log CREATE
+                    audit.log_action(conn, 'CREATE', 'clients', new_id, None, new_data)
+                    
+                    st.success("Cliente cadastrado!")
+                time.sleep(0.5)
+                st.rerun()
+
+# === RIGHT: LIST WITH SEARCH ===
+with col_list:
+    st.subheader("📋 Clientes Cadastrados")
+    
+    # Search
+    search_term = st.text_input("🔍 Buscar", placeholder="Nome, contato, telefone...")
+    
+    # Fetch Data
+    df = pd.read_sql("SELECT * FROM clients ORDER BY name", conn)
+    
+    # Apply Search Filter
+    if search_term and not df.empty:
+        mask = df.apply(lambda row: search_term.lower() in str(row).lower(), axis=1)
+        df = df[mask]
+    
+    st.caption(f"{len(df)} cliente(s) encontrado(s)")
+    
+    if not df.empty:
+        for _, row in df.iterrows():
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([3, 1, 1])
+                
+                with c1:
+                    st.markdown(f"### {row['name']}")
+                    if row['contact']:
+                        st.write(f"👤 **Contato:** {row['contact']}")
+                    if row['phone']:
+                        st.write(f"📞 {row['phone']}")
+                    if row['email']:
+                        st.write(f"📧 {row['email']}")
+                    if row['notes']:
+                        st.caption(f"📝 {row['notes']}")
+                
+                with c2:
+                    if st.button("✏️ Editar", key=f"edit_cli_{row['id']}", use_container_width=True):
+                        st.session_state.cli_edit_id = row['id']
+                        st.rerun()
+                
+                with c3:
+                    if st.button("🗑️ Excluir", key=f"del_cli_{row['id']}", use_container_width=True):
+                        try:
+                            # Capture data for audit before delete
+                            old_data = {'id': row['id'], 'name': row['name'], 'contact': row['contact'], 
+                                       'phone': row['phone'], 'email': row['email'], 'notes': row['notes']}
+                            
+                            cursor.execute("DELETE FROM clients WHERE id=?", (row['id'],))
+                            conn.commit()
+                            
+                            # Log DELETE
+                            audit.log_action(conn, 'DELETE', 'clients', row['id'], old_data, None)
+                            
+                            st.success(f"'{row['name']}' excluído!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro: {e}")
+    else:
+        st.info("Nenhum cliente cadastrado ou encontrado.")
 
 conn.close()

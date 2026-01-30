@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import database
 import admin_utils
+import audit
 from datetime import datetime
 import os
 
@@ -12,21 +13,14 @@ admin_utils.render_sidebar_logo()
 if not admin_utils.check_password():
     st.stop()
 
+admin_utils.render_header_logo()
 st.title("Gestão de Queimas e Manutenção de Fornos")
 
 conn = database.get_connection()
 cursor = conn.cursor()
 
-# Helper to save images
-def save_image(uploaded_file, folder):
-    if uploaded_file:
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        file_path = os.path.join(folder, uploaded_file.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        return file_path
-    return None
+
+# save_image moved to admin_utils
 
 # Fetch Kilns
 kilns_df = pd.read_sql("SELECT id, name FROM kilns", conn)
@@ -59,7 +53,7 @@ with tab1:
         default_data = {}
         if is_edit:
             try:
-                row_edit = pd.read_sql(f"SELECT * FROM firings WHERE id = {st.session_state.firing_edit_id}", conn).iloc[0]
+                row_edit = pd.read_sql("SELECT * FROM firings WHERE id = ?", conn, params=(st.session_state.firing_edit_id,)).iloc[0]
                 default_data = row_edit
             except:
                 st.error("Erro ao carregar dados.")
@@ -136,7 +130,7 @@ with tab1:
                 # Image Logic
                 final_img_path = default_data.get('image_path')
                 if img_file:
-                    final_img_path = save_image(img_file, "assets/firing_images")
+                    final_img_path = admin_utils.save_image(img_file, "assets/firing_images")
                 
                 k_id = kiln_map[sel_kiln]
                 
@@ -153,9 +147,12 @@ with tab1:
                         INSERT INTO firings (date, type, power_consumption_kwh, cost, kiln_id, observation, image_path)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (date, f_type, consumption, cost, k_id, obs, final_img_path))
+                    new_id = cursor.lastrowid
+                    conn.commit()
+                    audit.log_action(conn, 'CREATE', 'firings', new_id, None,
+                        {'date': str(date), 'type': f_type, 'cost': cost, 'power_consumption_kwh': consumption})
                     st.success("Queima registrada!")
                 
-                conn.commit()
                 st.rerun()
 
     # --- Histórico Queimas ---
@@ -214,8 +211,10 @@ with tab1:
                             st.rerun()
                             
                         if c_del.button("🗑️ Excluir", key=f"del_f_{row['id']}"):
+                            old_data = {'date': str(row['date']), 'type': row['type'], 'cost': row['cost']}
                             cursor.execute("DELETE FROM firings WHERE id=?", (row['id'],))
                             conn.commit()
+                            audit.log_action(conn, 'DELETE', 'firings', row['id'], old_data, None)
                             st.rerun()
                             
                     with c_img:
@@ -243,7 +242,7 @@ with tab2:
         m_default = {}
         if is_m_edit:
             try:
-                m_row = pd.read_sql(f"SELECT * FROM kiln_maintenance WHERE id = {st.session_state.maint_edit_id}", conn).iloc[0]
+                m_row = pd.read_sql("SELECT * FROM kiln_maintenance WHERE id = ?", conn, params=(st.session_state.maint_edit_id,)).iloc[0]
                 m_default = m_row
             except:
                 st.session_state.maint_edit_id = None
@@ -285,7 +284,7 @@ with tab2:
                 # Image
                 final_m_img = m_default.get('image_path')
                 if m_img:
-                    final_m_img = save_image(m_img, "assets/maintenance_images")
+                    final_m_img = admin_utils.save_image(m_img, "assets/maintenance_images")
                 
                 mk_id = kiln_map[m_kiln]
                 
@@ -302,9 +301,12 @@ with tab2:
                         INSERT INTO kiln_maintenance (kiln_id, date, category, description, observation, image_path)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, (mk_id, m_date, m_cat, m_desc, m_obs, final_m_img))
+                    new_id = cursor.lastrowid
+                    conn.commit()
+                    audit.log_action(conn, 'CREATE', 'kiln_maintenance', new_id, None,
+                        {'date': str(m_date), 'category': m_cat, 'description': m_desc})
                     st.success("Manutenção Registrada!")
                 
-                conn.commit()
                 st.rerun()
                 
     # --- Histórico Manutenção ---
@@ -358,8 +360,10 @@ with tab2:
                             st.rerun()
                             
                         if c_mdel.button("🗑️ Excluir", key=f"del_m_{row['id']}"):
+                             old_data = {'date': str(row['date']), 'category': row['category'], 'description': row['description']}
                              cursor.execute("DELETE FROM kiln_maintenance WHERE id=?", (row['id'],))
                              conn.commit()
+                             audit.log_action(conn, 'DELETE', 'kiln_maintenance', row['id'], old_data, None)
                              st.rerun()
                     with c_mimg:
                         if row['image_path'] and os.path.exists(row['image_path']):

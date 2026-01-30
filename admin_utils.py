@@ -62,6 +62,18 @@ def render_header_logo():
     try:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col1:
-            st.image("Logo amicando.png", width=120)
+            st.image("Logo amicando.png", width=200)
     except:
         pass # Logo missing or error
+
+def save_image(uploaded_file, folder):
+    """Saves an uploaded file to the specified folder. Returns the file path."""
+    import os
+    if uploaded_file:
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        file_path = os.path.join(folder, uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        return file_path
+    return None

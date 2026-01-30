@@ -3,11 +3,13 @@ import pandas as pd
 import database
 from datetime import date, datetime, timedelta
 import admin_utils
+import audit
 import time
 
 st.set_page_config(page_title="Encomendas", page_icon="📦")
 
 admin_utils.render_sidebar_logo()
+admin_utils.render_header_logo()
 st.title("📦 Gestão de Encomendas")
 
 if not admin_utils.check_password():
@@ -168,6 +170,12 @@ with tab_new:
                                          (item['qty_res'], item['id']))
                             
                     conn.commit()
+                    
+                    # Audit log
+                    audit.log_action(conn, 'CREATE', 'commission_orders', new_order_id, None, {
+                        'client_id': client_id, 'total_price': final_total, 'deposit': deposit_val, 'status': 'Pendente'
+                    })
+                    
                     success = True
                     st.session_state["cart_comm"] = []
                 except Exception as e:
@@ -188,7 +196,11 @@ with tab_list:
     # Logic to Delete Order (and restore stock)
     def delete_order(oid):
         # 1. Get reserved items to restore
-        items = pd.read_sql(f"SELECT product_id, quantity_from_stock FROM commission_items WHERE order_id={oid}", conn)
+        items = pd.read_sql("SELECT product_id, quantity_from_stock FROM commission_items WHERE order_id=?", conn, params=(oid,))
+        
+        # Get order data for audit
+        order_data = pd.read_sql("SELECT client_id, total_price, status FROM commission_orders WHERE id=?", conn, params=(oid,))
+        old_data = order_data.iloc[0].to_dict() if not order_data.empty else {}
         
         cursor.execute("BEGIN TRANSACTION")
         try:
@@ -200,6 +212,10 @@ with tab_list:
             cursor.execute("DELETE FROM commission_items WHERE order_id=?", (oid,))
             cursor.execute("DELETE FROM commission_orders WHERE id=?", (oid,))
             conn.commit()
+            
+            # Audit log
+            audit.log_action(conn, 'DELETE', 'commission_orders', oid, old_data, None)
+            
             return True
         except:
             conn.rollback()
@@ -214,19 +230,27 @@ with tab_list:
         ORDER BY o.date_due ASC
     """, conn)
     
+    # Search filter
+    search_orders = st.text_input("🔍 Buscar Pedido", placeholder="Cliente, status...", key="search_orders")
+    if search_orders and not orders.empty:
+        mask = orders.apply(lambda row: search_orders.lower() in str(row).lower(), axis=1)
+        orders = orders[mask]
+    
+    st.caption(f"{len(orders)} pedido(s)")
+    
     if orders.empty:
-        st.info("Nenhuma encomenda registrada.")
+        st.info("Nenhuma encomenda encontrada.")
     else:
         for _, order in orders.iterrows():
             with st.expander(f"📦 #{order['id']} - {order['client']} (Prazo: {pd.to_datetime(order['date_due']).strftime('%d/%m/%Y')}) - {order['status']}"):
                 
                 # Fetch Items
-                items = pd.read_sql(f"""
+                items = pd.read_sql("""
                     SELECT ci.id, p.name, ci.quantity, ci.quantity_from_stock, ci.quantity_produced, ci.product_id, ci.unit_price
                     FROM commission_items ci
                     JOIN products p ON ci.product_id = p.id
-                    WHERE ci.order_id = {order['id']}
-                """, conn)
+                    WHERE ci.order_id = ?
+                """, conn, params=(order['id'],))
                 
                 # Financials & Dates Highlighting
                 c_inf1, c_inf2, c_inf3, c_inf4 = st.columns(4)
@@ -398,8 +422,9 @@ with tab_list:
                                     amount = st.number_input("Qtd", min_value=1, max_value=(target_prod - produced), key=f"prod_in_{item['id']}")
                                     if st.button("Confirmar", key=f"conf_{item['id']}"):
                                         # Deduct materials query...
-                                        recipe = pd.read_sql(f"SELECT material_id, quantity FROM product_recipes WHERE product_id={item['product_id']}", conn)
+                                        recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(item['product_id'],))
                                         success = False
+                                        old_order_status = order['status']
                                         cursor.execute("BEGIN TRANSACTION")
                                         try:
                                             # Update Materials
@@ -410,7 +435,36 @@ with tab_list:
                                             # Update Item
                                             cursor.execute("UPDATE commission_items SET quantity_produced = quantity_produced + ? WHERE id=?", (amount, item['id']))
                                             cursor.execute("UPDATE commission_orders SET status='Em Produção' WHERE id=?", (order['id'],))
+                                            
+                                            # Log production history
+                                            from datetime import datetime as dt
+                                            user_id, username = None, 'system'
+                                            if 'current_user' in st.session_state and st.session_state.current_user:
+                                                user_id = st.session_state.current_user.get('id')
+                                                username = st.session_state.current_user.get('username', 'unknown')
+                                            
+                                            # Get product name
+                                            prod_name_row = pd.read_sql("SELECT name FROM products WHERE id=?", conn, params=(item['product_id'],))
+                                            prod_name = prod_name_row.iloc[0]['name'] if not prod_name_row.empty else 'Produto'
+                                            
+                                            cursor.execute("""
+                                                INSERT INTO production_history (timestamp, product_id, product_name, quantity, order_id, user_id, username)
+                                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                            """, (dt.now().isoformat(), item['product_id'], prod_name, amount, order['id'], user_id, username))
+                                            new_hist_id = cursor.lastrowid
+                                            
                                             conn.commit()
+                                            
+                                            # Audit Log
+                                            audit.log_action(conn, 'CREATE', 'production_history', new_hist_id, None, {
+                                                'product_id': item.get('product_id'), 'product_name': prod_name, 'quantity': amount, 'order_id': order.get('id')
+                                            })
+                                            audit.log_action(conn, 'UPDATE', 'commission_items', item.get('id'), 
+                                                {'quantity_produced': item.get('quantity_produced')}, {'quantity_produced': item.get('quantity_produced', 0) + amount})
+                                            if old_order_status != 'Em Produção':
+                                                audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], 
+                                                    {'status': old_order_status}, {'status': 'Em Produção'})
+                                            
                                             success = True
                                         except Exception as e:
                                             conn.rollback()
@@ -432,19 +486,34 @@ with tab_list:
                             cursor.execute("BEGIN TRANSACTION")
                             try:
                                 if rest_qty > 0:
+                                    old_stock = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn, params=(item['product_id'],)).iloc[0]['stock_quantity']
                                     cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
                                                  (rest_qty, item['product_id']))
+                                    audit.log_action(conn, 'UPDATE', 'products', item['product_id'], 
+                                        {'stock_quantity': old_stock}, {'stock_quantity': old_stock + rest_qty})
+                                
                                 cursor.execute("DELETE FROM commission_items WHERE id=?", (item['id'],))
                                 
                                 # Recalc Total Price of Order
                                 deduction = item['unit_price'] * item['quantity']
+                                old_price = order['total_price']
                                 cursor.execute("UPDATE commission_orders SET total_price = total_price - ? WHERE id=?", 
                                              (deduction, order['id']))
                                 
+                                # Capture old data for audit
+                                old_data = {'id': item['id'], 'product_id': item['product_id'], 'quantity': item['quantity']}
+                                
                                 conn.commit()
+                                
+                                # Audit Logs
+                                audit.log_action(conn, 'DELETE', 'commission_items', item['id'], old_data, None)
+                                audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], 
+                                    {'total_price': old_price}, {'total_price': old_price - deduction})
+                                
                                 success = True
-                            except:
+                            except Exception as e:
                                 conn.rollback()
+                                st.error(f"Erro ao excluir item: {e}")
                             
                             if success:
                                 st.rerun()
@@ -460,8 +529,11 @@ with tab_list:
                         try:
                             # Re-add totals to stock
                             for _, it in items.iterrows():
+                                old_stock = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn, params=(it['product_id'],)).iloc[0]['stock_quantity']
                                 cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
                                              (it['quantity'], it['product_id']))
+                                audit.log_action(conn, 'UPDATE', 'products', it['product_id'], 
+                                    {'stock_quantity': old_stock}, {'stock_quantity': old_stock + it['quantity']})
                             
                             # 2. Create Sale Record
                             import uuid
@@ -476,13 +548,25 @@ with tab_list:
                                       order['client_id'], f"Encomenda #{order['id']}", ord_uuid))
                                 
                                 # 3. Deduct Stock (Sales Logic)
+                                old_stock = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn, params=(it['product_id'],)).iloc[0]['stock_quantity']
                                 cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", 
                                              (it['quantity'], it['product_id']))
+                                
+                                # Audit Log for Sale creation from Order
+                                audit.log_action(conn, 'CREATE', 'sales', cursor.lastrowid, None, {
+                                    'order_id': order['id'], 'product_id': it['product_id'], 'quantity': it['quantity'], 'total_price': (it['unit_price'] * it['quantity'])
+                                })
+                                audit.log_action(conn, 'UPDATE', 'products', it['product_id'], 
+                                    {'stock_quantity': old_stock}, {'stock_quantity': old_stock - it['quantity']})
                             
-                            # 4. Close Order
+                            # 4. Finalize Order Status
+                            old_status = order['status']
                             cursor.execute("UPDATE commission_orders SET status='Entregue' WHERE id=?", (order['id'],))
-                            
                             conn.commit()
+                            
+                            # Audit Log for Order fulfillment
+                            audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], {'status': old_status}, {'status': 'Entregue'})
+                            
                             success = True
                         except Exception as e:
                             conn.rollback()

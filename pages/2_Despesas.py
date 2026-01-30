@@ -2,19 +2,30 @@ import streamlit as st
 import pandas as pd
 import database
 import admin_utils
+import auth
+import audit
 from datetime import datetime, date
 
 st.set_page_config(page_title="Despesas", page_icon="💸", layout="wide")
 
 admin_utils.render_sidebar_logo()
 
-if not admin_utils.check_password():
-    st.stop()
-
-st.title("Gestão de Despesas")
-
 conn = database.get_connection()
 cursor = conn.cursor()
+
+# Authentication
+if not auth.require_login(conn):
+    st.stop()
+
+auth.render_user_info()
+
+# Role check - admin only
+if not auth.check_page_access('Despesas'):
+    st.stop()
+
+admin_utils.render_header_logo()
+st.title("Gestão de Despesas")
+
 
 # Session for Editing
 if "exp_edit_id" not in st.session_state:
@@ -166,7 +177,7 @@ with tab1:
         
         if is_edit:
             try:
-                row_edit = pd.read_sql(f"SELECT * FROM expenses WHERE id={st.session_state.exp_edit_id}", conn).iloc[0]
+                row_edit = pd.read_sql("SELECT * FROM expenses WHERE id=?", conn, params=(st.session_state.exp_edit_id,)).iloc[0]
                 def_date = datetime.strptime(row_edit['date'], '%Y-%m-%d').date()
                 def_desc = row_edit['description']
                 def_val = float(row_edit['amount'])
@@ -205,15 +216,25 @@ with tab1:
             if st.form_submit_button("Salvar Despesa"):
                 sup_id = sup_map[e_sup] if e_sup else None
                 if is_edit:
+                    # Get old data for audit
+                    old_exp = pd.read_sql("SELECT date, description, amount, category FROM expenses WHERE id=?", conn, params=(st.session_state.exp_edit_id,))
+                    old_data = old_exp.iloc[0].to_dict() if not old_exp.empty else {}
+                    
                     cursor.execute("UPDATE expenses SET date=?, description=?, amount=?, category=?, supplier_id=? WHERE id=?", (e_date, e_desc, e_val, e_cat, sup_id, st.session_state.exp_edit_id))
+                    conn.commit()
+                    audit.log_action(conn, 'UPDATE', 'expenses', st.session_state.exp_edit_id, old_data, 
+                        {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
                     st.success("Atualizado!")
                     st.session_state.exp_edit_id = None
                 else:
                     cursor.execute("INSERT INTO expenses (date, description, amount, category, supplier_id, linked_material_id) VALUES (?, ?, ?, ?, ?, ?)", (e_date, e_desc, e_val, e_cat, sup_id, material_to_stock))
+                    new_id = cursor.lastrowid
                     if material_to_stock and qty_bought > 0:
                         cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id = ?", (qty_bought, material_to_stock))
+                    conn.commit()
+                    audit.log_action(conn, 'CREATE', 'expenses', new_id, None,
+                        {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
                     st.success("Salvo!")
-                conn.commit()
                 st.rerun()
 
     with c_list:
@@ -244,20 +265,38 @@ with tab1:
         
         df_hist = pd.read_sql(query, conn, params=params)
         
+        # Search filter
+        search_exp = st.text_input("🔍 Buscar", placeholder="Descrição, fornecedor...", key="search_exp")
+        if search_exp and not df_hist.empty:
+            mask = df_hist.apply(lambda row: search_exp.lower() in str(row).lower(), axis=1)
+            df_hist = df_hist[mask]
+        
+        st.caption(f"{len(df_hist)} registro(s) | Total: R$ {df_hist['amount'].sum():.2f}")
+        
         if not df_hist.empty:
-            st.metric("Total Filtrado", f"R$ {df_hist['amount'].sum():.2f}")
             for i, row in df_hist.iterrows():
-                sup_txt = f" | {row['supplier']}" if row['supplier'] else ""
-                with st.expander(f"{row['date']} | {row['description']} | R$ {row['amount']:.2f}{sup_txt}"):
-                    st.write(f"**Categoria:** {row['category']}")
-                    c_ed, c_del = st.columns(2)
-                    if c_ed.button("✏️ Editar", key=f"e_e_{row['id']}"):
-                        st.session_state.exp_edit_id = row['id']
-                        st.rerun()
-                    if c_del.button("🗑️ Excluir", key=f"d_e_{row['id']}"):
-                        cursor.execute("DELETE FROM expenses WHERE id=?", (row['id'],))
-                        conn.commit()
-                        st.rerun()
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    
+                    with c1:
+                        st.markdown(f"**{row['description']}**")
+                        st.write(f"📅 {row['date']} | 📁 {row['category']}")
+                        if row['supplier']:
+                            st.caption(f"🏢 {row['supplier']}")
+                    
+                    with c2:
+                        st.metric("Valor", f"R$ {row['amount']:.2f}")
+                    
+                    with c3:
+                        if st.button("✏️", key=f"e_e_{row['id']}", help="Editar"):
+                            st.session_state.exp_edit_id = row['id']
+                            st.rerun()
+                        if st.button("🗑️", key=f"d_e_{row['id']}", help="Excluir"):
+                            old_data = {'description': row['description'], 'amount': row['amount'], 'category': row['category']}
+                            cursor.execute("DELETE FROM expenses WHERE id=?", (row['id'],))
+                            conn.commit()
+                            audit.log_action(conn, 'DELETE', 'expenses', row['id'], old_data, None)
+                            st.rerun()
         else:
             st.info("Sem lançamentos.")
 
@@ -336,7 +375,7 @@ with tab2:
         
         if is_f_edit:
             try:
-                frow = pd.read_sql(f"SELECT * FROM fixed_costs WHERE id={st.session_state.fix_edit_id}", conn).iloc[0]
+                frow = pd.read_sql("SELECT * FROM fixed_costs WHERE id=?", conn, params=(st.session_state.fix_edit_id,)).iloc[0]
                 fd_desc = frow['description']
                 fd_val = float(frow['value'])
                 fd_day = int(frow['due_day']) if frow['due_day'] else 5
@@ -359,16 +398,24 @@ with tab2:
             
             if st.form_submit_button("Salvar Definição"):
                 if is_f_edit:
+                    old_fc = pd.read_sql("SELECT description, value, due_day, category FROM fixed_costs WHERE id=?", conn, params=(st.session_state.fix_edit_id,))
+                    old_data = old_fc.iloc[0].to_dict() if not old_fc.empty else {}
                     cursor.execute("UPDATE fixed_costs SET description=?, value=?, due_day=?, periodicity=?, category=? WHERE id=?", (f_desc, f_val, f_day, f_per, f_cat, st.session_state.fix_edit_id))
+                    conn.commit()
+                    audit.log_action(conn, 'UPDATE', 'fixed_costs', st.session_state.fix_edit_id, old_data,
+                        {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
                     st.success("Atualizado!")
                     st.session_state.fix_edit_id = None
                 else:
                     try:
                         cursor.execute("INSERT INTO fixed_costs (description, value, due_day, periodicity, category) VALUES (?, ?, ?, ?, ?)", (f_desc, f_val, f_day, f_per, f_cat))
+                        new_id = cursor.lastrowid
+                        conn.commit()
+                        audit.log_action(conn, 'CREATE', 'fixed_costs', new_id, None,
+                            {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
                         st.success("Criado!")
                     except:
                         st.error("Erro: Descrição deve ser única.")
-                conn.commit()
                 st.rerun()
                 
     with fc_list:
@@ -404,8 +451,10 @@ with tab2:
                         st.session_state.fix_edit_id = row['id']
                         st.rerun()
                     if fc_del.button("🗑️ Excluir", key=f"d_f_{row['id']}"):
+                        old_data = {'description': row['description'], 'value': row['value'], 'category': row['category']}
                         cursor.execute("DELETE FROM fixed_costs WHERE id=?", (row['id'],))
                         conn.commit()
+                        audit.log_action(conn, 'DELETE', 'fixed_costs', row['id'], old_data, None)
                         st.rerun()
         else:
             st.info("Nenhum custo fixo definido.")

@@ -5,6 +5,7 @@ import os
 import time
 import database
 import admin_utils
+import audit
 
 st.set_page_config(page_title="Insumos", page_icon="🧱", layout="wide")
 
@@ -13,6 +14,7 @@ admin_utils.render_sidebar_logo()
 if not admin_utils.check_password():
     st.stop()
 
+admin_utils.render_header_logo()
 st.title("Gestão de Insumos (Matérias-Primas)")
 
 conn = database.get_connection()
@@ -198,19 +200,30 @@ if st.session_state.insumo_edit_id is not None:
                         INSERT INTO materials (name, price_per_unit, unit, stock_level, min_stock_alert, type, supplier_id, category_id, image_path)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (name, price, unit, stock, min_alert, m_type, sup_id, cat_id, final_img_path))
+                    new_id = cursor.lastrowid
                     conn.commit()
+                    audit.log_action(conn, 'CREATE', 'materials', new_id, None, {
+                        'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
+                    })
                     st.success("Criado com sucesso!")
                     st.session_state.insumo_edit_id = None
                     time.sleep(1)
                     st.rerun()
                 else:
                     target_id = st.session_state.insumo_edit_id
+                    # Get old data for audit
+                    old_mat = pd.read_sql("SELECT name, price_per_unit, unit, stock_level, type FROM materials WHERE id=?", conn, params=(target_id,))
+                    old_data = old_mat.iloc[0].to_dict() if not old_mat.empty else {}
+                    
                     cursor.execute("""
                         UPDATE materials 
                         SET name=?, price_per_unit=?, unit=?, stock_level=?, min_stock_alert=?, type=?, supplier_id=?, category_id=?, image_path=?
                         WHERE id=?
                     """, (name, price, unit, stock, min_alert, m_type, sup_id, cat_id, final_img_path, target_id))
                     conn.commit()
+                    audit.log_action(conn, 'UPDATE', 'materials', target_id, old_data, {
+                        'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
+                    })
                     st.success("Atualizado com sucesso!")
                     time.sleep(1)
                     st.rerun()
@@ -220,8 +233,13 @@ if st.session_state.insumo_edit_id is not None:
         st.markdown("---")
         with st.expander("Zona de Perigo"):
             if st.button("EXCLUIR INSUMO", type="primary"):
+                # Get old data for audit
+                old_mat = pd.read_sql("SELECT name, price_per_unit, unit, stock_level, type FROM materials WHERE id=?", conn, params=(st.session_state.insumo_edit_id,))
+                old_data = old_mat.iloc[0].to_dict() if not old_mat.empty else {}
+                
                 cursor.execute("DELETE FROM materials WHERE id=?", (st.session_state.insumo_edit_id,))
                 conn.commit()
+                audit.log_action(conn, 'DELETE', 'materials', st.session_state.insumo_edit_id, old_data, None)
                 st.success("Insumo excluído.")
                 st.session_state.insumo_edit_id = None
                 time.sleep(1)

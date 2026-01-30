@@ -3,6 +3,7 @@ import database
 import pandas as pd
 from datetime import date
 import admin_utils
+import auth
 
 # Page config
 st.set_page_config(
@@ -13,25 +14,47 @@ st.set_page_config(
 )
 
 database.init_db()
+conn = database.get_connection()
+
+# Ensure default admin exists
+auth.create_default_admin(conn)
+
+# --- AUTHENTICATION ---
+if not auth.require_login(conn):
+    st.stop()
+
+# Render user info in sidebar
+auth.render_user_info()
+
+# Get current user
+current_user = auth.get_current_user()
+is_admin = current_user and current_user['role'] == 'admin'
 
 # --- SIDEBAR ---
 with st.sidebar:
     admin_utils.render_sidebar_logo()
-    st.title("Acesso")
-    mode = st.radio("Modo de Visão", ["Operacional", "Administrador"])
     
-    if mode == "Administrador":
-        if not admin_utils.check_password():
-            st.stop()
-            
+    if is_admin:
         st.divider()
         st.caption("Filtros Financeiros")
         ini_date = st.date_input("Início", date.today().replace(day=1))
         end_date = st.date_input("Fim", date.today())
-            
-        if st.checkbox("Sair (Logout)"):
-            del st.session_state["password_correct"]
-            st.rerun()
+        
+        st.divider()
+        st.caption("🔧 Ferramentas Admin")
+        
+        # Database Backup Download
+        import os
+        db_path = os.path.join("data", "ceramic_admin.db")
+        if os.path.exists(db_path):
+            with open(db_path, "rb") as f:
+                st.download_button(
+                    "💾 Baixar Backup do Banco",
+                    f,
+                    file_name=f"backup_{date.today().strftime('%Y%m%d')}.db",
+                    mime="application/octet-stream",
+                    use_container_width=True
+                )
 
     st.info("ℹ️ Dashboard focado em operações (Encomendas e Estoque).")
 
@@ -42,24 +65,57 @@ st.write(f"Hoje: **{date.today().strftime('%d/%m/%Y')}**")
 
 conn = database.get_connection()
 
-if mode == "Administrador":
-    st.markdown("### 💰 Resumo Financeiro")
-    try:
-        # Sales
-        sales_val = pd.read_sql(f"SELECT sum(total_price) as val FROM sales WHERE date BETWEEN '{ini_date}' AND '{end_date}'", conn).iloc[0]['val'] or 0.0
-        # Expenses
-        exps_val = pd.read_sql(f"SELECT sum(amount) as val FROM expenses WHERE date BETWEEN '{ini_date}' AND '{end_date}'", conn).iloc[0]['val'] or 0.0
-        balance = sales_val - exps_val
-        
-        c_fin1, c_fin2, c_fin3 = st.columns(3)
-        c_fin1.metric("Faturamento", f"R$ {sales_val:.2f}")
-        c_fin2.metric("Despesas", f"R$ {exps_val:.2f}")
-        c_fin3.metric("Balanço", f"R$ {balance:.2f}", delta=f"{balance:.2f}")
-        
-        st.divider()
-    except Exception as e:
-        st.error(f"Erro no financeiro: {e}")
+# --- PRODUCTION SUMMARY ---
+st.markdown("### 🔨 Resumo de Produção")
 
+try:
+    # Today's production
+    today_str = date.today().isoformat()
+    today_production = pd.read_sql("""
+        SELECT SUM(quantity) as total FROM production_history 
+        WHERE timestamp LIKE ?
+    """, conn, params=(today_str + '%',))
+    today_total = today_production.iloc[0]['total'] or 0
+    
+    # Week's production
+    week_start = (date.today() - pd.Timedelta(days=7)).isoformat()
+    week_production = pd.read_sql("""
+        SELECT SUM(quantity) as total FROM production_history 
+        WHERE timestamp >= ?
+    """, conn, params=(week_start,))
+    week_total = week_production.iloc[0]['total'] or 0
+    
+    # Month's production
+    month_start = date.today().replace(day=1).isoformat()
+    month_production = pd.read_sql("""
+        SELECT SUM(quantity) as total FROM production_history 
+        WHERE timestamp >= ?
+    """, conn, params=(month_start,))
+    month_total = month_production.iloc[0]['total'] or 0
+
+    prod_c1, prod_c2, prod_c3 = st.columns(3)
+    prod_c1.metric("🔨 Hoje", f"{int(today_total)} peças")
+    prod_c2.metric("📅 Últimos 7 dias", f"{int(week_total)} peças")
+    prod_c3.metric("📆 Este mês", f"{int(month_total)} peças")
+    
+    # Recent production history
+    recent_prod = pd.read_sql("""
+        SELECT timestamp, product_name, quantity, username
+        FROM production_history
+        ORDER BY timestamp DESC
+        LIMIT 5
+    """, conn)
+    
+    if not recent_prod.empty:
+        st.caption("**Últimas Produções:**")
+        for _, row in recent_prod.iterrows():
+            ts = row['timestamp'][:16].replace('T', ' ')
+            st.caption(f"🔹 {ts} — **{row['product_name']}** x{row['quantity']} ({row['username']})")
+    
+    st.divider()
+except Exception as e:
+    st.caption(f"(Histórico de produção ainda não disponível)")
+    st.divider()
 
 try:
     # --- QUERIES ---
@@ -172,6 +228,24 @@ try:
             "base_price": st.column_config.NumberColumn("Preço Base", format="R$ %.2f")
         }
     )
+
+    # --- FINANCIAL SUMMARY (Admin only, at the end, hidden by default) ---
+    if is_admin:
+        st.divider()
+        with st.expander("💰 Resumo Financeiro (clique para expandir)", expanded=False):
+            try:
+                # Sales
+                sales_val = pd.read_sql("SELECT sum(total_price) as val FROM sales WHERE date BETWEEN ? AND ?", conn, params=(ini_date, end_date)).iloc[0]['val'] or 0.0
+                # Expenses
+                exps_val = pd.read_sql("SELECT sum(amount) as val FROM expenses WHERE date BETWEEN ? AND ?", conn, params=(ini_date, end_date)).iloc[0]['val'] or 0.0
+                balance = sales_val - exps_val
+                
+                c_fin1, c_fin2, c_fin3 = st.columns(3)
+                c_fin1.metric("Faturamento", f"R$ {sales_val:.2f}")
+                c_fin2.metric("Despesas", f"R$ {exps_val:.2f}")
+                c_fin3.metric("Balanço", f"R$ {balance:.2f}", delta=f"{balance:.2f}")
+            except Exception as e:
+                st.error(f"Erro no financeiro: {e}")
 
 except Exception as e:
     st.error(f"Erro no dashboard: {e}")

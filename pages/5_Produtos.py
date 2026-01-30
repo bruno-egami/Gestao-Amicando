@@ -5,6 +5,7 @@ import os
 import time
 import database  # Use centralized DB connection
 import admin_utils
+import audit
 
 st.set_page_config(page_title="Produtos", page_icon="🏺", layout="wide")
 admin_utils.render_sidebar_logo()
@@ -13,6 +14,7 @@ admin_utils.render_sidebar_logo()
 conn = database.get_connection()
 cursor = conn.cursor()
 
+admin_utils.render_header_logo()
 st.title("📦 Produtos e Fichas Técnicas")
 
 tab1, tab2 = st.tabs(["Configuração (Cadastro/Receita)", "Produção"])
@@ -479,11 +481,154 @@ with tab2:
                 # Add Product Stock
                 cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_to_make, prod_id_prod))
                 
+                # Log production history
+                from datetime import datetime as dt
+                user_id, username = None, 'system'
+                if 'current_user' in st.session_state and st.session_state.current_user:
+                    user_id = st.session_state.current_user.get('id')
+                    username = st.session_state.current_user.get('username', 'unknown')
+                
+                # Get product name
+                prod_name_row = pd.read_sql("SELECT name FROM products WHERE id=?", conn, params=(prod_id_prod,))
+                prod_name = prod_name_row.iloc[0]['name'] if not prod_name_row.empty else 'Produto'
+                
+                cursor.execute("""
+                    INSERT INTO production_history (timestamp, product_id, product_name, quantity, order_id, user_id, username, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (dt.now().isoformat(), prod_id_prod, prod_name, qty_to_make, None, user_id, username, 'Produção avulsa'))
+                
+                # Get the inserted ID for audit
+                new_prod_hist_id = cursor.lastrowid
+                
                 conn.commit()
+                
+                # Audit log
+                audit.log_action(conn, 'CREATE', 'production_history', new_prod_hist_id, None, {
+                    'product_id': prod_id_prod, 'product_name': prod_name, 'quantity': qty_to_make, 'notes': 'Produção avulsa'
+                })
+                
                 st.success(f"Adicionado {qty_to_make} ao estoque de produtos!")
                 time.sleep(1)
                 st.rerun()
         except Exception as e:
                 st.error(f"Erro na produção: {e}")
+    
+    # --- PRODUCTION HISTORY ---
+    st.divider()
+    st.subheader("📜 Histórico de Produção")
+    
+    # Filters
+    fh1, fh2, fh3 = st.columns(3)
+    
+    with fh1:
+        # Date filter
+        from datetime import timedelta
+        filter_days = st.selectbox("Período", ["Hoje", "Últimos 7 dias", "Últimos 30 dias", "Todo"], index=1)
+    
+    with fh2:
+        # Product filter
+        prod_names = pd.read_sql("SELECT DISTINCT product_name FROM production_history ORDER BY product_name", conn)
+        prod_filter_opts = ["Todos"] + (prod_names['product_name'].tolist() if not prod_names.empty else [])
+        filter_prod = st.selectbox("Produto", prod_filter_opts)
+    
+    with fh3:
+        # User filter
+        user_names = pd.read_sql("SELECT DISTINCT username FROM production_history ORDER BY username", conn)
+        user_filter_opts = ["Todos"] + (user_names['username'].tolist() if not user_names.empty else [])
+        filter_user = st.selectbox("Usuário", user_filter_opts)
+    
+    # Build query
+    from datetime import datetime as dt, date as dt_date
+    query_parts = ["SELECT * FROM production_history WHERE 1=1"]
+    params = []
+    
+    if filter_days == "Hoje":
+        query_parts.append("AND timestamp LIKE ?")
+        params.append(dt_date.today().isoformat() + '%')
+    elif filter_days == "Últimos 7 dias":
+        start = (dt_date.today() - timedelta(days=7)).isoformat()
+        query_parts.append("AND timestamp >= ?")
+        params.append(start)
+    elif filter_days == "Últimos 30 dias":
+        start = (dt_date.today() - timedelta(days=30)).isoformat()
+        query_parts.append("AND timestamp >= ?")
+        params.append(start)
+    
+    if filter_prod != "Todos":
+        query_parts.append("AND product_name = ?")
+        params.append(filter_prod)
+    
+    if filter_user != "Todos":
+        query_parts.append("AND username = ?")
+        params.append(filter_user)
+    
+    query_parts.append("ORDER BY timestamp DESC LIMIT 100")
+    
+    history_df = pd.read_sql(" ".join(query_parts), conn, params=params)
+    
+    # Statistics
+    if not history_df.empty:
+        total_items = history_df['quantity'].sum()
+        unique_products = history_df['product_name'].nunique()
+        st.caption(f"**{len(history_df)}** registros | **{int(total_items)}** peças | **{unique_products}** produtos diferentes")
+    
+    # Display
+    if not history_df.empty:
+        for _, row in history_df.iterrows():
+            ts = row['timestamp'][:16].replace('T', ' ')
+            order_info = f" (Encomenda #{row['order_id']})" if row['order_id'] else ""
+            notes_info = f" — {row['notes']}" if row['notes'] else ""
+            
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([4, 1, 1])
+                
+                with c1:
+                    st.markdown(f"**{row['product_name']}** x{row['quantity']}")
+                    st.caption(f"🕐 {ts} | 👤 {row['username']}{order_info}{notes_info}")
+                
+                with c2:
+                    # Edit popover
+                    with st.popover("✏️"):
+                        st.caption(f"Editar: {row['product_name']}")
+                        new_qty = st.number_input("Nova Quantidade", min_value=1, value=int(row['quantity']), key=f"edit_qty_{row['id']}")
+                        
+                        if st.button("💾 Salvar", key=f"save_qty_{row['id']}"):
+                            diff = new_qty - row['quantity']
+                            
+                            # Update production history
+                            cursor.execute("UPDATE production_history SET quantity = ? WHERE id = ?", (new_qty, row['id']))
+                            
+                            # Adjust product stock accordingly
+                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (diff, row['product_id']))
+                            
+                            conn.commit()
+                            
+                            # Audit log
+                            audit.log_action(conn, 'UPDATE', 'production_history', row['id'], 
+                                {'quantity': row['quantity']}, {'quantity': new_qty})
+                            
+                            st.success("Atualizado!")
+                            time.sleep(0.5)
+                            st.rerun()
+                
+                with c3:
+                    # Delete button
+                    if st.button("🗑️", key=f"del_prod_{row['id']}", help="Excluir registro"):
+                        # Capture for audit
+                        old_data = {'product_id': row['product_id'], 'product_name': row['product_name'], 'quantity': row['quantity']}
+                        
+                        # Revert stock: subtract the quantity that was recorded
+                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (row['quantity'], row['product_id']))
+                        cursor.execute("DELETE FROM production_history WHERE id = ?", (row['id'],))
+                        conn.commit()
+                        
+                        # Audit log
+                        audit.log_action(conn, 'DELETE', 'production_history', row['id'], old_data, None)
+                        
+                        st.success("Registro excluído e estoque revertido!")
+                        time.sleep(0.5)
+                        st.rerun()
+    else:
+        st.info("Nenhum registro de produção encontrado para os filtros selecionados.")
 
 conn.close()

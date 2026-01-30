@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import database
 import admin_utils
+import audit
 import time
 from datetime import datetime
 
@@ -12,6 +13,7 @@ admin_utils.render_sidebar_logo()
 # Sales view matches logic: Salesperson can access this.
 # But Admin can too.
 
+admin_utils.render_header_logo()
 st.title("Frente de Vendas")
 
 conn = database.get_connection()
@@ -251,6 +253,19 @@ with col_cart:
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (date_order, int(item['product_id']), item['qty'], item['total'], "Finalizada", final_client_id, item['discount'], pay_method_choice, notes_order, salesperson_choice, order_uuid))
                         
+                        # Get inserted sale ID for audit
+                        sale_id = cursor.lastrowid
+                        
+                        # Audit log for sale creation
+                        audit.log_action(conn, 'CREATE', 'sales', sale_id, None, {
+                            'product_id': item.get('product_id'), 
+                            'product_name': item.get('product_name') or item.get('product', 'Desconhecido'), 
+                            'quantity': item.get('qty', 0),
+                            'total_price': item.get('total', 0), 
+                            'client_id': final_client_id, 
+                            'payment_method': pay_method_choice
+                        })
+                        
                         # Stock Update
                         cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
                                        (item['qty'], int(item['product_id'])))
@@ -434,8 +449,15 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                             orig_row = sales_view[sales_view['id'] == did].iloc[0]
                             q_restore = orig_row['quantity']
                             p_id = orig_row['product_id']
+                            
+                            # Capture for audit before delete
+                            old_data = {'id': did, 'quantity': q_restore, 'product_id': p_id, 'total_price': orig_row['total_price']}
+                            
                             cursor.execute("DELETE FROM sales WHERE id=?", (did,))
                             cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(q_restore), int(p_id)))
+                            
+                            # Audit log for sale deletion
+                            audit.log_action(conn, 'DELETE', 'sales', did, old_data, None)
 
                     # 2. Handle Updates (Date, Salesperson, Payment, Notes)
                     for i, row in edited_sales.iterrows():
