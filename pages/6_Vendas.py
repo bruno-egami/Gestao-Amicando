@@ -98,13 +98,62 @@ with col_catalog:
                 with c:
                     with st.container(border=True):
                         # Image
+                        # Image Logic (Handle Kits)
+                        # Image Logic (Handle Kits)
+                        # Start with product's own images
+                        display_thumbs = []
                         if product.thumb_path:
-                            st.image(product.thumb_path, use_container_width=True)
+                            display_thumbs.append(product.thumb_path)
+                        
+                        # ALways check for Kit Components to append their images
+                        kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(product.id,))
+                        if not kit_children.empty:
+                            c_ids = ",".join(map(str, kit_children['child_product_id'].tolist()))
+                            c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
+                            for _, ci_row in c_imgs_df.iterrows():
+                                ci_list = eval(ci_row['image_paths']) if ci_row['image_paths'] else []
+                                if ci_list: display_thumbs.extend(ci_list)
+                        
+                        # Limit to distinct images (simple dedup by path string)
+                        seen = set()
+                        unique_thumbs = []
+                        for x in display_thumbs:
+                            if x not in seen:
+                                unique_thumbs.append(x)
+                                seen.add(x)
+                        
+                        display_thumbs = unique_thumbs[:3] # Show max 3 mixed images
+
+                        if display_thumbs:
+                            # Cannot nest columns > 2 levels (CatalogCol -> GridCol -> ImageCol is too deep)
+                            # Passing list to st.image renders them (stacked vertically usually, but ensures visibility)
+                            st.image(display_thumbs, use_container_width=True)
+                        elif display_thumb:
+                             st.image(display_thumb, use_container_width=True)
                         else:
                             st.markdown("🖼️ *Sem Foto*")
                         
+                        # Stock Logic (Handle Kits)
+                        display_stock = product.stock_quantity
+                        is_kit = False
+                        
+                        # Check Kit Stock
+                        kit_stock_df = pd.read_sql("""
+                            SELECT pk.quantity, p.stock_quantity as child_stock 
+                            FROM product_kits pk
+                            JOIN products p ON pk.child_product_id = p.id
+                            WHERE pk.parent_product_id = ?
+                        """, conn, params=(product.id,))
+                        
+                        if not kit_stock_df.empty:
+                            is_kit = True
+                            kit_stock_df['max'] = kit_stock_df['child_stock'] // kit_stock_df['quantity']
+                            display_stock = int(kit_stock_df['max'].min())
+                            if display_stock < 0: display_stock = 0
+                            
                         st.markdown(f"**{product.name}**")
-                        st.caption(f"ID: {product.id} | Est: {product.stock_quantity}")
+                        stock_txt = f"📦 Kit: {display_stock}" if is_kit else f"Est: {product.stock_quantity}"
+                        st.caption(f"ID: {product.id} | {stock_txt}")
                         st.markdown(f"**R$ {product.base_price:.2f}**")
                         
                         # Selection Logic
@@ -139,9 +188,25 @@ with col_cart:
             # Check cart for this product
             in_cart = sum(i['qty'] for i in st.session_state['cart'] if i['product_id'] == sel_row['id'])
             
+            # Helper to get Real Stock (Kit aware)
+            real_stock = sel_row['stock_quantity']
+            
+            # Check Kit Stock (Quick Query)
+            ks_df = pd.read_sql("""
+                SELECT pk.quantity, p.stock_quantity as child_stock 
+                FROM product_kits pk
+                JOIN products p ON pk.child_product_id = p.id
+                WHERE pk.parent_product_id = ?
+            """, conn, params=(sel_row['id'],))
+            
+            if not ks_df.empty:
+                ks_df['max'] = ks_df['child_stock'] // ks_df['quantity']
+                real_stock = int(ks_df['max'].min())
+                if real_stock < 0: real_stock = 0
+
             if st.button("➕ Adicionar ao Carrinho", type="primary", use_container_width=True):
-                if (in_cart + item_qty) > sel_row['stock_quantity']:
-                    st.error(f"Estoque insuficiente! (Estoque: {sel_row['stock_quantity']}, No Carrinho: {in_cart})")
+                if (in_cart + item_qty) > real_stock:
+                    st.error(f"Estoque insuficiente! (Disponível: {real_stock}, No Carrinho: {in_cart})")
                 else:
                     # Add to Cart
                     cart_item = {
@@ -267,9 +332,23 @@ with col_cart:
                             'payment_method': pay_method_choice
                         })
                         
-                        # Stock Update
-                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
-                                       (item['qty'], int(item['product_id'])))
+                        # Stock Update Logic (Handle Kits)
+                        p_id = int(item['product_id'])
+                        q_sold = item['qty']
+                        
+                        # Check if it's a Kit
+                        kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(p_id,))
+                        
+                        if not kit_comps.empty:
+                            # It is a Kit: Deduct from components
+                            for _, kc in kit_comps.iterrows():
+                                deduct_qty = q_sold * kc['quantity']
+                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
+                                               (deduct_qty, kc['child_product_id']))
+                        else:
+                            # Standard Product: Deduct directly
+                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
+                                           (q_sold, p_id))
                     
                     conn.commit()
                     
@@ -455,7 +534,16 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                             old_data = {'id': did, 'quantity': q_restore, 'product_id': p_id, 'total_price': orig_row['total_price']}
                             
                             cursor.execute("DELETE FROM sales WHERE id=?", (did,))
-                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(q_restore), int(p_id)))
+                            
+                            # RESTORE STOCK LOGIC (HANDLE KITS)
+                            kit_restore = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(p_id,))
+                            
+                            if not kit_restore.empty:
+                                for _, kr in kit_restore.iterrows():
+                                    restore_qty = q_restore * kr['quantity']
+                                    cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (restore_qty, kr['child_product_id']))
+                            else:
+                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(q_restore), int(p_id)))
                             
                             # Audit log for sale deletion
                             audit.log_action(conn, 'DELETE', 'sales', did, old_data, None)

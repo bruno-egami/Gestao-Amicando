@@ -146,8 +146,39 @@ with tab1:
                     
                     # Info
                     with c2:
+                        # DYNAMIC STOCK FOR KITS
+                        display_stock = row['stock_quantity']
+                        is_kit = False
+                        
+                        # Check kit components to min-max stock
+                        # Optimization: We already checked product_kits above for images, but let's re-query specifically for qty
+                        # Or safer: just query valid components
+                        kit_stock_df = pd.read_sql("""
+                            SELECT pk.quantity, p.stock_quantity as child_stock, p.name
+                            FROM product_kits pk
+                            JOIN products p ON pk.child_product_id = p.id
+                            WHERE pk.parent_product_id = ?
+                        """, conn, params=(row['id'],))
+                        
+                        breakdown_str = ""
+                        if not kit_stock_df.empty:
+                            is_kit = True
+                            # Calculate max producible kits
+                            kit_stock_df['max_possible'] = kit_stock_df['child_stock'] // kit_stock_df['quantity']
+                            display_stock = int(kit_stock_df['max_possible'].min())
+                            if display_stock < 0: display_stock = 0
+                            
+                            # Construct breakdown
+                            items = []
+                            for _, kr in kit_stock_df.iterrows():
+                                items.append(f"{kr['name']}: {kr['child_stock']}")
+                            breakdown_str = " | ".join(items)
+
                         st.write(f"**{row['name']}**")
-                        st.caption(f"ID: {row['id']} | {row['category']} | Est: {row['stock_quantity']}")
+                        stock_label = f"📦 Kit: {display_stock} (Calc)" if is_kit else f"Est: {row['stock_quantity']}"
+                        st.caption(f"ID: {row['id']} | {row['category']} | {stock_label}")
+                        if breakdown_str:
+                            st.caption(f"🔎 {breakdown_str}")
                     
                     # Price
                     with c3:
@@ -159,6 +190,11 @@ with tab1:
                         with st.popover("🔨", help="Registrar Produção"):
                             st.markdown(f"**Produzir: {row['name']}**")
                             qty_make = st.number_input("Qtd", min_value=1, value=1, key=f"make_qty_{row['id']}")
+                            
+                            # Validation: cannot produce more than dynamic stock if kit?
+                            # Actually production of kit consumes components, so as long as we have components...
+                            # But wait, 'Produce' button on Kit usually means 'Assemble'.
+                            # If we assemble, we consume stock. That logic is fine.
                             
                             if st.button("Confirmar", key=f"btn_make_{row['id']}", type="primary"):
                                 try:
@@ -367,8 +403,34 @@ with tab1:
                 new_name = st.text_input("Nome", value=curr_prod['name'])
                 
                 # --- NEW: Manual Stock Adjustment ---
-                curr_stock = int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0
-                new_stock = st.number_input("Estoque Atual", value=curr_stock, step=1, help="Alterar este valor registrará um ajuste manual no histórico.")
+                
+                # Check if it is a KIT
+                is_kit_edit = False
+                kit_stock_calc = 0
+                check_kit = pd.read_sql("""
+                    SELECT pk.quantity, p.stock_quantity as child_stock, p.name 
+                    FROM product_kits pk
+                    JOIN products p ON pk.child_product_id = p.id
+                    WHERE pk.parent_product_id = ?
+                """, conn, params=(selected_prod_id,))
+                
+                kit_info_text = ""
+                if not check_kit.empty:
+                    is_kit_edit = True
+                    check_kit['max'] = check_kit['child_stock'] // check_kit['quantity']
+                    kit_stock_calc = int(check_kit['max'].min())
+                    if kit_stock_calc < 0: kit_stock_calc = 0
+                    
+                    # Debug info
+                    kit_info_text = "Estoque calculado pelos componentes: " + ", ".join([f"{r['name']}: {int(r['child_stock'])} (Precisa {r['quantity']})" for _, r in check_kit.iterrows()])
+
+                if is_kit_edit:
+                    st.info(f"📦 Este produto é um Kit. Estoque calculado: **{kit_stock_calc}**")
+                    st.caption(kit_info_text)
+                    new_stock = st.number_input("Estoque (Calculado Auto)", value=kit_stock_calc, disabled=True, help="O estoque de kits é baseado na disponibilidade dos seus componentes.")
+                else:
+                    curr_stock = int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0
+                    new_stock = st.number_input("Estoque Atual", value=curr_stock, step=1, help="Alterar este valor registrará um ajuste manual no histórico.")
                 
                 # Safe category index logic
                 # Ensure cat_opts available (fetched at top of tab)
@@ -383,23 +445,26 @@ with tab1:
                 new_desc = st.text_area("Descrição", value=curr_prod['description'] or "")
                 
                 if st.form_submit_button("Salvar Detalhes"):
-                    # Check stock diff
-                    if new_stock != curr_stock:
-                        diff = new_stock - curr_stock
-                        # Log adjustment
-                        from datetime import datetime as dt
-                        # Get user
-                        user_id, username = None, 'system'
-                        if 'current_user' in st.session_state and st.session_state.current_user:
-                            user_id = int(st.session_state.current_user.get('id'))
-                            username = st.session_state.current_user.get('username', 'unknown')
-                            
-                        cursor.execute("""
-                            INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (dt.now().isoformat(), selected_prod_id, new_name, diff, user_id, username, "Ajuste Manual"))
-                        
-                        # Note: We record 'diff' as quantity. Positive = found, Negative = lost.
+                    # Check stock diff (ONLY IF NOT KIT, or if we decide to store cached stock for kit? 
+                    # If kit, we usually don't update stock_quantity column manually, just let it be cached or ignore.
+                    # Best practice: Update stock_quantity column with filtered calc value so simplistic queries work?
+                    # Let's save the calculated value to DB for performance in other simple queries, even if read-only here.
+                    
+                    if not is_kit_edit:
+                         if new_stock != (int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0):
+                            diff = new_stock - (int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0)
+                            # Log adjustment
+                            from datetime import datetime as dt
+                            # Get user
+                            user_id, username = None, 'system'
+                            if 'current_user' in st.session_state and st.session_state.current_user:
+                                user_id = int(st.session_state.current_user.get('id'))
+                                username = st.session_state.current_user.get('username', 'unknown')
+                                
+                            cursor.execute("""
+                                INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (dt.now().isoformat(), selected_prod_id, new_name, diff, user_id, username, "Ajuste Manual"))
 
                     cursor.execute("UPDATE products SET name=?, category=?, description=?, stock_quantity=? WHERE id=?", (new_name, new_cat, new_desc, new_stock, selected_prod_id))
                     conn.commit()
