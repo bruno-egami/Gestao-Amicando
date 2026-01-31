@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import database
 import admin_utils
+import auth
 import audit
 import time
 from datetime import datetime
@@ -13,7 +14,7 @@ admin_utils.render_sidebar_logo()
 # Sales view matches logic: Salesperson can access this.
 # But Admin can too.
 
-admin_utils.render_header_logo()
+auth.render_custom_sidebar()
 st.title("Frente de Vendas")
 
 conn = database.get_connection()

@@ -23,38 +23,22 @@ auth.create_default_admin(conn)
 if not auth.require_login(conn):
     st.stop()
 
-# Render user info in sidebar
-auth.render_user_info()
+# Render custom sidebar
+auth.render_custom_sidebar()
 
 # Get current user
 current_user = auth.get_current_user()
 is_admin = current_user and current_user['role'] == 'admin'
 
 # --- SIDEBAR ---
+# --- SIDEBAR (Legacy Admin Tools removed - now in pages/99_Administracao.py) ---
 with st.sidebar:
     admin_utils.render_sidebar_logo()
     
     if is_admin:
-        st.divider()
-        st.caption("Filtros Financeiros")
+        st.caption("Filtros Dashboard")
         ini_date = st.date_input("Início", date.today().replace(day=1))
         end_date = st.date_input("Fim", date.today())
-        
-        st.divider()
-        st.caption("🔧 Ferramentas Admin")
-        
-        # Database Backup Download
-        import os
-        db_path = os.path.join("data", "ceramic_admin.db")
-        if os.path.exists(db_path):
-            with open(db_path, "rb") as f:
-                st.download_button(
-                    "💾 Baixar Backup do Banco",
-                    f,
-                    file_name=f"backup_{date.today().strftime('%Y%m%d')}.db",
-                    mime="application/octet-stream",
-                    use_container_width=True
-                )
 
     st.info("ℹ️ Dashboard focado em operações (Encomendas e Estoque).")
 

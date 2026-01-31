@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import database
 import admin_utils
+import auth
 import audit
 import time
 
@@ -13,7 +14,7 @@ admin_utils.render_sidebar_logo()
 if not admin_utils.check_password():
     st.stop()
 
-admin_utils.render_header_logo()
+auth.render_custom_sidebar()
 st.title("🚚 Gestão de Fornecedores")
 
 conn = database.get_connection()

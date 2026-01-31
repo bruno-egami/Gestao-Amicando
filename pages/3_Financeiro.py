@@ -16,7 +16,7 @@ conn = database.get_connection()
 if not auth.require_login(conn):
     st.stop()
 
-auth.render_user_info()
+auth.render_custom_sidebar()
 
 # Role check - admin only
 if not auth.check_page_access('Financeiro'):

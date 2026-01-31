@@ -5,11 +5,12 @@ from datetime import date, datetime, timedelta
 import admin_utils
 import audit
 import time
+import auth
 
 st.set_page_config(page_title="Encomendas", page_icon="📦")
 
 admin_utils.render_sidebar_logo()
-admin_utils.render_header_logo()
+auth.render_custom_sidebar()
 st.title("📦 Gestão de Encomendas")
 
 if not admin_utils.check_password():

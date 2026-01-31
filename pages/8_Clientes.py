@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import auth
 import database
 import admin_utils
 import audit
@@ -7,7 +8,7 @@ import time
 
 st.set_page_config(page_title="Clientes", page_icon="👥", layout="wide")
 
-admin_utils.render_sidebar_logo()
+auth.render_custom_sidebar()
 
 # Auth Check
 if not admin_utils.check_password():

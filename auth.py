@@ -3,7 +3,7 @@ Authentication and Authorization Module for CeramicAdmin OS
 Handles user login, password hashing, session management, and role-based access control.
 """
 import streamlit as st
-import hashlib
+import bcrypt
 import time
 from datetime import datetime
 
@@ -26,16 +26,53 @@ PAGE_ACCESS = {
     'Fornecedores': ['admin'],
     'Clientes': ['admin', 'vendedor'],
     'Encomendas': ['admin', 'vendedor'],
-    'Usuarios': ['admin']
+    'Encomendas': ['admin', 'vendedor'],
+    'Administracao': ['admin']
+}
+
+# Navigation Menu Configuration
+# (Label, Icon, Page File)
+NAV_MENU = {
+    'admin': [
+        ("Dashboard", "📊", "Dashboard.py"),
+        ("Encomendas", "📦", "pages/9_Encomendas.py"),
+        ("Insumos", "🧪", "pages/1_Insumos.py"),
+        ("Despesas", "💸", "pages/2_Despesas.py"),
+        ("Financeiro", "💰", "pages/3_Financeiro.py"),
+        ("Queimas", "🔥", "pages/4_Queimas.py"),
+        ("Produtos", "🏺", "pages/5_Produtos.py"),
+        ("Vendas", "🛒", "pages/6_Vendas.py"),
+        ("Fornecedores", "🚚", "pages/7_Fornecedores.py"),
+        ("Clientes", "🤝", "pages/8_Clientes.py"),
+        ("Administração", "⚙️", "pages/99_Administracao.py"),
+    ],
+    'vendedor': [
+        ("Dashboard", "📊", "Dashboard.py"),
+        ("Encomendas", "📦", "pages/9_Encomendas.py"),
+        ("Insumos", "🧪", "pages/1_Insumos.py"),
+        ("Produtos", "🏺", "pages/5_Produtos.py"),
+        ("Vendas", "🛒", "pages/6_Vendas.py"),
+        ("Clientes", "🤝", "pages/8_Clientes.py"),
+    ],
+    'visualizador': [
+        ("Dashboard", "📊", "Dashboard.py"),
+    ]
 }
 
 def hash_password(password: str) -> str:
-    """Hash password using SHA256."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash password using bcrypt."""
+    # bcrypt requires bytes, returns bytes. We store as string.
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify a password against its hash."""
-    return hash_password(password) == password_hash
+    try:
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:
+        # Fallback for old SHA256 hashes (optional, but requested to reset admin anyway)
+        # If we wanted to support legacy hashes we would check len or prefix.
+        # For now, we assume all valid passwords will be bcrypt after migration.
+        return False
 
 def login(conn, username: str, password: str) -> dict | None:
     """
@@ -152,17 +189,39 @@ def check_page_access(page_name: str) -> bool:
     allowed_roles = PAGE_ACCESS.get(page_name, ['admin'])
     return require_role(allowed_roles, page_name)
 
-def render_user_info():
-    """Render current user info in sidebar."""
+def render_custom_sidebar():
+    """Render the custom sidebar with role-based navigation."""
+    
+    # Hide default sidebar nav
+    st.markdown("""
+        <style>
+        [data-testid="stSidebarNav"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
+
     user = get_current_user()
-    if user:
-        with st.sidebar:
-            st.divider()
-            st.caption(f"👤 {user['name']}")
-            st.caption(f"📋 {ROLES.get(user['role'], user['role'])}")
-            if st.button("🚪 Sair", use_container_width=True):
-                logout()
-                st.rerun()
+    if not user:
+        return
+
+    with st.sidebar:
+        st.divider()
+        role = user['role']
+        menu_items = NAV_MENU.get(role, NAV_MENU['visualizador'])
+        
+        for label, icon, file_path in menu_items:
+            st.page_link(file_path, label=label, icon=icon)
+            
+        st.divider()
+        st.caption(f"👤 {user['name']}")
+        st.caption(f"📋 {ROLES.get(user['role'], user['role'])}")
+        
+        if st.button("🚪 Sair", use_container_width=True):
+            logout()
+            st.rerun()
+
+def render_user_info():
+    # Deprecated in favor of render_custom_sidebar but kept for backward compatibility during refactor
+    render_custom_sidebar()
 
 def create_default_admin(conn):
     """Create default admin user if no users exist."""

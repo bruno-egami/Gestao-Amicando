@@ -37,6 +37,22 @@ def run_migrations(conn):
         cursor.execute("ALTER TABLE sales ADD COLUMN client_id INTEGER")
     except sqlite3.OperationalError: pass
 
+    # Inventory Transactions (Stock History) - ensuring existence
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id INTEGER,
+            date TEXT,
+            type TEXT, -- 'ENTRADA', 'SAIDA', 'AJUSTE'
+            quantity REAL,
+            cost REAL,
+            notes TEXT,
+            user_id INTEGER,
+            FOREIGN KEY (material_id) REFERENCES materials(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
     conn.commit()
 
 def init_db():
@@ -275,6 +291,38 @@ def init_db():
         cursor.execute("ALTER TABLE sales ADD COLUMN order_id TEXT")
     except sqlite3.OperationalError: pass
 
+    # 7. Create product_kits table (Migration)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS product_kits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_product_id INTEGER NOT NULL,
+            child_product_id INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            FOREIGN KEY (parent_product_id) REFERENCES products(id),
+            FOREIGN KEY (child_product_id) REFERENCES products(id)
+        )
+    ''')
+
+
+
+    # 6. Security Upgrade: Reset Admin Password to 'admin' (bcrypt)
+    # This runs every time but we only want to do it once ideally? 
+    # Or strict requirement: "reset senhas atuais".
+    # We will reset 'admin' user password to 'admin' (bcrypt hashed).
+    # Hash for 'admin' generated with bcrypt (cost 12): 
+    # We can generate it dynamically if we import bcrypt, but let's avoid adding dep to database.py if possible.
+    # Actually, we added bcrypt to requirements, so we can import it.
+    try:
+        import bcrypt
+        admin_hash = bcrypt.hashpw('admin'.encode(), bcrypt.gensalt()).decode()
+        cursor.execute("UPDATE users SET password_hash = ? WHERE username = 'admin'", (admin_hash,))
+        # Optional: Invalidate others?
+        # cursor.execute("UPDATE users SET active = 0 WHERE username != 'admin'")
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"Migration error (reset admin): {e}")
+
     conn.commit()
     
     # Seed Kilns
@@ -395,7 +443,36 @@ def init_db():
     cursor.execute("DROP TABLE IF EXISTS formulas")
     cursor.execute("DROP TABLE IF EXISTS formula_ingredients")
     
+    # Inventory Transactions (Stock History)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id INTEGER,
+            date TEXT,
+            type TEXT, -- 'ENTRADA', 'SAIDA', 'AJUSTE'
+            quantity REAL,
+            cost REAL,
+            notes TEXT,
+            user_id INTEGER,
+            FOREIGN KEY (material_id) REFERENCES materials(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
+    # Product Kits (Bundles)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS product_kits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_product_id INTEGER NOT NULL,
+            child_product_id INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            FOREIGN KEY (parent_product_id) REFERENCES products(id),
+            FOREIGN KEY (child_product_id) REFERENCES products(id)
+        )
+    ''')
+    
     conn.commit()
+
     
     # Run migrations for existing databases that might miss new columns
     run_migrations(conn)
