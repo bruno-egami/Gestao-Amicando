@@ -26,6 +26,7 @@ PAGE_ACCESS = {
     'Fornecedores': ['admin'],
     'Clientes': ['admin', 'vendedor'],
     'Encomendas': ['admin', 'vendedor'],
+    'Relatorios': ['admin'],
     'Administracao': ['admin']
 }
 
@@ -40,6 +41,7 @@ NAV_MENU = {
         ("Produtos", "🏺", "pages/5_Produtos.py"),
         ("Insumos", "🧪", "pages/1_Insumos.py"),
         ("Financeiro", "💰", "pages/3_Financeiro.py"),
+        ("Relatórios", "📈", "pages/10_Relatorios.py"),
         ("Clientes", "🤝", "pages/8_Clientes.py"),
         ("Fornecedores", "🚚", "pages/7_Fornecedores.py"),
         ("Administração", "⚙️", "pages/99_Administracao.py"),

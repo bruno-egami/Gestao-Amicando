@@ -3,6 +3,161 @@ from datetime import datetime
 import pandas as pd
 import io
 
+class PDFReport(FPDF):
+    """Generic PDF report with tables for stock, sales, expenses, etc."""
+    
+    def __init__(self, title, orientation='P'):
+        super().__init__(orientation=orientation)
+        self.report_title = title
+        self.add_page()
+        self.set_auto_page_break(auto=True, margin=15)
+        
+    def header(self):
+        # Logo
+        try:
+            self.image('logo-amicando-RGB.jpg', x=10, y=10, w=30)
+        except:
+            pass
+        
+        # Title
+        self.set_font('Helvetica', 'B', 16)
+        self.set_xy(45, 15)
+        self.cell(0, 10, self.report_title, align='L')
+        
+        # Subtitle - Company name
+        self.set_font('Helvetica', '', 10)
+        self.set_xy(45, 25)
+        self.cell(0, 5, 'Amicando Atelier de Cerâmicas', align='L')
+        
+        self.ln(25)
+        
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Helvetica', 'I', 8)
+        self.cell(0, 10, f'Página {self.page_no()}/{{nb}} | Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M")}', align='C')
+    
+    def add_info_line(self, label, value):
+        """Add a label: value line"""
+        self.set_font('Helvetica', 'B', 10)
+        self.cell(40, 6, f"{label}:", align='L')
+        self.set_font('Helvetica', '', 10)
+        self.cell(0, 6, str(value), align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    def add_table(self, headers, data, col_widths=None):
+        """
+        Add a formatted table.
+        headers: list of column names
+        data: list of lists (rows)
+        col_widths: optional list of column widths
+        """
+        if col_widths is None:
+            # Auto-calculate widths based on page width
+            available_width = self.w - 20  # 10mm margins each side
+            col_widths = [available_width / len(headers)] * len(headers)
+        
+        # Header row
+        self.set_fill_color(52, 73, 94)  # Dark blue-gray
+        self.set_text_color(255, 255, 255)
+        self.set_font('Helvetica', 'B', 9)
+        
+        for i, header in enumerate(headers):
+            self.cell(col_widths[i], 8, str(header), border=1, fill=True, align='C')
+        self.ln()
+        
+        # Data rows
+        self.set_text_color(0, 0, 0)
+        self.set_font('Helvetica', '', 9)
+        
+        fill = False
+        for row in data:
+            if fill:
+                self.set_fill_color(245, 245, 245)
+            else:
+                self.set_fill_color(255, 255, 255)
+            
+            for i, cell in enumerate(row):
+                # Right-align numbers, left-align text
+                align = 'R' if isinstance(cell, (int, float)) or (isinstance(cell, str) and cell.replace('.','').replace(',','').replace('-','').isdigit()) else 'L'
+                cell_text = str(cell)[:30]  # Truncate long text
+                self.cell(col_widths[i], 7, cell_text, border=1, fill=True, align=align)
+            self.ln()
+            fill = not fill
+    
+    def add_totals_row(self, label, value, col_widths=None):
+        """Add a totals row spanning the table"""
+        self.set_font('Helvetica', 'B', 10)
+        self.set_fill_color(230, 230, 230)
+        
+        total_width = sum(col_widths) if col_widths else self.w - 20
+        label_width = total_width * 0.7
+        value_width = total_width * 0.3
+        
+        self.cell(label_width, 8, label, border=1, fill=True, align='R')
+        self.cell(value_width, 8, str(value), border=1, fill=True, align='R')
+        self.ln()
+    
+    def add_chart(self, image_bytes, width=180):
+        """Add a chart image to the PDF"""
+        import tempfile
+        import os
+        
+        # Save bytes to temp file (fpdf needs file path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+            tmp.write(image_bytes)
+            tmp_path = tmp.name
+        
+        try:
+            # Center the image
+            x = (self.w - width) / 2
+            self.image(tmp_path, x=x, w=width)
+            self.ln(10)
+        finally:
+            # Clean up temp file
+            os.unlink(tmp_path)
+
+def generate_report_pdf(title, info_lines, headers, data, col_widths=None, totals=None, orientation='P', chart_image=None):
+    """
+    Generate a generic report PDF.
+    
+    Args:
+        title: Report title
+        info_lines: dict of {label: value} for header info
+        headers: list of column headers
+        data: list of rows (each row is a list)
+        col_widths: optional column widths
+        totals: optional list of (label, value) tuples for totals section
+        orientation: 'P' for portrait, 'L' for landscape
+        chart_image: optional bytes of chart image to include
+    
+    Returns:
+        BytesIO with PDF content
+    """
+    pdf = PDFReport(title, orientation=orientation)
+    
+    # Info lines (period, filters, etc.)
+    if info_lines:
+        for label, value in info_lines.items():
+            pdf.add_info_line(label, value)
+        pdf.ln(5)
+    
+    # Chart image (if provided)
+    if chart_image:
+        chart_width = 270 if orientation == 'L' else 180
+        pdf.add_chart(chart_image, width=chart_width)
+    
+    # Main table
+    if headers and data:
+        pdf.add_table(headers, data, col_widths)
+    
+    # Totals
+    if totals:
+        pdf.ln(3)
+        for label, value in totals:
+            pdf.add_totals_row(label, value, col_widths)
+    
+    return io.BytesIO(pdf.output(dest='S'))
+
+
 class PDFReceipt(FPDF):
     def header(self):
         # Logo - standard position, width optimized for header
