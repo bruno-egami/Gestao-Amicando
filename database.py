@@ -475,6 +475,38 @@ def init_db():
         )
     ''')
     
+    # --- INDEXES for Performance ---
+    # Sales indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_product ON sales(product_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_client ON sales(client_id)")
+    
+    # Expenses indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_supplier ON expenses(supplier_id)")
+    
+    # Commission Orders indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON commission_orders(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_date_due ON commission_orders(date_due)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_client ON commission_orders(client_id)")
+    
+    # Products indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)")
+    
+    # Materials indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_name ON materials(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_type ON materials(type)")
+    
+    # Inventory transactions indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_date ON inventory_transactions(date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_material ON inventory_transactions(material_id)")
+    
+    # Audit log indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_log(table_name)")
+    
     conn.commit()
 
     

@@ -33,7 +33,6 @@ current_user = auth.get_current_user()
 is_admin = current_user and current_user['role'] == 'admin'
 
 # --- SIDEBAR ---
-# --- SIDEBAR (Legacy Admin Tools removed - now in pages/99_Administracao.py) ---
 with st.sidebar:
     admin_utils.render_sidebar_logo()
     
