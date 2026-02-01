@@ -54,6 +54,41 @@ Sistema completo de gestão para ateliês de cerâmica artesanal, desenvolvido e
 - Backup e restauração do banco de dados
 - Importação em massa via Excel
 
+### 📊 Relatórios (16 tipos)
+
+#### Estoque e Inventário
+- **Estoque Atual** - Visão geral do estoque de produtos
+- **Itens sem Movimentação** - Produtos/insumos parados (dead stock)
+- **Previsão de Estoque** - Estimativa de quando itens vão acabar
+
+#### Vendas e Faturamento
+- **Vendas por Período** - Detalhamento de vendas com filtros
+- **Top Produtos Vendidos** - Ranking de produtos mais vendidos
+- **Análise de Vendas Anual** - Pivot table de vendas mensais por produto
+- **Lucratividade por Produto** - Margem de lucro por item
+- **Análise de Sazonalidade** - Comparação do mesmo mês em diferentes anos
+
+#### Clientes e Encomendas
+- **Clientes - Histórico** - Histórico de compras por cliente
+- **Encomendas Pendentes** - Status de pedidos em aberto
+
+#### Financeiro
+- **Despesas por Categoria** - Gastos agrupados por categoria
+- **Fluxo de Caixa** - Entradas vs saídas com saldo acumulado
+- **Fornecedores - Compras** - Valores pagos por fornecedor
+
+#### Produção
+- **Histórico de Produção** - Registro de produção por período
+- **Consumo de Insumos** - Matérias-primas consumidas
+- **Custo de Produção** - Estimativa de custo por produto
+
+#### Recursos dos Relatórios
+- 📈 Gráficos interativos (Plotly)
+- 📄 Exportação para PDF (com gráficos incluídos)
+- 📊 Exportação para Excel
+- 🔍 Filtros por período, categoria, etc.
+- 📱 Layout responsivo
+
 ---
 
 ## 🚀 Instalação
@@ -105,6 +140,7 @@ Gestao-Amicando/
 │   ├── 5_Clientes.py     # Gestão de clientes
 │   ├── 6_Vendas.py       # PDV e histórico
 │   ├── 9_Encomendas.py   # Gestão de encomendas
+│   ├── 10_Relatorios.py  # Central de Relatórios (16 tipos)
 │   └── 99_Administracao.py # Painel administrativo
 ├── assets/               # Imagens e uploads
 ├── data/                 # Banco de dados SQLite
@@ -131,6 +167,7 @@ Gestao-Amicando/
 - `bcrypt` - Criptografia de senhas
 - `openpyxl` - Exportação Excel
 - `plotly` - Gráficos interativos
+- `kaleido` - Exportação de gráficos para PDF
 
 ---
 

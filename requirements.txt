@@ -19,6 +19,7 @@ openpyxl>=3.1.0
 # Charts and Visualization
 plotly>=5.15.0
 matplotlib>=3.7.0
+kaleido>=0.2.0
 
 # Image Processing
 Pillow>=10.0.0
