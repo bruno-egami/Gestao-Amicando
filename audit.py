@@ -14,7 +14,7 @@ def get_current_user_info():
     return None, 'system'
 
 def log_action(conn, action: str, table_name: str, record_id: int, 
-               old_data: dict = None, new_data: dict = None):
+               old_data: dict = None, new_data: dict = None, commit: bool = True):
     """
     Log a data change action to the audit log.
     
@@ -25,6 +25,7 @@ def log_action(conn, action: str, table_name: str, record_id: int,
         record_id: ID of the affected record
         old_data: Previous state of the record (for UPDATE/DELETE)
         new_data: New state of the record (for CREATE/UPDATE)
+        commit: Whether to commit the transaction (default: True)
     """
     user_id, username = get_current_user_info()
     
@@ -42,7 +43,8 @@ def log_action(conn, action: str, table_name: str, record_id: int,
         json.dumps(old_data, default=str) if old_data else None,
         json.dumps(new_data, default=str) if new_data else None
     ))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 def get_record_history(conn, table_name: str, record_id: int):
     """

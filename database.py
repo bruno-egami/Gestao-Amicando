@@ -6,7 +6,7 @@ DB_NAME = "ceramic_admin.db"
 DB_PATH = os.path.join(DB_FOLDER, DB_NAME)
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     run_migrations(conn)
     return conn
 
@@ -302,6 +302,8 @@ def init_db():
             FOREIGN KEY (child_product_id) REFERENCES products(id)
         )
     ''')
+
+
 
 
 

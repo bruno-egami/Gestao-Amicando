@@ -18,14 +18,13 @@ ROLES = {
 PAGE_ACCESS = {
     'Dashboard': ['admin', 'vendedor', 'visualizador'],
     'Insumos': ['admin', 'vendedor'],
-    'Despesas': ['admin'],
+    'Insumos': ['admin', 'vendedor'],
     'Financeiro': ['admin'],
     'Queimas': ['admin'],
     'Produtos': ['admin', 'vendedor'],
     'Vendas': ['admin', 'vendedor'],
     'Fornecedores': ['admin'],
     'Clientes': ['admin', 'vendedor'],
-    'Encomendas': ['admin', 'vendedor'],
     'Encomendas': ['admin', 'vendedor'],
     'Administracao': ['admin']
 }
@@ -37,7 +36,6 @@ NAV_MENU = {
         ("Dashboard", "📊", "Dashboard.py"),
         ("Encomendas", "📦", "pages/9_Encomendas.py"),
         ("Insumos", "🧪", "pages/1_Insumos.py"),
-        ("Despesas", "💸", "pages/2_Despesas.py"),
         ("Financeiro", "💰", "pages/3_Financeiro.py"),
         ("Queimas", "🔥", "pages/4_Queimas.py"),
         ("Produtos", "🏺", "pages/5_Produtos.py"),
@@ -116,9 +114,9 @@ def login(conn, username: str, password: str) -> dict | None:
 def get_current_user() -> dict | None:
     """Get the currently logged-in user from session state."""
     if 'current_user' in st.session_state and st.session_state.current_user:
-        # Check session timeout (30 minutes)
+        # Check session timeout (5 minutes)
         if 'last_activity' in st.session_state:
-            if (time.time() - st.session_state.last_activity) > 1800:  # 30 min
+            if (time.time() - st.session_state.last_activity) > 300:  # 5 min
                 logout()
                 return None
         st.session_state.last_activity = time.time()
@@ -147,22 +145,32 @@ def require_login(conn):
     if user:
         return True
     
-    # Show login form
-    st.subheader("🔐 Login")
+    # Hide sidebar if not logged in (Unified Login View)
+    st.markdown("""
+        <style>
+        [data-testid="stSidebarNav"] {display: none;}
+        section[data-testid="stSidebar"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
     
-    with st.form("login_form"):
-        username = st.text_input("Usuário")
-        password = st.text_input("Senha", type="password")
+    # Show login form
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.subheader("🔐 Gestão Amicando - Login")
         
-        if st.form_submit_button("Entrar", type="primary"):
-            user = login(conn, username, password)
-            if user:
-                set_current_user(user)
-                st.success(f"Bem-vindo(a), {user['name']}!")
-                time.sleep(0.5)
-                st.rerun()
-            else:
-                st.error("Usuário ou senha incorretos.")
+        with st.form("login_form"):
+            username = st.text_input("Usuário")
+            password = st.text_input("Senha", type="password")
+            
+            if st.form_submit_button("Entrar", type="primary", use_container_width=True):
+                user = login(conn, username, password)
+                if user:
+                    set_current_user(user)
+                    st.success(f"Bem-vindo(a), {user['name']}!")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
     
     return False
 
@@ -215,7 +223,7 @@ def render_custom_sidebar():
         st.caption(f"👤 {user['name']}")
         st.caption(f"📋 {ROLES.get(user['role'], user['role'])}")
         
-        if st.button("🚪 Sair", use_container_width=True):
+        if st.button("🚪 Sair", use_container_width=True, key="sidebar_logout_btn"):
             logout()
             st.rerun()
 

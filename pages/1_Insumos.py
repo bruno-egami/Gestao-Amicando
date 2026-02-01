@@ -16,6 +16,9 @@ conn = database.get_connection()
 if not auth.require_login(conn):
     st.stop()
 
+if not auth.check_page_access("Insumos"):
+    st.stop()
+
 auth.render_custom_sidebar()
 st.title("Gestão de Insumos (Matérias-Primas)")
 

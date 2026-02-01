@@ -11,13 +11,19 @@ st.set_page_config(page_title="Queimas", page_icon="🔥", layout="wide")
 
 admin_utils.render_sidebar_logo()
 
-if not admin_utils.check_password():
+conn = database.get_connection()
+
+if not auth.require_login(conn):
+    st.stop()
+
+if not auth.check_page_access("Queimas"):
     st.stop()
 
 auth.render_custom_sidebar()
 st.title("Gestão de Queimas e Manutenção de Fornos")
 
-conn = database.get_connection()
+cursor = conn.cursor()
+
 cursor = conn.cursor()
 
 

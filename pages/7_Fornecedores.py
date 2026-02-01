@@ -10,14 +10,18 @@ st.set_page_config(page_title="Fornecedores", page_icon="🚚", layout="wide")
 
 admin_utils.render_sidebar_logo()
 
-# Auth Check (Admin only)
-if not admin_utils.check_password():
+# Auth Check
+conn = database.get_connection()
+
+if not auth.require_login(conn):
+    st.stop()
+
+if not auth.check_page_access("Fornecedores"):
     st.stop()
 
 auth.render_custom_sidebar()
 st.title("🚚 Gestão de Fornecedores")
 
-conn = database.get_connection()
 cursor = conn.cursor()
 
 # Session State for Edit Mode

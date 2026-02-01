@@ -6,12 +6,14 @@ import admin_utils
 import auth
 
 # Page config
-st.set_page_config(
-    page_title="Dashboard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+
+# Hide default sidebar immediately to prevent flicker
+st.markdown("""
+    <style>
+    [data-testid="stSidebarNav"] {display: none;}
+    </style>
+""", unsafe_allow_html=True)
 
 database.init_db()
 conn = database.get_connection()
@@ -35,11 +37,6 @@ is_admin = current_user and current_user['role'] == 'admin'
 with st.sidebar:
     admin_utils.render_sidebar_logo()
     
-    if is_admin:
-        st.caption("Filtros Dashboard")
-        ini_date = st.date_input("Início", date.today().replace(day=1))
-        end_date = st.date_input("Fim", date.today())
-
     st.info("ℹ️ Dashboard focado em operações (Encomendas e Estoque).")
 
 # --- MAIN CONTENT ---
@@ -213,23 +210,7 @@ try:
         }
     )
 
-    # --- FINANCIAL SUMMARY (Admin only, at the end, hidden by default) ---
-    if is_admin:
-        st.divider()
-        with st.expander("💰 Resumo Financeiro (clique para expandir)", expanded=False):
-            try:
-                # Sales
-                sales_val = pd.read_sql("SELECT sum(total_price) as val FROM sales WHERE date BETWEEN ? AND ?", conn, params=(ini_date, end_date)).iloc[0]['val'] or 0.0
-                # Expenses
-                exps_val = pd.read_sql("SELECT sum(amount) as val FROM expenses WHERE date BETWEEN ? AND ?", conn, params=(ini_date, end_date)).iloc[0]['val'] or 0.0
-                balance = sales_val - exps_val
-                
-                c_fin1, c_fin2, c_fin3 = st.columns(3)
-                c_fin1.metric("Faturamento", f"R$ {sales_val:.2f}")
-                c_fin2.metric("Despesas", f"R$ {exps_val:.2f}")
-                c_fin3.metric("Balanço", f"R$ {balance:.2f}", delta=f"{balance:.2f}")
-            except Exception as e:
-                st.error(f"Erro no financeiro: {e}")
+
 
 except Exception as e:
     st.error(f"Erro no dashboard: {e}")

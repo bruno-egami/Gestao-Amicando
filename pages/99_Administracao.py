@@ -24,18 +24,11 @@ auth.create_default_admin(conn)
 if not auth.require_login(conn):
     st.stop()
 
-if not auth.check_page_access('Usuarios'): # Reuse 'Usuarios' permission which is Admin only
+if not auth.check_page_access('Administracao'):
     st.stop()
 
-# Render custom sidebar (will be implemented in next step, but calling it here for future proofing)
-# For now we rely on the implementation we are about to add to auth.py or admin_utils.py
-# If 'render_custom_sidebar' exists in auth, use it.
-if hasattr(auth, 'render_custom_sidebar'):
-    auth.render_custom_sidebar()
-else:
-    # Fallback to standard sidebar logic specific to this page
-    auth.render_user_info()
-    admin_utils.render_sidebar_logo()
+auth.render_custom_sidebar()
+# Sidebar is already rendered above
 
 admin_utils.render_header_logo()
 st.title("⚙️ Administração")
@@ -51,7 +44,7 @@ with tab_import:
     st.write("Utilize esta ferramenta para carregar dados de planilhas Excel.")
     
     # Select Import Type
-    import_type = st.selectbox("O que você deseja importar?", ["Selecione...", "Insumos (Matérias-Primas)", "Produtos", "Vendas", "Despesas"])
+    import_type = st.selectbox("O que você deseja importar?", ["Selecione...", "Insumos (Matérias-Primas)", "Produtos", "Vendas", "Despesas", "Fornecedores", "Clientes"])
     
     if import_type != "Selecione...":
         st.divider()
@@ -60,7 +53,7 @@ with tab_import:
         # Define schemas
         schemas = {
             "Insumos (Matérias-Primas)": {
-                "cols": ["Nome", "Preço", "Unidade", "Estoque", "Tipo", "Categoria", "Fornecedor"], # ID match by name for now
+                "cols": ["Nome", "Preço", "Unidade", "Estoque", "Tipo", "Categoria", "Fornecedor"], 
                 "example": [
                     ["Argila Branca", 15.50, "kg", 100, "Material", "Massas", "Fornecedor A"],
                     ["Esmalte Azul", 45.00, "L", 5, "Material", "Esmaltes", "Fornecedor B"]
@@ -90,6 +83,22 @@ with tab_import:
                     [55, datetime.now().strftime('%Y-%m-%d'), "Conta de Luz", 300.00, "Energia"]
                 ],
                 "table": "expenses"
+            },
+            "Fornecedores": {
+                "cols": ["Nome", "Email", "Telefone"],
+                "example": [
+                    ["Cerâmica ABC", "contato@cerabc.com", "1199999999"],
+                    ["Massa Boa", "vendas@massaboa.com.br", "1188888888"]
+                ],
+                "table": "suppliers"
+            },
+            "Clientes": {
+                "cols": ["Nome", "Telefone", "Email", "Data Nascimento"],
+                "example": [
+                    ["João da Silva", "11977777777", "joao@email.com", "1990-05-20"],
+                    ["Maria Souza", "11966666666", "maria@email.com", ""]
+                ],
+                "table": "clients"
             }
         }
         
@@ -332,6 +341,57 @@ with tab_import:
                                                 VALUES (?, ?, ?, ?, ?, ?)
                                             """, (row['Data'], prod_id, row['Qtd'], row['Total'], client_id, row['Status']))
                                             audit.log_action(conn, 'IMPORT', 'sales', cursor.lastrowid, None, row.to_dict())
+
+                                    elif import_type == "Fornecedores":
+                                        # Suppliers - Upsert Logic (Match by Name)
+                                        name = str(row['Nome']).strip()
+                                        cursor.execute("SELECT id FROM suppliers WHERE name=?", (name,))
+                                        res = cursor.fetchone()
+                                        
+                                        if res:
+                                            # UPDATE
+                                            target_id = res[0]
+                                            cursor.execute("""
+                                                UPDATE suppliers SET contact_info=?, email=?, phone=?
+                                                WHERE id=?
+                                            """, (f"{row['Telefone']} / {row['Email']}", row['Email'], row['Telefone'], target_id))
+                                            audit.log_action(conn, 'UPDATE', 'suppliers', target_id, None, row.to_dict())
+                                        else:
+                                            # INSERT
+                                            cursor.execute("""
+                                                INSERT INTO suppliers (name, contact_info, email, phone)
+                                                VALUES (?, ?, ?, ?)
+                                            """, (name, f"{row['Telefone']} / {row['Email']}", row['Email'], row['Telefone']))
+                                            audit.log_action(conn, 'IMPORT', 'suppliers', cursor.lastrowid, None, row.to_dict())
+
+                                    elif import_type == "Clientes":
+                                        # Clients - Upsert Logic (Match by Name)
+                                        name = str(row['Nome']).strip()
+                                        cursor.execute("SELECT id FROM clients WHERE name=?", (name,))
+                                        res = cursor.fetchone()
+                                        
+                                        # Parse DOB
+                                        dob = None
+                                        if pd.notna(row['Data Nascimento']) and str(row['Data Nascimento']).strip():
+                                            try:
+                                                dob = pd.to_datetime(row['Data Nascimento']).strftime('%Y-%m-%d')
+                                            except: pass
+
+                                        if res:
+                                            # UPDATE
+                                            target_id = res[0]
+                                            cursor.execute("""
+                                                UPDATE clients SET contact_info=?, email=?, phone=?, date_of_birth=?
+                                                WHERE id=?
+                                            """, (f"{row['Telefone']} / {row['Email']}", row['Email'], row['Telefone'], dob, target_id))
+                                            audit.log_action(conn, 'UPDATE', 'clients', target_id, None, row.to_dict())
+                                        else:
+                                            # INSERT
+                                            cursor.execute("""
+                                                INSERT INTO clients (name, contact_info, email, phone, date_of_birth)
+                                                VALUES (?, ?, ?, ?, ?)
+                                            """, (name, f"{row['Telefone']} / {row['Email']}", row['Email'], row['Telefone'], dob))
+                                            audit.log_action(conn, 'IMPORT', 'clients', cursor.lastrowid, None, row.to_dict())
                                     
                                     count_ok += 1
                                 except Exception as e:
@@ -357,7 +417,7 @@ with tab_export:
     st.header("📤 Exportação de Dados")
     st.write("Exporte seus dados para Excel para análise ou balanço de estoque.")
     
-    export_type = st.selectbox("O que você deseja exportar?", ["Selecione...", "Insumos (Para Balanço/Contagem)", "Produtos", "Vendas", "Despesas"])
+    export_type = st.selectbox("O que você deseja exportar?", ["Selecione...", "Insumos (Para Balanço/Contagem)", "Produtos", "Vendas", "Despesas", "Fornecedores", "Clientes"])
     
     if export_type != "Selecione...":
         st.divider()
@@ -477,6 +537,55 @@ with tab_export:
                 label=f"⬇️ Baixar Relatório de Despesas (.xlsx)",
                 data=buffer.getvalue(),
                 file_name=f"despesas_{timestamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
+
+        elif export_type == "Fornecedores":
+            # Match Import Schema: ["Nome", "Email", "Telefone"]
+            query = """
+                SELECT 
+                    name as Nome,
+                    email as Email,
+                    phone as Telefone
+                FROM suppliers
+                ORDER BY name
+            """
+            df_exp = pd.read_sql(query, conn)
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_exp.to_excel(writer, index=False, sheet_name='Fornecedores')
+            
+            st.download_button(
+                label=f"⬇️ Baixar Lista de Fornecedores (.xlsx)",
+                data=buffer.getvalue(),
+                file_name=f"fornecedores_{timestamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
+
+        elif export_type == "Clientes":
+            # Match Import Schema: ["Nome", "Telefone", "Email", "Data Nascimento"]
+            query = """
+                SELECT 
+                    name as Nome,
+                    phone as Telefone,
+                    email as Email,
+                    date_of_birth as "Data Nascimento"
+                FROM clients
+                ORDER BY name
+            """
+            df_exp = pd.read_sql(query, conn)
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_exp.to_excel(writer, index=False, sheet_name='Clientes')
+            
+            st.download_button(
+                label=f"⬇️ Baixar Lista de Clientes (.xlsx)",
+                data=buffer.getvalue(),
+                file_name=f"clientes_{timestamp}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary"
             )

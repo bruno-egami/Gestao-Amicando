@@ -8,16 +8,18 @@ import time
 
 st.set_page_config(page_title="Clientes", page_icon="👥", layout="wide")
 
-auth.render_custom_sidebar()
+conn = database.get_connection()
 
-# Auth Check
-if not admin_utils.check_password():
+if not auth.require_login(conn):
     st.stop()
 
+if not auth.check_page_access("Clientes"):
+    st.stop()
+
+auth.render_custom_sidebar()
 admin_utils.render_header_logo()
 st.title("👥 Gestão de Clientes")
 
-conn = database.get_connection()
 cursor = conn.cursor()
 
 # Session State for Edit Mode

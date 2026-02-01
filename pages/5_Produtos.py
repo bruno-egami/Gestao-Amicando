@@ -13,6 +13,13 @@ admin_utils.render_sidebar_logo()
 
 # Database Connection
 conn = database.get_connection()
+
+if not auth.require_login(conn):
+    st.stop()
+
+if not auth.check_page_access("Produtos"):
+    st.stop()
+
 cursor = conn.cursor()
 
 auth.render_custom_sidebar()
