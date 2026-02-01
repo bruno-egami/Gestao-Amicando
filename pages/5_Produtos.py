@@ -270,7 +270,6 @@ with tab1:
                                             audit.log_action(conn, 'CREATE', 'production_history', cursor.lastrowid, None, {'product_id': row['id'], 'quantity': qty_make, 'type': 'KIT'})
                                             conn.commit()
                                             st.toast(f"Kit Montado: {qty_make}x {row['name']}!", icon="📦")
-                                            time.sleep(1)
                                             st.rerun()
 
                                     else:
@@ -334,7 +333,6 @@ with tab1:
                                                 audit.log_action(conn, 'CREATE', 'production_history', cursor.lastrowid, None, {'product_id': row['id'], 'quantity': qty_make})
                                                 conn.commit()
                                                 st.toast(f"Produzido: {qty_make}x {row['name']}!", icon="✅")
-                                                time.sleep(1)
                                                 st.rerun()
  
                                 except Exception as e:
@@ -376,7 +374,6 @@ with tab1:
                         
                         st.success(f"Produto '{new_name}' criado!")
                         st.session_state.editing_product_id = new_id # Switch to Edit Mode
-                        time.sleep(1)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro: {e}")
@@ -541,7 +538,6 @@ with tab1:
                                        (selected_prod_id, child_id, k_qty))
                         conn.commit()
                         st.toast("Componente adicionado!")
-                        time.sleep(1)
                         st.rerun()
             
             # List Kit Items
@@ -698,7 +694,6 @@ with tab1:
                 cursor.execute("UPDATE products SET markup = ?, base_price = ? WHERE id = ?", (new_markup, new_price, selected_prod_id))
                 conn.commit()
                 st.success("Preço e Markup salvos com sucesso!")
-                time.sleep(1)
                 st.rerun()
 
         st.markdown("---")
@@ -808,7 +803,6 @@ with tab2:
                                 {'quantity': row['quantity']}, {'quantity': new_qty})
                             
                             st.success("Atualizado!")
-                            time.sleep(0.5)
                             st.rerun()
                 
                 with c3:
@@ -826,7 +820,6 @@ with tab2:
                         audit.log_action(conn, 'DELETE', 'production_history', row['id'], old_data, None)
                         
                         st.success("Registro excluído e estoque revertido!")
-                        time.sleep(0.5)
                         st.rerun()
     else:
         st.info("Nenhum registro de produção encontrado para os filtros selecionados.")

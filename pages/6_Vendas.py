@@ -282,7 +282,6 @@ with col_cart:
                 # Validar estoque (Apenas aviso, permitir encomenda)
                 if (in_cart + item_qty) > real_stock:
                     st.warning(f"⚠️ Pedido ({in_cart + item_qty}) excede estoque ({real_stock}). O excedente entrará como Encomenda.")
-                    time.sleep(2)
                 
                 # Add to Cart (Always allowed)
                 cart_item = {
@@ -1010,7 +1009,6 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                         
                         conn.commit()
                         st.success("Histórico atualizado com sucesso!")
-                        time.sleep(1)
                         st.rerun()
             
                 # --- RECEIPT GENERATION FOR HISTORY ---

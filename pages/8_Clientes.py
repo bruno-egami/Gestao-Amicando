@@ -94,7 +94,6 @@ with col_form:
                     audit.log_action(conn, 'CREATE', 'clients', new_id, None, new_data)
                     
                     st.success("Cliente cadastrado!")
-                time.sleep(0.5)
                 st.rerun()
 
 # === RIGHT: LIST WITH SEARCH ===
@@ -149,7 +148,6 @@ with col_list:
                             audit.log_action(conn, 'DELETE', 'clients', row['id'], old_data, None)
                             
                             st.success(f"'{row['name']}' excluído!")
-                            time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro: {e}")

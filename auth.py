@@ -167,7 +167,6 @@ def require_login(conn):
                 if user:
                     set_current_user(user)
                     st.success(f"Bem-vindo(a), {user['name']}!")
-                    time.sleep(0.5)
                     st.rerun()
                 else:
                     st.error("Usuário ou senha incorretos.")

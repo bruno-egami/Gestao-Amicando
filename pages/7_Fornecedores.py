@@ -88,7 +88,6 @@ with col_form:
                     new_id = cursor.lastrowid
                     audit.log_action(conn, 'CREATE', 'suppliers', new_id, None, new_data)
                     st.success("Fornecedor cadastrado!")
-                time.sleep(0.5)
                 st.rerun()
 
 # === RIGHT: LIST WITH SEARCH ===
@@ -138,7 +137,6 @@ with col_list:
                             conn.commit()
                             audit.log_action(conn, 'DELETE', 'suppliers', row['id'], old_data, None)
                             st.success(f"'{row['name']}' excluído!")
-                            time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro: {e}")

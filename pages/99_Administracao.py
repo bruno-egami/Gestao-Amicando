@@ -402,7 +402,6 @@ with tab_import:
                             conn.commit()
                             st.success(f"✅ Importação finalizada! {count_ok} sucessos, {count_err} erros.")
                             st.balloons()
-                            time.sleep(2)
                             st.rerun()
 
                 except Exception as e:
@@ -971,9 +970,7 @@ with tab_db:
                             os.remove(temp_path)
                             
                             st.toast("Banco de dados restaurado com sucesso!", icon="✅")
-                            st.success("Operação concluída. O sistema será reiniciado em 3 segundos.")
-                            import time
-                            time.sleep(3)
+                            st.success("Operação concluída. O sistema será reiniciado.")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro crítico ao restaurar: {e}")

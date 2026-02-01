@@ -70,7 +70,6 @@ with tab_cat:
                     cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (new_cat_name,))
                     conn.commit()
                     st.success(f"Categoria '{new_cat_name}' criada!")
-                    time.sleep(1)
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("Categoria já existe.")
@@ -219,7 +218,6 @@ with tab_cat:
                             })
                             st.success("Criado com sucesso!")
                             st.session_state.insumo_edit_id = None
-                            time.sleep(1)
                             st.rerun()
                         else:
                             target_id = st.session_state.insumo_edit_id
@@ -253,7 +251,6 @@ with tab_cat:
                                 'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
                             })
                             st.success("Atualizado com sucesso!")
-                            time.sleep(1)
                             st.rerun()
 
             # Delete Option (Only for Edit)
@@ -270,7 +267,6 @@ with tab_cat:
                         audit.log_action(conn, 'DELETE', 'materials', st.session_state.insumo_edit_id, old_data, None)
                         st.success("Insumo excluído.")
                         st.session_state.insumo_edit_id = None
-                        time.sleep(1)
                         st.rerun()
 
         with tab_history:
@@ -322,7 +318,6 @@ with tab_cat:
                         cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_rec_stock_py, mat_id_py))
                         conn.commit()
                         st.success("Movimentação registrada!")
-                        time.sleep(1)
                         st.rerun()
 
                 st.divider()

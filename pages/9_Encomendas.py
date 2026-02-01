@@ -555,7 +555,6 @@ else:
                     if success:
                         st.success("Entrega realizada com sucesso!")
                         st.balloons()
-                        time.sleep(2)
                         st.rerun()
 
 conn.close()
