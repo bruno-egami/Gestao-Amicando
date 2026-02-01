@@ -4,6 +4,7 @@ import database
 from datetime import date, datetime, timedelta
 import admin_utils
 import audit
+import reports
 import time
 import auth
 
@@ -77,13 +78,13 @@ with kf2:
 
 with kf3:
     # Date Range Filter (Due Date)
-    d_start = st.date_input("De", value=None)
-    d_end = st.date_input("Até", value=None)
+    d_start = st.date_input("De", value=None, format="DD/MM/YYYY")
+    d_end = st.date_input("Até", value=None, format="DD/MM/YYYY")
 
 # Fetch Orders
 orders = pd.read_sql("""
     SELECT o.id, c.name as client, o.date_due, o.status, o.total_price, o.notes, o.client_id,
-           o.manual_discount, o.deposit_amount
+           o.manual_discount, o.deposit_amount, o.date_created
     FROM commission_orders o
     JOIN clients c ON o.client_id = c.id
     ORDER BY o.date_due ASC
@@ -162,7 +163,7 @@ else:
             st.divider()
             
             # Actions Row
-            c_act1, c_act2, c_act3 = st.columns([2, 1, 1])
+            c_act1, c_act2, c_act3, c_act4 = st.columns([1.5, 0.8, 0.8, 0.8])
             
             # Add Item Button
             with c_act1:
@@ -220,7 +221,7 @@ else:
             with c_act2:
                 with st.popover("✏️ Editar"):
                     with st.form(f"edit_ord_{order['id']}"):
-                        new_date = st.date_input("Novo Prazo", value=pd.to_datetime(order['date_due']))
+                        new_date = st.date_input("Novo Prazo", value=pd.to_datetime(order['date_due']), format="DD/MM/YYYY")
                         new_notes = st.text_area("Notas", value=order['notes'])
                         new_discount = st.number_input("Desconto Manual (R$)", value=order['manual_discount'] or 0.0, step=1.0)
                         new_deposit = st.number_input("Valor Sinal (R$)", value=order['deposit_amount'] or 0.0, step=1.0)
@@ -255,6 +256,31 @@ else:
                 if delete_order(order['id']):
                     st.success("Encomenda excluída e estoque restaurado!")
                     st.rerun()
+
+ 
+            
+            # Direct Download Button attempt (cleaner than nested button state)
+            c_act4.download_button(
+                label="📄 PDF",
+                data=reports.generate_receipt_pdf({
+                        "id": f"ENC-{order['id']}",
+                        "type": "Encomenda",
+                        "date": pd.to_datetime(order['date_created']).strftime('%d/%m/%Y') if order['date_created'] else datetime.now().strftime('%d/%m/%Y'),
+                        "date_due": pd.to_datetime(order['date_due']).strftime('%d/%m/%Y'),
+                        "client_name": order['client'],
+                        "notes": order['notes'],
+                        "items": [
+                            {"name": r['name'], "qty": r['quantity'], "price": r['unit_price']} 
+                            for _, r in items.iterrows()
+                        ],
+                        "total": order['total_price'],
+                        "discount": order['manual_discount'] or 0,
+                        "deposit": order['deposit_amount'] or 0
+                }),
+                file_name=f"encomenda_{order['id']}.pdf",
+                mime="application/pdf",
+                key=f"dl_pdf_{order['id']}"
+            )
             
             st.divider()
             st.write("**Itens:**")
@@ -463,13 +489,37 @@ else:
                         import uuid
                         ord_uuid = f"ENC-{datetime.now().strftime('%y%m%d')}-{order['id']}"
                         
+                        # 2. Create Sale Record
+                        import uuid
+                        ord_uuid = f"ENC-{datetime.now().strftime('%y%m%d')}-{order['id']}"
+                        
+                        # Calculate Deposit Ratio (Pro-rata)
+                        total_ord_price = order['total_price']
+                        deposit_total = order['deposit_amount'] or 0
+                        deposit_ratio = 0
+                        if total_ord_price > 0:
+                            deposit_ratio = deposit_total / total_ord_price
+                        
                         for _, it in items.iterrows():
+                            # Calculate values
+                            item_subtotal = it['unit_price'] * it['quantity']
+                            
+                            # Discount share (The part already paid via deposit)
+                            discount_share = item_subtotal * deposit_ratio
+                            
+                            # Final Sale Price (The new money coming in now)
+                            final_item_price = item_subtotal - discount_share
+                            
+                            notes_item = f"Encomenda #{order['id']}"
+                            if deposit_total > 0:
+                                notes_item += f" (Sinal: R$ {discount_share:.2f})"
+
                             cursor.execute("""
                                 INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, 
                                                  discount, payment_method, notes, salesperson, order_id)
-                                VALUES (?, ?, ?, ?, 'Finalizada', ?, 0, 'Misto', ?, 'Sistema', ?)
-                            """, (date.today(), it['product_id'], it['quantity'], (it['unit_price'] * it['quantity']), 
-                                  order['client_id'], f"Encomenda #{order['id']}", ord_uuid))
+                                VALUES (?, ?, ?, ?, 'Finalizada', ?, ?, 'Misto', ?, 'Sistema', ?)
+                            """, (date.today(), it['product_id'], it['quantity'], final_item_price, 
+                                  order['client_id'], discount_share, notes_item, ord_uuid))
                             
                             # 3. Deduct Stock (Sales Logic - Handle Kits)
                             p_row_chk = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn, params=(it['product_id'],))

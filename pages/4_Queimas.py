@@ -98,7 +98,7 @@ with tab1:
             # Or keep calculator but allow overwrite.
             # I will stick to Input Fields for Final Value to make editing easy.
             
-            date = st.date_input("Data", d_date)
+            date = st.date_input("Data", d_date, format="DD/MM/YYYY")
             sel_kiln = st.selectbox("Forno Utilizado", kiln_options, index=d_kiln_idx)
             f_type = st.selectbox("Tipo de Queima", types, index=d_type_idx)
             
@@ -173,7 +173,7 @@ with tab1:
         
         # Date Range defaulting to last 30 days or similar, or just allow empty
         # Streamlit date_input can take a tuple for range
-        fil_date = fc3.date_input("Intervalo Data", []) 
+        fil_date = fc3.date_input("Intervalo Data", [], format="DD/MM/YYYY") 
 
         # Build Query
         query = """

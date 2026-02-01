@@ -4,6 +4,7 @@ import database
 import admin_utils
 import auth
 import audit
+import reports
 import time
 from datetime import datetime, date
 
@@ -28,6 +29,7 @@ st.title("Frente de Vendas")
 # --- Receipt Dialog (Top Level) ---
 @st.dialog("🎉 Pedido Concluído")
 def show_receipt_dialog(order_data):
+    st.subheader(f"#{order_data.get('id', '---')}")
     st.markdown(f"**Cliente:** {order_data['client']}")
     st.markdown(f"**Vendedora:** {order_data['salesperson']}")
     st.metric("Total", f"R$ {order_data['total']:.2f}")
@@ -38,9 +40,52 @@ def show_receipt_dialog(order_data):
          st.text(f"{item['qty']}x {item['product_name']} (R$ {item['total']:.2f})")
     
     # Custom Close Logic
-    if st.button("Fechar e Nova Venda", type="primary"):
-         del st.session_state['last_order']
-         st.rerun()
+    if st.button("Fechar e Nova Venda", key="btn_close_receipt", type="primary", use_container_width=True):
+        if 'last_order' in st.session_state:
+            del st.session_state['last_order']
+        st.rerun()
+
+    # PDF Download
+    try:
+        # Prepare data for report
+        # Needs: id, date, client_name, items, total, discount, deposit
+        
+        # Calculate totals from items if not explicit
+        # But order_data has total.
+        
+        rep_data = {
+            "id": order_data.get('id', '???'),
+            "type": "Encomenda" if str(order_data.get('id', '')).startswith('ENC') else "Venda",
+            "date": datetime.now().strftime("%d/%m/%Y"),
+            "client_name": order_data.get('client', 'Cliente'),
+            "salesperson": order_data.get('salesperson', '-'),
+            "payment_method": order_data.get('payment_method', '-'), # Need to ensure this is passed/available
+            "notes": order_data.get('notes', ''), # Need to ensure this is passed
+            "date_due": order_data.get('date_due', None),
+            "items": [],
+            "total": order_data.get('total', 0),
+            "discount": 0, # Not carried over easily in session state currently, maybe add to session state later
+            "deposit": order_data.get('deposit', 0)
+        }
+        
+        # Items
+        for item in order_data['items']:
+            rep_data['items'].append({
+                "name": item['product_name'],
+                "qty": item['qty'],
+                "price": item['base_price']
+            })
+            
+        pdf_bytes = reports.generate_receipt_pdf(rep_data)
+        
+        st.download_button(
+            label="📄 Baixar Recibo (PDF)",
+            data=pdf_bytes,
+            file_name=f"recibo_{order_data.get('id')}.pdf",
+            mime="application/pdf"
+        )
+    except Exception as e:
+        st.error(f"Erro ao gerar PDF: {e}")
 
 if 'last_order' in st.session_state:
     show_receipt_dialog(st.session_state['last_order'])
@@ -410,7 +455,7 @@ with col_cart:
                         default_dep = calc_total_val * 0.5
                         
                     c_dates1, c_dates2 = st.columns(2)
-                    d_comm = c_dates1.date_input("Prazo para Encomenda (se houver)", value=datetime.now() + pd.Timedelta(days=15))
+                    d_comm = c_dates1.date_input("Prazo para Encomenda (se houver)", value=datetime.now() + pd.Timedelta(days=30), format="DD/MM/YYYY")
                     deposit_val = c_dates2.number_input("Valor Sinal/Adiantamento (R$)", min_value=0.0, step=10.0, value=float(round(default_dep, 2)))
                     
                     col_act1, col_act2 = st.columns(2)
@@ -518,12 +563,18 @@ with col_cart:
                                         })
                                         
                                  # Create Order if needed
+                                 final_notes = notes_order # Default fallback
                                  if order_items:
                                      # Create Order Header
+                                     # Append Deposit Text if Order
+                                     final_notes = f"Gerado via Venda #{trans_uuid}. Obs: {notes_order}"
+                                     if deposit_val > 0:
+                                         final_notes += f"\n\nSinal no valor de R$ {deposit_val:.2f}, o restante do pagamento será realizado na entrega da encomenda."
+
                                      cursor.execute("""
                                         INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes, deposit_amount)
                                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                                     """, (final_client_id, date.today(), d_comm, "Pendente", 0, f"Gerado via Venda #{trans_uuid}", deposit_val))
+                                     """, (final_client_id, date.today(), d_comm, "Pendente", 0, final_notes, deposit_val))
                                      new_ord_id = cursor.lastrowid
                                      
                                      total_ord_val = 0
@@ -536,6 +587,14 @@ with col_cart:
                                          """, (new_ord_id, int(oi['id']), oi['qty'], 0, oi['price']))
                                      
                                      cursor.execute("UPDATE commission_orders SET total_price = ? WHERE id = ?", (total_ord_val, new_ord_id))
+                                     
+                                     # Insert Deposit as Sale Record
+                                     if deposit_val > 0:
+                                         cursor.execute("""
+                                             INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id)
+                                             VALUES (?, NULL, 1, ?, 'Finalizada', ?, 0, ?, ?, ?, ?)
+                                         """, (date.today(), deposit_val, final_client_id, pay_method_choice, f"Sinal de Encomenda #{new_ord_id}", salesperson_choice,  f"ENC-{new_ord_id}")) # Using ENC ID for reference logic? Or keeping trans_uuid? Let's use standard ENC ref.
+
                                      st.toast(f"Encomenda #{new_ord_id} gerada automaticamente!", icon="📦")
                                  
                                  if 'new_ord_id' not in locals(): # Option A flow
@@ -545,7 +604,6 @@ with col_cart:
                                      check_stock = conn.execute("SELECT stock_quantity FROM products WHERE id=?", (p_id,)).fetchone()[0]
                                      if check_stock != new_stock:
                                          st.error(f"CRITICAL ERROR: Transaction Rolled Back? Expected {new_stock}, Got {check_stock}")
-                                         time.sleep(10)
                                      else:
                                          st.toast(f"✅ Transaction Persisted. Stock in DB: {check_stock}", icon="💾")
                                  else:
@@ -556,12 +614,15 @@ with col_cart:
                                     "id": trans_uuid,
                                     "client": final_client_name,
                                     "salesperson": salesperson_choice,
+                                    "payment_method": pay_method_choice,
+                                    "notes": final_notes,
+                                    "deposit": deposit_val if order_items else 0,
+                                    "date_due": (d_comm.strftime("%d/%m/%Y") if d_comm else None) if order_items else None,
                                     "items": st.session_state['cart'], # Keep original cart for receipt visual? Or update to reflect split? Let's keep original for simplicity, maybe add note.
                                     "total": cart_total,
                                     "time": datetime.now().strftime("%H:%M:%S")
                                  }
                                  st.session_state['cart'] = []
-                                 time.sleep(4)
                                  st.rerun()
 
                              except Exception as e:
@@ -607,11 +668,16 @@ with col_cart:
                              # EXECUTE B (Full Order)
                              cursor = conn.cursor()
                              
+                             # Append Deposit Text
+                             final_notes_B = f"Encomenda Total. Obs: {notes_order}"
+                             if deposit_val > 0:
+                                 final_notes_B += f"\n\nSinal no valor de R$ {deposit_val:.2f}, o restante do pagamento será realizado na entrega da encomenda."
+
                              # Create Order Header
                              cursor.execute("""
                                 INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes, deposit_amount)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                             """, (final_client_id, date.today(), d_comm, "Pendente", 0, f"Encomenda Total (Venda Convertida)", deposit_val))
+                             """, (final_client_id, date.today(), d_comm, "Pendente", 0, final_notes_B, deposit_val))
                              new_ord_id = cursor.lastrowid
                              
                              total_ord_val = 0
@@ -641,6 +707,14 @@ with col_cart:
                                         cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (q_res, p_id))
 
                              cursor.execute("UPDATE commission_orders SET total_price = ? WHERE id = ?", (total_ord_val, new_ord_id))
+                             
+                             # Insert Deposit as Sale Record
+                             if deposit_val > 0:
+                                 cursor.execute("""
+                                     INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id)
+                                     VALUES (?, NULL, 1, ?, 'Finalizada', ?, 0, ?, ?, ?, ?)
+                                 """, (date.today(), deposit_val, final_client_id, pay_method_choice, f"Sinal de Encomenda #{new_ord_id}", salesperson_choice, f"ENC-{new_ord_id}"))
+
                              conn.commit()
                              
                              # Receipt & Reset
@@ -648,12 +722,15 @@ with col_cart:
                                 "id": f"ENC-{new_ord_id}",
                                 "client": final_client_name,
                                 "salesperson": salesperson_choice,
+                                "payment_method": "A Definir (Encomenda)", # Payment not finalized yet for full orders usually
+                                "notes": final_notes_B,
+                                "deposit": deposit_val,
+                                "date_due": d_comm.strftime("%d/%m/%Y") if d_comm else None,
                                 "items": st.session_state['cart'], 
                                 "total": total_ord_val,
                                 "time": datetime.now().strftime("%H:%M:%S")
                              }
                              st.session_state['cart'] = []
-                             time.sleep(3)
                              st.rerun()
                     
     else:
@@ -674,7 +751,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
         
         # Filters
         fc1, fc2, fc3, fc4 = st.columns(4)
-        fil_date = fc1.date_input("Período", [], key="hist_dates")
+        fil_date = fc1.date_input("Período", [], key="hist_dates", format="DD/MM/YYYY")
         fil_client = fc2.selectbox("Cliente", client_opts, key="hist_cli")
         fil_pay = fc3.selectbox("Pagamento", ["Todas"] + ["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"], key="hist_pay")
         fil_salesp = fc4.selectbox("Vendedora", ["Todas", "Ira", "Neli"], key="hist_sp")
@@ -689,7 +766,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                        s.salesperson, s.payment_method, s.discount, s.notes, s.product_id
                 FROM sales s
                 LEFT JOIN clients c ON s.client_id = c.id
-                JOIN products p ON s.product_id = p.id
+                LEFT JOIN products p ON s.product_id = p.id
                 WHERE 1=1
             """
             params = []
@@ -708,7 +785,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                 query += " AND s.salesperson = ?"
                 params.append(fil_salesp)
             
-            query += " ORDER BY s.date DESC"
+            query += " ORDER BY s.date DESC, s.id DESC"
             
             sales_view = pd.read_sql(query, conn, params=params)
 
@@ -807,6 +884,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
             if not sales_view.empty:
                 # Fix Date Type
                 sales_view['date'] = pd.to_datetime(sales_view['date'])
+                sales_view['produto'] = sales_view['produto'].fillna("Sinal / Ajuste")
                 
                 # --- GROUPED VIEW LOGIC ---
                 if group_by_order:
@@ -823,8 +901,8 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                         'id': 'first' # Just for key
                     }).reset_index()
                     
-                    # Sort by date
-                    grouped = grouped.sort_values(by='date', ascending=False)
+                    # Sort by id (proxy for creation time) descending
+                    grouped = grouped.sort_values(by='id', ascending=False)
                     
                     st.data_editor(
                         grouped,
@@ -853,7 +931,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                         column_config={
                             "id": st.column_config.NumberColumn(disabled=True),
                             "order_id": st.column_config.TextColumn("Pedido", disabled=True, width="medium"),
-                            "date": st.column_config.DateColumn("Data"),
+                            "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                             "cliente": st.column_config.TextColumn("Cliente", disabled=True),
                             "produto": st.column_config.TextColumn("Produto", disabled=True),
                             "quantity": st.column_config.NumberColumn("Qtd", disabled=True),
@@ -934,6 +1012,58 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                         st.success("Histórico atualizado com sucesso!")
                         time.sleep(1)
                         st.rerun()
+            
+                # --- RECEIPT GENERATION FOR HISTORY ---
+                st.divider()
+                with st.expander("📄 Gerar 2ª Via de Recibo"):
+                    unique_uuids = sales_view['order_id'].dropna().unique().tolist()
+                    sel_uuid = st.selectbox("Selecione o ID da Transação/Encomenda", unique_uuids)
+                    
+                    if st.button("Gerar PDF"):
+                        # Fetch Data for this UUID
+                        subset = sales_view[sales_view['order_id'] == sel_uuid]
+                        
+                        if not subset.empty:
+                            first = subset.iloc[0]
+                            
+                            # Try to find date_due if available in view
+                            d_due = ""
+                            if 'date_due' in first and first['date_due']:
+                                d_due = str(first['date_due']) # Already formatted in string in view?
+
+                            rep_data = {
+                                "id": sel_uuid,
+                                "type": "Venda/Enc",
+                                "date": pd.to_datetime(first['date']).strftime('%d/%m/%Y'),
+                                "date_due": d_due,
+                                "client_name": first['cliente'],
+                                "salesperson": first['salesperson'] if 'salesperson' in first else '-',
+                                "payment_method": first['payment_method'] if 'payment_method' in first else '-',
+                                "notes": first['notes'] if 'notes' in first else '',
+                                "items": [],
+                                "total": subset['total_price'].sum(),
+                                "discount": subset['discount'].sum() if 'discount' in subset.columns else 0,
+                                "deposit": first['deposit_amount'] if 'deposit_amount' in first else 0
+                            }
+                            
+                            # Use raw values or displayed values? Raw is safer.
+                            # Need to re-fetch to ensure clean data?
+                            # Using displayed view for speed
+                            for _, row in subset.iterrows():
+                                # Need product name. Logic in query was GROUP_CONCAT. In detailed view, it is 'produto'.
+                                rep_data['items'].append({
+                                    "name": row['produto'],
+                                    "qty": row['quantity'],
+                                    "price": row['total_price'] / row['quantity'] if row['quantity'] else 0
+                                })
+                                
+                            pdf_bytes = reports.generate_receipt_pdf(rep_data)
+                            st.download_button(
+                                label="⬇️ Baixar PDF",
+                                data=pdf_bytes,
+                                file_name=f"recibo_{sel_uuid}.pdf",
+                                mime="application/pdf"
+                            )
             
             else:
                 st.info("Nenhuma venda encontrada com estes filtros.")

@@ -196,7 +196,7 @@ with tab_gestao:
                 st.rerun()
                 
             with st.form("exp_form"):
-                e_date = st.date_input("Data", def_date)
+                e_date = st.date_input("Data", def_date, format="DD/MM/YYYY")
                 e_desc = st.text_input("Descrição", def_desc)
                 e_val = st.number_input("Valor (R$)", min_value=0.0, step=0.01, value=def_val)
                 e_cat = st.selectbox("Categoria", expense_categories, index=idx_cat)
@@ -248,7 +248,7 @@ with tab_gestao:
             # Default to current month
             today = date.today()
             date_def = [today.replace(day=1), today]
-            fil_date = f2.date_input("Intervalo", date_def, key="fil_d_exp")
+            fil_date = f2.date_input("Intervalo", date_def, key="fil_d_exp", format="DD/MM/YYYY")
             
             query = """
                 SELECT e.id, e.date, e.description, e.amount, e.category, s.name as supplier
@@ -492,8 +492,8 @@ with tab_relatorios:
     else:  # Personalizado
         with col_fil2:
             c_d1, c_d2 = st.columns(2)
-            start_date = c_d1.date_input("Data Início", today.replace(day=1))
-            end_date = c_d2.date_input("Data Fim", today)
+            start_date = c_d1.date_input("Data Início", today.replace(day=1), format="DD/MM/YYYY")
+            end_date = c_d2.date_input("Data Fim", today, format="DD/MM/YYYY")
     
     st.caption(f"Exibindo dados de **{start_date.strftime('%d/%m/%Y')}** até **{end_date.strftime('%d/%m/%Y')}**")
     st.divider()
