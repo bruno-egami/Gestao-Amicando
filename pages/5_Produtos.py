@@ -392,14 +392,58 @@ with tab1:
             st.session_state.editing_product_id = None
             st.rerun()
 
-        # Header with Back button
-        c_back, c_title = st.columns([1, 5])
+        # Header with Back button and Duplicate
+        c_back, c_title, c_dup = st.columns([1, 4, 1])
         with c_back:
             if st.button("⬅️ Voltar"):
                 st.session_state.editing_product_id = None
                 st.rerun()
         with c_title:
              st.markdown(f"### ✏️ Editando: {curr_prod['name']}")
+        with c_dup:
+            if st.button("📋 Duplicar", help="Criar cópia deste produto com receitas e componentes"):
+                try:
+                    # 1. Create new product with copied data
+                    new_name = f"{curr_prod['name']} (Cópia)"
+                    cursor.execute("""
+                        INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
+                        VALUES (?, ?, ?, ?, '[]', 0, 0)
+                    """, (new_name, curr_prod['description'], curr_prod['category'], curr_prod['markup']))
+                    conn.commit()
+                    new_prod_id = cursor.lastrowid
+                    
+                    # 2. Copy recipes (product_recipes)
+                    recipes = pd.read_sql("""
+                        SELECT material_id, quantity FROM product_recipes WHERE product_id = ?
+                    """, conn, params=(selected_prod_id,))
+                    for _, rec in recipes.iterrows():
+                        cursor.execute("""
+                            INSERT INTO product_recipes (product_id, material_id, quantity)
+                            VALUES (?, ?, ?)
+                        """, (new_prod_id, rec['material_id'], rec['quantity']))
+                    
+                    # 3. Copy kit components (product_kits)
+                    kits = pd.read_sql("""
+                        SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id = ?
+                    """, conn, params=(selected_prod_id,))
+                    for _, kit in kits.iterrows():
+                        cursor.execute("""
+                            INSERT INTO product_kits (parent_product_id, child_product_id, quantity)
+                            VALUES (?, ?, ?)
+                        """, (new_prod_id, kit['child_product_id'], kit['quantity']))
+                    
+                    conn.commit()
+                    
+                    # Log audit
+                    audit.log_action(conn, 'CREATE', 'products', new_prod_id, None, {
+                        'name': new_name, 'duplicated_from': selected_prod_id
+                    })
+                    
+                    st.success(f"Produto '{new_name}' criado com sucesso!")
+                    st.session_state.editing_product_id = new_prod_id
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao duplicar: {e}")
         
         # --- 0. DETAILS EDIT (New) ---
         with st.expander("Editar Detalhes do Produto", expanded=False):
