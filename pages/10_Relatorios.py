@@ -24,7 +24,17 @@ st.title("📊 Relatórios")
 report_types = {
     "Estoque Atual": "stock",
     "Vendas por Período": "sales",
-    "Top 10 Produtos Vendidos": "top_products",
+    "Top Produtos Vendidos": "top_products",
+    "Análise de Vendas Anual": "sales_trend",
+    "Lucratividade por Produto": "profitability",
+    "Análise de Sazonalidade": "seasonality",
+    "Itens sem Movimentação": "dead_stock",
+    "Clientes - Histórico": "customer_history",
+    "Fluxo de Caixa": "cash_flow",
+    "Previsão de Estoque": "stock_forecast",
+    "Encomendas Pendentes": "pending_orders",
+    "Custo de Produção": "production_cost",
+    "Fornecedores - Compras": "suppliers",
     "Despesas por Categoria": "expenses",
     "Consumo de Insumos": "consumption",
     "Histórico de Produção": "production"
@@ -232,7 +242,7 @@ elif report_key == "top_products":
     start_date = c1.date_input("Data Início", today.replace(day=1), format="DD/MM/YYYY")
     end_date = c2.date_input("Data Fim", today, format="DD/MM/YYYY")
     order_by = c3.selectbox("Ordenar por", ["Quantidade", "Valor"])
-    top_limit = c4.number_input("Quantidade", min_value=5, max_value=50, value=10, step=5)
+    top_limit = c4.number_input("Quantidade", min_value=5, value=10, step=5)
     
     if st.button("🔄 Gerar Relatório", type="primary"):
         report_title = f"Top {top_limit} Produtos Vendidos"
@@ -466,10 +476,11 @@ elif report_key == "production":
     st.subheader("🔨 Histórico de Produção")
     
     # Filters
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     today = date.today()
     start_date = c1.date_input("Data Início", today.replace(day=1), format="DD/MM/YYYY")
     end_date = c2.date_input("Data Fim", today, format="DD/MM/YYYY")
+    top_limit = c3.number_input("Top Produtos no Gráfico", min_value=5, value=10, step=5)
     
     if st.button("🔄 Gerar Relatório", type="primary"):
         report_title = "Histórico de Produção"
@@ -502,11 +513,11 @@ elif report_key == "production":
                 ("Produtos Diferentes", str(unique_products))
             ]
             
-            # Chart - Production by product
+            # Chart - Production by product (using customizable limit)
             prod_by_product = report_df.groupby('Produto')['Quantidade'].sum().reset_index()
-            prod_by_product = prod_by_product.nlargest(10, 'Quantidade')
+            prod_by_product = prod_by_product.nlargest(top_limit, 'Quantidade')
             chart_data = {'type': 'bar_h', 'df': prod_by_product, 'x': 'Quantidade', 'y': 'Produto', 
-                         'title': 'Top 10 Produtos Produzidos'}
+                         'title': f'Top {top_limit} Produtos Produzidos'}
             
             # Format date
             report_df['Data'] = pd.to_datetime(report_df['Data']).dt.strftime('%d/%m/%Y')
@@ -516,6 +527,1086 @@ elif report_key == "production":
             headers = []
             totals = []
             chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: ANÁLISE DE VENDAS ANUAL
+# ============================================================
+elif report_key == "sales_trend":
+    st.subheader("📈 Análise de Vendas Anual")
+    
+    # Filters
+    c1, c2, c3 = st.columns(3)
+    current_year = date.today().year
+    years = list(range(current_year, current_year - 5, -1))  # Last 5 years
+    selected_year = c1.selectbox("Ano", years)
+    
+    # View options
+    view_type = c2.selectbox("Visualização", ["Por Produto", "Geral"])
+    top_limit = c3.number_input("Top Produtos", min_value=5, value=10, step=5)
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = f"Análise de Vendas {selected_year}"
+        info_lines = {
+            "Ano": str(selected_year),
+            "Visualização": view_type
+        }
+        
+        if view_type == "Por Produto":
+            # Monthly sales by product - pivot table
+            query = """
+                SELECT p.name as Produto,
+                       strftime('%m', s.date) as Mes,
+                       SUM(s.quantity) as Quantidade,
+                       SUM(s.total_price) as Valor
+                FROM sales s
+                JOIN products p ON s.product_id = p.id
+                WHERE strftime('%Y', s.date) = ?
+                GROUP BY p.id, strftime('%m', s.date)
+                ORDER BY p.name, Mes
+            """
+            
+            raw_df = pd.read_sql(query, conn, params=[str(selected_year)])
+            
+            if not raw_df.empty:
+                # Get top products by total sales
+                top_products = raw_df.groupby('Produto')['Quantidade'].sum().nlargest(top_limit).index.tolist()
+                raw_df = raw_df[raw_df['Produto'].isin(top_products)]
+                
+                # Create pivot table for quantities
+                pivot_qty = raw_df.pivot_table(
+                    index='Produto', 
+                    columns='Mes', 
+                    values='Quantidade', 
+                    aggfunc='sum',
+                    fill_value=0
+                )
+                
+                # Rename columns to month names
+                month_names = {
+                    '01': 'Jan', '02': 'Fev', '03': 'Mar', '04': 'Abr',
+                    '05': 'Mai', '06': 'Jun', '07': 'Jul', '08': 'Ago',
+                    '09': 'Set', '10': 'Out', '11': 'Nov', '12': 'Dez'
+                }
+                pivot_qty.columns = [month_names.get(c, c) for c in pivot_qty.columns]
+                
+                # Add total column
+                pivot_qty['Total'] = pivot_qty.sum(axis=1)
+                pivot_qty = pivot_qty.sort_values('Total', ascending=False)
+                
+                # Reset index for display
+                report_df = pivot_qty.reset_index()
+                
+                # Totals
+                grand_total = report_df['Total'].sum()
+                totals = [("Total Vendido", str(int(grand_total)))]
+                
+                # Chart - Grouped bar chart
+                chart_df = raw_df.copy()
+                chart_df['Mes'] = chart_df['Mes'].map(month_names)
+                chart_data = {
+                    'type': 'grouped_bar', 
+                    'df': chart_df, 
+                    'x': 'Mes', 
+                    'y': 'Quantidade',
+                    'color': 'Produto',
+                    'title': f'Vendas Mensais - Top {top_limit} Produtos'
+                }
+                
+                headers = list(report_df.columns)
+            else:
+                report_df = pd.DataFrame()
+                headers = []
+                totals = []
+                chart_data = None
+        
+        else:  # Geral - Total monthly sales
+            query = """
+                SELECT strftime('%m', s.date) as Mes,
+                       COUNT(*) as NumVendas,
+                       SUM(s.quantity) as Quantidade,
+                       SUM(s.total_price) as Valor
+                FROM sales s
+                WHERE strftime('%Y', s.date) = ?
+                GROUP BY strftime('%m', s.date)
+                ORDER BY Mes
+            """
+            
+            report_df = pd.read_sql(query, conn, params=[str(selected_year)])
+            
+            if not report_df.empty:
+                # Rename months
+                month_names = {
+                    '01': 'Janeiro', '02': 'Fevereiro', '03': 'Março', '04': 'Abril',
+                    '05': 'Maio', '06': 'Junho', '07': 'Julho', '08': 'Agosto',
+                    '09': 'Setembro', '10': 'Outubro', '11': 'Novembro', '12': 'Dezembro'
+                }
+                report_df['Mes'] = report_df['Mes'].map(month_names)
+                report_df.columns = ['Mês', 'Nº Vendas', 'Quantidade', 'Valor']
+                
+                # Totals
+                total_sales = report_df['Nº Vendas'].sum()
+                total_qty = report_df['Quantidade'].sum()
+                total_value = report_df['Valor'].sum()
+                
+                totals = [
+                    ("Total Vendas", str(int(total_sales))),
+                    ("Total Unidades", str(int(total_qty))),
+                    ("Valor Total", f"R$ {total_value:,.2f}")
+                ]
+                
+                # Chart - Line chart
+                chart_data = {
+                    'type': 'line', 
+                    'df': report_df, 
+                    'x': 'Mês', 
+                    'y': 'Valor',
+                    'title': f'Evolução de Vendas - {selected_year}'
+                }
+                
+                # Format value
+                report_df['Valor'] = report_df['Valor'].apply(lambda x: f"R$ {x:,.2f}")
+                
+                headers = ['Mês', 'Nº Vendas', 'Quantidade', 'Valor']
+            else:
+                headers = []
+                totals = []
+                chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: LUCRATIVIDADE POR PRODUTO
+# ============================================================
+elif report_key == "profitability":
+    st.subheader("💰 Lucratividade por Produto")
+    
+    # Filters
+    c1, c2, c3 = st.columns(3)
+    today = date.today()
+    start_date = c1.date_input("Data Início", today.replace(day=1), format="DD/MM/YYYY")
+    end_date = c2.date_input("Data Fim", today, format="DD/MM/YYYY")
+    top_limit = c3.number_input("Quantidade", min_value=5, value=10, step=5)
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Lucratividade por Produto"
+        info_lines = {
+            "Período": f"{start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}"
+        }
+        
+        # Get sales with product cost info
+        query = """
+            SELECT p.name as Produto,
+                   p.category as Categoria,
+                   SUM(s.quantity) as QtdVendida,
+                   SUM(s.total_price) as Receita,
+                   p.base_price as CustoBase,
+                   SUM(s.quantity) * p.base_price as CustoTotal
+            FROM sales s
+            JOIN products p ON s.product_id = p.id
+            WHERE s.date BETWEEN ? AND ?
+            GROUP BY p.id
+            ORDER BY Receita DESC
+            LIMIT ?
+        """
+        
+        report_df = pd.read_sql(query, conn, params=[start_date, end_date, top_limit])
+        
+        if not report_df.empty:
+            # Calculate profit margin
+            report_df['Lucro'] = report_df['Receita'] - report_df['CustoTotal']
+            report_df['Margem %'] = (report_df['Lucro'] / report_df['Receita'] * 100).round(1)
+            
+            # Reorder columns
+            report_df = report_df[['Produto', 'Categoria', 'QtdVendida', 'CustoTotal', 'Receita', 'Lucro', 'Margem %']]
+            report_df.columns = ['Produto', 'Categoria', 'Qtd', 'Custo', 'Receita', 'Lucro', 'Margem %']
+            
+            # Totals
+            total_revenue = report_df['Receita'].sum()
+            total_cost = report_df['Custo'].sum()
+            total_profit = report_df['Lucro'].sum()
+            avg_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
+            
+            totals = [
+                ("Receita Total", f"R$ {total_revenue:,.2f}"),
+                ("Custo Total", f"R$ {total_cost:,.2f}"),
+                ("Lucro Total", f"R$ {total_profit:,.2f}"),
+                ("Margem Média", f"{avg_margin:.1f}%")
+            ]
+            
+            # Chart - Profit by product
+            chart_data = {
+                'type': 'bar_h', 
+                'df': report_df, 
+                'x': 'Lucro', 
+                'y': 'Produto',
+                'title': 'Lucro por Produto'
+            }
+            
+            # Format values
+            report_df['Custo'] = report_df['Custo'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Receita'] = report_df['Receita'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Lucro'] = report_df['Lucro'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Margem %'] = report_df['Margem %'].apply(lambda x: f"{x:.1f}%")
+            
+            headers = list(report_df.columns)
+        else:
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: CLIENTES - HISTÓRICO
+# ============================================================
+elif report_key == "customer_history":
+    st.subheader("🤝 Clientes - Histórico de Compras")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    today = date.today()
+    start_date = c1.date_input("Data Início", today.replace(month=1, day=1), format="DD/MM/YYYY")
+    end_date = c2.date_input("Data Fim", today, format="DD/MM/YYYY")
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Histórico de Compras por Cliente"
+        info_lines = {
+            "Período": f"{start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}"
+        }
+        
+        query = """
+            SELECT COALESCE(c.name, 'Consumidor Final') as Cliente,
+                   COUNT(s.id) as NumCompras,
+                   SUM(s.quantity) as QtdItens,
+                   SUM(s.total_price) as ValorTotal,
+                   AVG(s.total_price) as TicketMedio,
+                   MAX(s.date) as UltimaCompra
+            FROM sales s
+            LEFT JOIN clients c ON s.client_id = c.id
+            WHERE s.date BETWEEN ? AND ?
+            GROUP BY COALESCE(c.id, 0)
+            ORDER BY ValorTotal DESC
+        """
+        
+        report_df = pd.read_sql(query, conn, params=[start_date, end_date])
+        
+        if not report_df.empty:
+            report_df.columns = ['Cliente', 'Nº Compras', 'Qtd Itens', 'Valor Total', 'Ticket Médio', 'Última Compra']
+            
+            # Totals
+            total_clients = len(report_df)
+            total_sales = report_df['Nº Compras'].sum()
+            total_value = report_df['Valor Total'].sum()
+            avg_ticket = report_df['Ticket Médio'].mean()
+            
+            totals = [
+                ("Total Clientes", str(total_clients)),
+                ("Total Vendas", str(int(total_sales))),
+                ("Valor Total", f"R$ {total_value:,.2f}"),
+                ("Ticket Médio", f"R$ {avg_ticket:,.2f}")
+            ]
+            
+            # Chart - Top clients by value
+            chart_df = report_df.head(15).copy()
+            chart_data = {
+                'type': 'bar_h', 
+                'df': chart_df, 
+                'x': 'Valor Total', 
+                'y': 'Cliente',
+                'title': 'Top 15 Clientes por Valor'
+            }
+            
+            # Format values
+            report_df['Valor Total'] = report_df['Valor Total'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Ticket Médio'] = report_df['Ticket Médio'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Última Compra'] = pd.to_datetime(report_df['Última Compra']).dt.strftime('%d/%m/%Y')
+            
+            headers = list(report_df.columns)
+        else:
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: FLUXO DE CAIXA
+# ============================================================
+elif report_key == "cash_flow":
+    st.subheader("💵 Fluxo de Caixa")
+    
+    # Filters
+    c1, c2, c3 = st.columns(3)
+    today = date.today()
+    start_date = c1.date_input("Data Início", today.replace(day=1), format="DD/MM/YYYY")
+    end_date = c2.date_input("Data Fim", today, format="DD/MM/YYYY")
+    view_type = c3.selectbox("Agrupar por", ["Dia", "Semana", "Mês"])
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Fluxo de Caixa"
+        info_lines = {
+            "Período": f"{start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}",
+            "Agrupamento": view_type
+        }
+        
+        # Date grouping
+        if view_type == "Dia":
+            date_format = '%Y-%m-%d'
+            display_format = '%d/%m/%Y'
+        elif view_type == "Semana":
+            date_format = '%Y-%W'
+            display_format = 'Sem %W/%Y'
+        else:  # Mês
+            date_format = '%Y-%m'
+            display_format = '%m/%Y'
+        
+        # Get sales (income)
+        sales_query = f"""
+            SELECT strftime('{date_format}', date) as Periodo,
+                   SUM(total_price) as Entradas
+            FROM sales
+            WHERE date BETWEEN ? AND ?
+            GROUP BY strftime('{date_format}', date)
+        """
+        sales_df = pd.read_sql(sales_query, conn, params=[start_date, end_date])
+        
+        # Get expenses
+        expenses_query = f"""
+            SELECT strftime('{date_format}', date) as Periodo,
+                   SUM(amount) as Saidas
+            FROM expenses
+            WHERE date BETWEEN ? AND ?
+            GROUP BY strftime('{date_format}', date)
+        """
+        expenses_df = pd.read_sql(expenses_query, conn, params=[start_date, end_date])
+        
+        # Merge
+        if not sales_df.empty or not expenses_df.empty:
+            report_df = pd.merge(sales_df, expenses_df, on='Periodo', how='outer').fillna(0)
+            report_df = report_df.sort_values('Periodo')
+            
+            # Calculate balance
+            report_df['Saldo'] = report_df['Entradas'] - report_df['Saidas']
+            report_df['Saldo Acum.'] = report_df['Saldo'].cumsum()
+            
+            # Totals
+            total_income = report_df['Entradas'].sum()
+            total_expenses = report_df['Saidas'].sum()
+            final_balance = report_df['Saldo'].sum()
+            
+            totals = [
+                ("Total Entradas", f"R$ {total_income:,.2f}"),
+                ("Total Saídas", f"R$ {total_expenses:,.2f}"),
+                ("Saldo Final", f"R$ {final_balance:,.2f}")
+            ]
+            
+            # Chart - Line chart of cumulative balance
+            chart_data = {
+                'type': 'line', 
+                'df': report_df, 
+                'x': 'Periodo', 
+                'y': 'Saldo Acum.',
+                'title': 'Evolução do Saldo Acumulado'
+            }
+            
+            # Format values
+            report_df['Entradas'] = report_df['Entradas'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Saidas'] = report_df['Saidas'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Saldo'] = report_df['Saldo'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Saldo Acum.'] = report_df['Saldo Acum.'].apply(lambda x: f"R$ {x:,.2f}")
+            
+            report_df.columns = ['Período', 'Entradas', 'Saídas', 'Saldo', 'Saldo Acum.']
+            headers = list(report_df.columns)
+        else:
+            report_df = pd.DataFrame()
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: PREVISÃO DE ESTOQUE
+# ============================================================
+elif report_key == "stock_forecast":
+    st.subheader("📦 Previsão de Estoque")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    
+    item_type = c1.selectbox("Tipo de Item", ["Produtos", "Insumos"])
+    period_days = c2.number_input("Período de Análise (dias)", min_value=30, max_value=365, value=90, step=30)
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Previsão de Estoque"
+        cutoff_date = (date.today() - timedelta(days=period_days)).isoformat()
+        info_lines = {
+            "Tipo": item_type,
+            "Período de Análise": f"Últimos {period_days} dias"
+        }
+        
+        if item_type == "Produtos":
+            # Products: based on average sales
+            query = """
+                SELECT p.name as Nome,
+                       p.category as Categoria,
+                       p.stock_quantity as EstoqueAtual,
+                       COALESCE(SUM(s.quantity), 0) as VendidoPeriodo,
+                       COALESCE(SUM(s.quantity) / ?, 0) as MediaDiaria
+                FROM products p
+                LEFT JOIN sales s ON p.id = s.product_id AND s.date >= ?
+                GROUP BY p.id
+                HAVING p.stock_quantity > 0
+                ORDER BY MediaDiaria DESC
+            """
+            report_df = pd.read_sql(query, conn, params=[period_days, cutoff_date])
+            
+            if not report_df.empty:
+                # Calculate days until stockout
+                report_df['DiasRestantes'] = report_df.apply(
+                    lambda x: int(x['EstoqueAtual'] / x['MediaDiaria']) if x['MediaDiaria'] > 0 else 999,
+                    axis=1
+                )
+                report_df['DataPrevista'] = report_df.apply(
+                    lambda x: (date.today() + timedelta(days=x['DiasRestantes'])).strftime('%d/%m/%Y') if x['DiasRestantes'] < 999 else 'Sem previsão',
+                    axis=1
+                )
+                
+                # Sort by urgency
+                report_df = report_df.sort_values('DiasRestantes')
+                
+                report_df.columns = ['Produto', 'Categoria', 'Estoque', 'Vendido', 'Média/Dia', 'Dias Rest.', 'Data Prev.']
+                
+        else:  # Insumos
+            # Materials: based on average consumption
+            query = """
+                SELECT m.name as Nome,
+                       COALESCE(mc.name, 'Geral') as Categoria,
+                       m.stock_level as EstoqueAtual,
+                       m.unit as Unidade,
+                       COALESCE(SUM(it.quantity), 0) as ConsumidoPeriodo,
+                       COALESCE(SUM(it.quantity) / ?, 0) as MediaDiaria
+                FROM materials m
+                LEFT JOIN material_categories mc ON m.category_id = mc.id
+                LEFT JOIN inventory_transactions it ON m.id = it.material_id 
+                    AND it.type = 'SAIDA' 
+                    AND it.date >= ?
+                WHERE m.type = 'Material'
+                GROUP BY m.id
+                HAVING m.stock_level > 0
+                ORDER BY MediaDiaria DESC
+            """
+            report_df = pd.read_sql(query, conn, params=[period_days, cutoff_date])
+            
+            if not report_df.empty:
+                # Calculate days until stockout
+                report_df['DiasRestantes'] = report_df.apply(
+                    lambda x: int(x['EstoqueAtual'] / x['MediaDiaria']) if x['MediaDiaria'] > 0 else 999,
+                    axis=1
+                )
+                report_df['DataPrevista'] = report_df.apply(
+                    lambda x: (date.today() + timedelta(days=x['DiasRestantes'])).strftime('%d/%m/%Y') if x['DiasRestantes'] < 999 else 'Sem previsão',
+                    axis=1
+                )
+                
+                # Sort by urgency
+                report_df = report_df.sort_values('DiasRestantes')
+                
+                report_df.columns = ['Insumo', 'Categoria', 'Estoque', 'Unidade', 'Consumido', 'Média/Dia', 'Dias Rest.', 'Data Prev.']
+        
+        if not report_df.empty:
+            # Items at risk (less than 30 days)
+            at_risk = len(report_df[report_df['Dias Rest.'] < 30])
+            low_stock = len(report_df[report_df['Dias Rest.'] < 7])
+            
+            totals = [
+                ("Total de Itens", str(len(report_df))),
+                ("Em Risco (<30 dias)", str(at_risk)),
+                ("Críticos (<7 dias)", str(low_stock))
+            ]
+            
+            # Chart - Items by days remaining
+            if len(report_df) > 0:
+                chart_df = report_df.head(15).copy()
+                chart_data = {
+                    'type': 'bar_h', 
+                    'df': chart_df, 
+                    'x': 'Dias Rest.', 
+                    'y': report_df.columns[0],  # Produto or Insumo
+                    'title': 'Previsão de Esgotamento (dias)'
+                }
+            else:
+                chart_data = None
+            
+            headers = list(report_df.columns)
+        else:
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: ITENS SEM MOVIMENTAÇÃO
+# ============================================================
+elif report_key == "dead_stock":
+    st.subheader("⚠️ Itens sem Movimentação")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    
+    # Period filter
+    period_options = {
+        "Último Ano": 365,
+        "Últimos 6 Meses": 180,
+        "Últimos 3 Meses": 90,
+        "Último Mês": 30
+    }
+    selected_period = c1.selectbox("Período sem Movimento", list(period_options.keys()))
+    days = period_options[selected_period]
+    
+    # Type filter
+    item_type = c2.selectbox("Tipo de Item", ["Todos", "Produtos", "Insumos"])
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Itens sem Movimentação"
+        cutoff_date = (date.today() - timedelta(days=days)).isoformat()
+        info_lines = {
+            "Período": selected_period,
+            "Data de Corte": (date.today() - timedelta(days=days)).strftime('%d/%m/%Y'),
+            "Tipo": item_type
+        }
+        
+        dfs = []
+        
+        # Products without sales
+        if item_type in ["Todos", "Produtos"]:
+            products_query = """
+                SELECT p.name as 'Nome', 
+                       p.category as 'Categoria',
+                       p.stock_quantity as 'Estoque',
+                       p.base_price as 'Preço',
+                       (p.stock_quantity * p.base_price) as 'Valor Parado',
+                       MAX(s.date) as 'Última Venda'
+                FROM products p
+                LEFT JOIN sales s ON p.id = s.product_id
+                GROUP BY p.id
+                HAVING MAX(s.date) IS NULL OR MAX(s.date) < ?
+                ORDER BY 'Valor Parado' DESC
+            """
+            products_df = pd.read_sql(products_query, conn, params=[cutoff_date])
+            if not products_df.empty:
+                products_df['Tipo'] = 'Produto'
+                products_df['Última Venda'] = products_df['Última Venda'].apply(
+                    lambda x: pd.to_datetime(x).strftime('%d/%m/%Y') if pd.notnull(x) and x else 'Nunca'
+                )
+                dfs.append(products_df)
+        
+        # Materials without consumption
+        if item_type in ["Todos", "Insumos"]:
+            materials_query = """
+                SELECT m.name as 'Nome',
+                       COALESCE(mc.name, 'Geral') as 'Categoria',
+                       m.stock_level as 'Estoque',
+                       m.price_per_unit as 'Preço',
+                       (m.stock_level * m.price_per_unit) as 'Valor Parado',
+                       MAX(it.date) as 'Último Consumo'
+                FROM materials m
+                LEFT JOIN material_categories mc ON m.category_id = mc.id
+                LEFT JOIN inventory_transactions it ON m.id = it.material_id AND it.type = 'SAIDA'
+                WHERE m.type = 'Material'
+                GROUP BY m.id
+                HAVING MAX(it.date) IS NULL OR MAX(it.date) < ?
+                ORDER BY 'Valor Parado' DESC
+            """
+            materials_df = pd.read_sql(materials_query, conn, params=[cutoff_date])
+            if not materials_df.empty:
+                materials_df['Tipo'] = 'Insumo'
+                materials_df['Último Consumo'] = materials_df['Último Consumo'].apply(
+                    lambda x: pd.to_datetime(x).strftime('%d/%m/%Y') if pd.notnull(x) and x else 'Nunca'
+                )
+                # Rename column for consistency
+                materials_df = materials_df.rename(columns={'Último Consumo': 'Última Movim.'})
+                dfs.append(materials_df)
+        
+        # Combine results
+        if dfs:
+            if item_type == "Produtos":
+                report_df = dfs[0]
+                report_df = report_df.rename(columns={'Última Venda': 'Última Movim.'})
+            elif item_type == "Insumos":
+                report_df = dfs[0]
+            else:
+                # Normalize columns for both
+                if len(dfs) == 2:
+                    dfs[0] = dfs[0].rename(columns={'Última Venda': 'Última Movim.'})
+                    report_df = pd.concat(dfs, ignore_index=True)
+                else:
+                    report_df = dfs[0]
+                    if 'Última Venda' in report_df.columns:
+                        report_df = report_df.rename(columns={'Última Venda': 'Última Movim.'})
+            
+            # Sort by value stuck
+            report_df = report_df.sort_values('Valor Parado', ascending=False)
+            
+            # Calculate totals
+            total_items = len(report_df)
+            total_value = report_df['Valor Parado'].sum()
+            
+            totals = [
+                ("Total de Itens Parados", str(total_items)),
+                ("Valor Total Parado", f"R$ {total_value:,.2f}")
+            ]
+            
+            # Chart - Pie by type (if both types)
+            if item_type == "Todos" and 'Tipo' in report_df.columns:
+                by_type = report_df.groupby('Tipo')['Valor Parado'].sum().reset_index()
+                chart_data = {
+                    'type': 'pie', 
+                    'df': by_type, 
+                    'names': 'Tipo', 
+                    'values': 'Valor Parado',
+                    'title': 'Valor Parado por Tipo'
+                }
+            else:
+                # Bar chart of top items
+                chart_df = report_df.head(15).copy()
+                chart_data = {
+                    'type': 'bar_h', 
+                    'df': chart_df, 
+                    'x': 'Valor Parado', 
+                    'y': 'Nome',
+                    'title': 'Maiores Valores Parados'
+                }
+            
+            # Format values
+            report_df['Preço'] = report_df['Preço'].apply(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "-")
+            report_df['Valor Parado'] = report_df['Valor Parado'].apply(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "-")
+            
+            headers = list(report_df.columns)
+        else:
+            report_df = pd.DataFrame()
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: ENCOMENDAS PENDENTES
+# ============================================================
+elif report_key == "pending_orders":
+    st.subheader("📦 Encomendas Pendentes")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    
+    status_options = ["Todas", "Pendente", "Em Produção"]
+    selected_status = c1.selectbox("Status", status_options)
+    
+    sort_options = {"Prazo (Mais Urgente)": "date_due ASC", "Prazo (Mais Novo)": "date_due DESC", 
+                   "Valor (Maior)": "total_price DESC", "Valor (Menor)": "total_price ASC"}
+    selected_sort = c2.selectbox("Ordenar por", list(sort_options.keys()))
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Encomendas Pendentes"
+        info_lines = {
+            "Status": selected_status,
+            "Ordenação": selected_sort
+        }
+        
+        # Build query
+        status_filter = ""
+        if selected_status != "Todas":
+            status_filter = f"AND co.status = '{selected_status}'"
+        
+        query = f"""
+            SELECT co.id as 'Nº Pedido',
+                   COALESCE(c.name, 'Sem Cliente') as 'Cliente',
+                   co.status as 'Status',
+                   DATE(co.date_created) as 'Dt Criação',
+                   DATE(co.date_due) as 'Prazo',
+                   co.total_price as 'Valor Total',
+                   co.deposit_amount as 'Sinal',
+                   (co.total_price - COALESCE(co.deposit_amount, 0) - COALESCE(co.manual_discount, 0)) as 'Saldo',
+                   (SELECT COUNT(*) FROM commission_items ci WHERE ci.order_id = co.id) as 'Itens',
+                   co.notes as 'Observações'
+            FROM commission_orders co
+            LEFT JOIN clients c ON co.client_id = c.id
+            WHERE co.status NOT IN ('Entregue', 'Concluída')
+            {status_filter}
+            ORDER BY {sort_options[selected_sort]}
+        """
+        
+        report_df = pd.read_sql(query, conn)
+        
+        if not report_df.empty:
+            # Calculate days until due
+            report_df['Dias p/ Prazo'] = (pd.to_datetime(report_df['Prazo']) - pd.Timestamp.today()).dt.days
+            
+            # Totals
+            total_orders = len(report_df)
+            total_value = report_df['Valor Total'].sum()
+            total_pending = report_df['Saldo'].sum()
+            
+            totals = [
+                ("Total de Encomendas", str(total_orders)),
+                ("Valor Total", f"R$ {total_value:,.2f}"),
+                ("Saldo a Receber", f"R$ {total_pending:,.2f}")
+            ]
+            
+            # Chart - Orders by status
+            by_status = report_df.groupby('Status')['Valor Total'].sum().reset_index()
+            chart_data = {
+                'type': 'pie', 
+                'df': by_status, 
+                'names': 'Status', 
+                'values': 'Valor Total',
+                'title': 'Valor por Status'
+            }
+            
+            # Format dates and values
+            report_df['Dt Criação'] = pd.to_datetime(report_df['Dt Criação']).dt.strftime('%d/%m/%Y')
+            report_df['Prazo'] = pd.to_datetime(report_df['Prazo']).dt.strftime('%d/%m/%Y')
+            report_df['Valor Total'] = report_df['Valor Total'].apply(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "-")
+            report_df['Sinal'] = report_df['Sinal'].apply(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) and x > 0 else "-")
+            report_df['Saldo'] = report_df['Saldo'].apply(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "-")
+            
+            headers = list(report_df.columns)
+        else:
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: CUSTO DE PRODUÇÃO
+# ============================================================
+elif report_key == "production_cost":
+    st.subheader("🏭 Custo de Produção")
+    
+    st.info("Este relatório mostra o custo de insumos consumidos na produção de cada produto.")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    today = date.today()
+    start_date = c1.date_input("Data Início", today.replace(day=1), format="DD/MM/YYYY")
+    end_date = c2.date_input("Data Fim", today, format="DD/MM/YYYY")
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Custo de Produção por Produto"
+        info_lines = {
+            "Período": f"{start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}"
+        }
+        
+        # Get production with material costs from inventory transactions
+        query = """
+            SELECT p.name as Produto,
+                   p.category as Categoria,
+                   SUM(ph.quantity) as QtdProduzida,
+                   p.base_price as PrecoVenda,
+                   SUM(ph.quantity) * p.base_price as ReceitaPotencial
+            FROM production_history ph
+            JOIN products p ON ph.product_id = p.id
+            WHERE DATE(ph.timestamp) BETWEEN ? AND ?
+            GROUP BY p.id
+            ORDER BY QtdProduzida DESC
+        """
+        
+        report_df = pd.read_sql(query, conn, params=[start_date, end_date])
+        
+        if not report_df.empty:
+            # Get material consumption in the same period as an estimate
+            material_query = """
+                SELECT SUM(it.quantity * m.price_per_unit) as CustoInsumos
+                FROM inventory_transactions it
+                JOIN materials m ON it.material_id = m.id
+                WHERE it.type = 'SAIDA'
+                AND DATE(it.date) BETWEEN ? AND ?
+            """
+            material_cost = pd.read_sql(material_query, conn, params=[start_date, end_date])
+            total_material_cost = material_cost['CustoInsumos'].iloc[0] or 0
+            
+            # Distribute material cost proportionally by production quantity
+            total_produced = report_df['QtdProduzida'].sum()
+            if total_produced > 0:
+                report_df['CustoInsumos'] = (report_df['QtdProduzida'] / total_produced) * total_material_cost
+                report_df['CustoUnit'] = report_df['CustoInsumos'] / report_df['QtdProduzida']
+                report_df['MargemBruta'] = report_df['ReceitaPotencial'] - report_df['CustoInsumos']
+                report_df['Margem%'] = ((report_df['MargemBruta'] / report_df['ReceitaPotencial']) * 100).round(1)
+            else:
+                report_df['CustoInsumos'] = 0
+                report_df['CustoUnit'] = 0
+                report_df['MargemBruta'] = 0
+                report_df['Margem%'] = 0
+            
+            report_df.columns = ['Produto', 'Categoria', 'Qtd', 'Preço Venda', 'Receita Pot.', 
+                                'Custo Insumos', 'Custo Unit.', 'Margem Bruta', 'Margem %']
+            
+            # Totals
+            total_revenue = report_df['Receita Pot.'].sum()
+            total_cost = report_df['Custo Insumos'].sum()
+            total_margin = report_df['Margem Bruta'].sum()
+            
+            totals = [
+                ("Receita Potencial", f"R$ {total_revenue:,.2f}"),
+                ("Custo Insumos", f"R$ {total_cost:,.2f}"),
+                ("Margem Bruta Total", f"R$ {total_margin:,.2f}")
+            ]
+            
+            # Chart - Margin by product
+            chart_data = {
+                'type': 'bar_h', 
+                'df': report_df, 
+                'x': 'Margem Bruta', 
+                'y': 'Produto',
+                'title': 'Margem Bruta por Produto'
+            }
+            
+            # Format values
+            for col in ['Preço Venda', 'Receita Pot.', 'Custo Insumos', 'Custo Unit.', 'Margem Bruta']:
+                report_df[col] = report_df[col].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Margem %'] = report_df['Margem %'].apply(lambda x: f"{x}%")
+            
+            headers = list(report_df.columns)
+        else:
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: ANÁLISE DE SAZONALIDADE
+# ============================================================
+elif report_key == "seasonality":
+    st.subheader("📊 Análise de Sazonalidade")
+    
+    st.info("Compare as vendas do mesmo mês em diferentes anos para identificar padrões sazonais.")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    
+    month_names = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    selected_month = c1.selectbox("Mês para Análise", month_names, index=date.today().month - 1)
+    month_num = month_names.index(selected_month) + 1
+    
+    years_back = c2.number_input("Quantos Anos Comparar", min_value=2, max_value=10, value=3, step=1)
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = f"Sazonalidade - {selected_month}"
+        info_lines = {
+            "Mês Analisado": selected_month,
+            "Anos Comparados": str(years_back)
+        }
+        
+        current_year = date.today().year
+        years = [str(current_year - i) for i in range(years_back)]
+        
+        # Get sales for the selected month across years
+        years_str = "', '".join(years)
+        query = f"""
+            SELECT strftime('%Y', date) as Ano,
+                   COUNT(*) as NumVendas,
+                   SUM(quantity) as QtdVendida,
+                   SUM(total_price) as ValorTotal,
+                   AVG(total_price) as TicketMedio
+            FROM sales
+            WHERE strftime('%m', date) = ?
+            AND strftime('%Y', date) IN ('{years_str}')
+            GROUP BY strftime('%Y', date)
+            ORDER BY Ano
+        """
+        
+        report_df = pd.read_sql(query, conn, params=[f"{month_num:02d}"])
+        
+        if not report_df.empty:
+            report_df.columns = ['Ano', 'Nº Vendas', 'Qtd Vendida', 'Valor Total', 'Ticket Médio']
+            
+            # Calculate year-over-year growth
+            report_df['Crescimento'] = report_df['Valor Total'].pct_change() * 100
+            report_df['Crescimento'] = report_df['Crescimento'].fillna(0)
+            
+            # Totals
+            avg_value = report_df['Valor Total'].mean()
+            max_year = report_df.loc[report_df['Valor Total'].idxmax(), 'Ano']
+            min_year = report_df.loc[report_df['Valor Total'].idxmin(), 'Ano']
+            
+            totals = [
+                ("Média do Mês", f"R$ {avg_value:,.2f}"),
+                ("Melhor Ano", max_year),
+                ("Pior Ano", min_year)
+            ]
+            
+            # Chart - Bar by year
+            chart_data = {
+                'type': 'bar', 
+                'df': report_df, 
+                'x': 'Ano', 
+                'y': 'Valor Total',
+                'title': f'Vendas de {selected_month} por Ano'
+            }
+            
+            # Format values
+            report_df['Valor Total'] = report_df['Valor Total'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Ticket Médio'] = report_df['Ticket Médio'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Crescimento'] = report_df['Crescimento'].apply(lambda x: f"{x:+.1f}%" if x != 0 else "-")
+            
+            headers = list(report_df.columns)
+        else:
+            headers = []
+            totals = []
+            chart_data = None
+        
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
+# REPORT: FORNECEDORES - COMPRAS
+# ============================================================
+elif report_key == "suppliers":
+    st.subheader("🏪 Fornecedores - Compras")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    today = date.today()
+    start_date = c1.date_input("Data Início", today.replace(month=1, day=1), format="DD/MM/YYYY")
+    end_date = c2.date_input("Data Fim", today, format="DD/MM/YYYY")
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Compras por Fornecedor"
+        info_lines = {
+            "Período": f"{start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}"
+        }
+        
+        # Get expenses by supplier (purchases are usually in "Compra de Insumo" category)
+        query = """
+            SELECT COALESCE(s.name, 'Sem Fornecedor') as Fornecedor,
+                   COUNT(e.id) as NumCompras,
+                   SUM(e.amount) as ValorTotal,
+                   AVG(e.amount) as MediaCompra,
+                   MAX(e.date) as UltimaCompra
+            FROM expenses e
+            LEFT JOIN suppliers s ON e.supplier_id = s.id
+            WHERE e.date BETWEEN ? AND ?
+            AND e.category LIKE '%Compra%'
+            GROUP BY COALESCE(s.id, 0)
+            ORDER BY ValorTotal DESC
+        """
+        
+        report_df = pd.read_sql(query, conn, params=[start_date, end_date])
+        
+        if not report_df.empty:
+            report_df.columns = ['Fornecedor', 'Nº Compras', 'Valor Total', 'Média/Compra', 'Última Compra']
+            
+            # Totals
+            total_suppliers = len(report_df[report_df['Fornecedor'] != 'Sem Fornecedor'])
+            total_purchases = report_df['Nº Compras'].sum()
+            total_value = report_df['Valor Total'].sum()
+            
+            totals = [
+                ("Fornecedores Ativos", str(total_suppliers)),
+                ("Total Compras", str(int(total_purchases))),
+                ("Valor Total", f"R$ {total_value:,.2f}")
+            ]
+            
+            # Chart - Top suppliers by value
+            chart_df = report_df.head(10).copy()
+            chart_data = {
+                'type': 'bar_h', 
+                'df': chart_df, 
+                'x': 'Valor Total', 
+                'y': 'Fornecedor',
+                'title': 'Top 10 Fornecedores por Valor'
+            }
+            
+            # Format values
+            report_df['Valor Total'] = report_df['Valor Total'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Média/Compra'] = report_df['Média/Compra'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Última Compra'] = pd.to_datetime(report_df['Última Compra']).dt.strftime('%d/%m/%Y')
+            
+            headers = list(report_df.columns)
+        else:
+            # Try broader category
+            query2 = """
+                SELECT COALESCE(s.name, 'Sem Fornecedor') as Fornecedor,
+                       COUNT(e.id) as NumCompras,
+                       SUM(e.amount) as ValorTotal,
+                       AVG(e.amount) as MediaCompra,
+                       MAX(e.date) as UltimaCompra
+                FROM expenses e
+                LEFT JOIN suppliers s ON e.supplier_id = s.id
+                WHERE e.date BETWEEN ? AND ?
+                AND e.supplier_id IS NOT NULL
+                GROUP BY s.id
+                ORDER BY ValorTotal DESC
+            """
+            report_df = pd.read_sql(query2, conn, params=[start_date, end_date])
+            
+            if not report_df.empty:
+                report_df.columns = ['Fornecedor', 'Nº Compras', 'Valor Total', 'Média/Compra', 'Última Compra']
+                
+                total_suppliers = len(report_df)
+                total_purchases = report_df['Nº Compras'].sum()
+                total_value = report_df['Valor Total'].sum()
+                
+                totals = [
+                    ("Fornecedores Ativos", str(total_suppliers)),
+                    ("Total Compras", str(int(total_purchases))),
+                    ("Valor Total", f"R$ {total_value:,.2f}")
+                ]
+                
+                chart_df = report_df.head(10).copy()
+                chart_data = {
+                    'type': 'bar_h', 
+                    'df': chart_df, 
+                    'x': 'Valor Total', 
+                    'y': 'Fornecedor',
+                    'title': 'Top 10 Fornecedores por Valor'
+                }
+                
+                report_df['Valor Total'] = report_df['Valor Total'].apply(lambda x: f"R$ {x:,.2f}")
+                report_df['Média/Compra'] = report_df['Média/Compra'].apply(lambda x: f"R$ {x:,.2f}")
+                report_df['Última Compra'] = pd.to_datetime(report_df['Última Compra']).dt.strftime('%d/%m/%Y')
+                
+                headers = list(report_df.columns)
+            else:
+                headers = []
+                totals = []
+                chart_data = None
         
         st.session_state.report_data = {
             'df': report_df, 'title': report_title, 'info': info_lines,
@@ -537,29 +1628,64 @@ if 'report_data' in st.session_state and st.session_state.report_data:
             st.caption(f"**{label}:** {value}")
         
         # Chart (if available)
+        chart_image_bytes = None
         if data.get('chart'):
             chart = data['chart']
             st.markdown(f"### 📈 {chart['title']}")
             
+            fig = None
             if chart['type'] == 'pie':
                 fig = px.pie(chart['df'], names=chart['names'], values=chart['values'], 
                             title=None, hole=0.4)
                 fig.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig, use_container_width=True)
             
             elif chart['type'] == 'bar':
                 fig = px.bar(chart['df'].head(15), x=chart['x'], y=chart['y'], title=None)
                 fig.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig, use_container_width=True)
             
             elif chart['type'] == 'bar_h':
-                fig = px.bar(chart['df'], x=chart['x'], y=chart['y'], orientation='h', title=None)
-                fig.update_layout(yaxis={'categoryorder': 'total ascending'})
-                st.plotly_chart(fig, use_container_width=True)
+                fig = px.bar(chart['df'], x=chart['x'], y=chart['y'], orientation='h', title=None,
+                            text=chart['x'])  # Show values on bars
+                fig.update_layout(
+                    yaxis={'categoryorder': 'total ascending'},
+                    margin=dict(l=200, r=20, t=20, b=40),  # More space for labels
+                    height=max(400, len(chart['df']) * 35)  # Dynamic height based on items
+                )
+                fig.update_traces(textposition='outside', texttemplate='%{text:.0f}')
             
             elif chart['type'] == 'line':
                 fig = px.line(chart['df'], x=chart['x'], y=chart['y'], title=None, markers=True)
+            
+            elif chart['type'] == 'grouped_bar':
+                fig = px.bar(chart['df'], x=chart['x'], y=chart['y'], color=chart.get('color'),
+                            barmode='group', title=None)
+                fig.update_layout(
+                    xaxis_tickangle=-45,
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                    height=500
+                )
+            
+            if fig:
+                # Style for better readability - white text for dark theme
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',  # Transparent background
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(size=14, color='white'),
+                    yaxis=dict(tickfont=dict(size=13, color='white')),
+                    xaxis=dict(tickfont=dict(size=12, color='white'))
+                )
+                # White text on bar labels for visibility
+                fig.update_traces(textfont=dict(color='white', size=13))
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # Save chart as image for PDF
+                try:
+                    # Larger size for better PDF quality
+                    chart_height = max(500, len(chart.get('df', [])) * 40) if chart['type'] == 'bar_h' else 500
+                    chart_image_bytes = fig.to_image(format="png", width=1000, height=chart_height, scale=2)
+                except Exception:
+                    # Kaleido might not be installed - PDF will be without chart
+                    chart_image_bytes = None
         
         # Data preview
         st.markdown("### 📋 Dados")
@@ -589,7 +1715,7 @@ if 'report_data' in st.session_state and st.session_state.report_data:
         c_pdf, c_excel = st.columns(2)
         
         with c_pdf:
-            # Generate PDF
+            # Generate PDF with chart
             pdf_data = df.values.tolist()
             pdf_bytes = reports.generate_report_pdf(
                 title=data['title'],
@@ -597,7 +1723,8 @@ if 'report_data' in st.session_state and st.session_state.report_data:
                 headers=data['headers'],
                 data=pdf_data,
                 totals=data['totals'],
-                orientation='L' if len(data['headers']) > 5 else 'P'
+                orientation='L' if len(data['headers']) > 5 else 'P',
+                chart_image=chart_image_bytes
             )
             
             st.download_button(
