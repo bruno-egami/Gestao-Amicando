@@ -23,6 +23,7 @@ PAGE_ACCESS = {
     'Queimas': ['admin'],
     'Produtos': ['admin', 'vendedor'],
     'Vendas': ['admin', 'vendedor'],
+    'Orcamentos': ['admin', 'vendedor'],
     'Fornecedores': ['admin'],
     'Clientes': ['admin', 'vendedor'],
     'Encomendas': ['admin', 'vendedor'],
@@ -36,6 +37,7 @@ NAV_MENU = {
     'admin': [
         ("Dashboard", "📊", "Dashboard.py"),
         ("Vendas", "🛒", "pages/6_Vendas.py"),
+        ("Orçamentos", "📝", "pages/12_Orcamentos.py"),
         ("Encomendas", "📦", "pages/9_Encomendas.py"),
         ("Queimas", "🔥", "pages/4_Queimas.py"),
         ("Produtos", "🏺", "pages/5_Produtos.py"),
@@ -49,6 +51,7 @@ NAV_MENU = {
     'vendedor': [
         ("Dashboard", "📊", "Dashboard.py"),
         ("Vendas", "🛒", "pages/6_Vendas.py"),
+        ("Orçamentos", "📝", "pages/12_Orcamentos.py"),
         ("Encomendas", "📦", "pages/9_Encomendas.py"),
         ("Produtos", "🏺", "pages/5_Produtos.py"),
         ("Insumos", "🧪", "pages/1_Insumos.py"),

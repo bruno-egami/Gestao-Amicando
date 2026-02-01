@@ -1,4 +1,5 @@
 from fpdf import FPDF
+import io
 from datetime import datetime
 import pandas as pd
 import io
@@ -282,3 +283,324 @@ def generate_receipt_pdf(data):
     pdf.cell(35, 10, f"R$ {final_total:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
     
     return io.BytesIO(pdf.output(dest='S'))
+
+
+def generate_quote_pdf(quote_data):
+    """
+    Generate a PDF for a quote (orçamento).
+    quote_data should contain: id, client_name, date_created, date_valid_until, 
+                               items (list of dicts with name, qty, price, notes, image),
+                               total, discount, notes, delivery, payment
+    """
+    class PDF(FPDF):
+        def header(self):
+            # Logo centered
+            try:
+                self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
+            except Exception:
+                pass
+            
+            self.set_y(55) # Below logo
+            self.set_font('Helvetica', 'B', 14)
+            self.cell(0, 6, "Amicando Atelier de Cerâmicas", align='C', new_x="LMARGIN", new_y="NEXT")
+            
+            self.set_font('Helvetica', '', 9)
+            self.cell(0, 5, "Instagram: @amicandoatelier | WhatsApp: (54) 99912-1757", align='C', new_x="LMARGIN", new_y="NEXT")
+            self.cell(0, 5, "Rua Alagoas, 45, sala 103, Bairro Humaitá", align='C', new_x="LMARGIN", new_y="NEXT")
+            self.cell(0, 5, "Bento Gonçalves, Rio Grande do Sul", align='C', new_x="LMARGIN", new_y="NEXT")
+            self.ln(10)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Helvetica', 'I', 8)
+            self.cell(0, 10, f'Página {self.page_no()}', align='C')
+
+    pdf = PDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    
+    # Generate Formatted ID: ORC-YYMMDD-ID
+    try:
+        dt_parts = quote_data.get('date_created', '').split('/')
+        if len(dt_parts) == 3:
+            yymmdd = f"{dt_parts[2][-2:]}{dt_parts[1]}{dt_parts[0]}"
+        else:
+            yymmdd = "000000"
+    except:
+        yymmdd = "000000"
+        
+    formatted_id = f"ORC-{yymmdd}-{quote_data.get('id')}"
+    
+    # Title Left Aligned
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(0, 6, f"ORÇAMENTO #{formatted_id}", align='L', new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+    
+    # Client info
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(25, 6, "Cliente:", align='L')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, quote_data.get('client_name', 'N/A'), align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(25, 6, "Data:", align='L')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, quote_data.get('date_created', 'N/A'), align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(25, 6, "Válido até:", align='L')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, quote_data.get('date_valid_until', 'N/A'), align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.ln(5)
+    
+    # Items table header
+    pdf.set_fill_color(51, 51, 51)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font('Helvetica', 'B', 10)
+    
+    # Widths (Merged Img into Prod)
+    # w_img was 20, w_prod was 70. Now w_prod = 90.
+    w_prod = 90
+    w_qty = 15
+    w_price = 35
+    w_sub = 40
+    
+    # pdf.cell(w_img, 8, "Img", border=1, align='C', fill=True) # REMOVED
+    pdf.cell(w_prod, 8, "Produto", border=1, align='C', fill=True)
+    pdf.cell(w_qty, 8, "Qtd", border=1, align='C', fill=True)
+    pdf.cell(w_price, 8, "Unit.", border=1, align='C', fill=True)
+    pdf.cell(w_sub, 8, "Subtotal", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font('Helvetica', '', 10)
+    
+    # Item Loop
+    total = 0
+    for item in quote_data.get('items', []):
+        name = item['name']
+        notes = item.get('notes', '')
+        qty = item['qty']
+        price = item['price'] or 0.0
+        subtotal = qty * price
+        total += subtotal
+        
+        # Image Handling (All images)
+        images = item.get('images', [])
+        if not images and item.get('image'):
+            images = [item.get('image')]
+        
+        # Text preparation
+        # ID #123 - Name
+        display_text = f"ID #{item.get('id', '?')} - {name}"
+        if notes:
+            display_text += f"\nObs: {notes}"
+        
+        # Calculate Row Height
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
+        
+        # 1. Text Height
+        pdf.set_xy(x_start, y_start) # Start at left (no w_img offset)
+        pdf.multi_cell(w_prod, 6, display_text, border=0, align='L') # No border initially
+        y_end_text = pdf.get_y()
+        h_text = y_end_text - y_start
+        
+        # 2. Images Height
+        h_imgs = 0
+        if images:
+             h_imgs = 20 # Fixed height for image row
+             
+        # Total Row Height (Text + Padding + Images + Padding)
+        real_h = max(h_text + (h_imgs + 2 if h_imgs else 0), 12) # Min 12mm
+        
+        # Re-set XY to start of row
+        pdf.set_xy(x_start, y_start)
+        
+        # 3. Draw Product Cell (Border handled by Rect later?)
+        # Draw Text
+        pdf.multi_cell(w_prod, 6, display_text, border=0, align='L')
+        
+        # Draw Images
+        if images:
+            y_imgs = y_start + h_text + 2
+            x_img_curr = x_start + 2
+            for img_p in images: # Show all images side-by-side
+                 try:
+                     # Fit 16x16
+                     # Check if it fits in width? w_prod=90. 5 images = 85mm. 
+                     if x_img_curr + 16 > x_start + w_prod: break 
+                     
+                     pdf.image(img_p, x=x_img_curr, y=y_imgs, w=16, h=16)
+                     x_img_curr += 18 # 16 + 2 gap
+                 except: pass
+
+        # Draw Border around Product Cell
+        pdf.set_xy(x_start, y_start)
+        pdf.rect(x_start, y_start, w_prod, real_h)
+        
+        # 4. Draw other cells (Qty, Price, Sub)
+        pdf.set_xy(x_start + w_prod, y_start)
+        pdf.cell(w_qty, real_h, str(qty), border=1, align='C')
+        
+        pdf.set_xy(x_start + w_prod + w_qty, y_start)
+        pdf.cell(w_price, real_h, f"R$ {price:.2f}", border=1, align='R')
+        
+        pdf.set_xy(x_start + w_prod + w_qty + w_price, y_start)
+        pdf.cell(w_sub, real_h, f"R$ {subtotal:.2f}", border=1, align='R')
+        
+        pdf.set_y(y_start + real_h) # Move to next row start
+        
+    pdf.ln(5)
+    
+    # Final Total (Clean Layout)
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.set_x(10) # Margin
+    pdf.cell(140, 10, "Total Final:", align='R')
+    pdf.cell(40, 10, f"R$ {total:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
+    
+    # Delivery and Payment Terms
+    has_terms = quote_data.get('delivery') or quote_data.get('payment')
+    if has_terms:
+         pdf.ln(5)
+         pdf.set_font('Helvetica', 'B', 10)
+         if quote_data.get('delivery'):
+             pdf.cell(35, 6, "Prazo de Entrega:", align='L')
+             pdf.set_font('Helvetica', '', 10)
+             pdf.cell(0, 6, quote_data['delivery'], align='L', new_x="LMARGIN", new_y="NEXT")
+         
+         pdf.set_font('Helvetica', 'B', 10)
+         if quote_data.get('payment'):
+             pdf.cell(45, 6, "Condições de Pagamento:", align='L')
+             pdf.set_font('Helvetica', '', 10)
+             pdf.cell(0, 6, quote_data['payment'].replace('sinal', 'entrada'), align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    # General Notes
+    notes = quote_data.get('notes')
+    if notes:
+        pdf.ln(5)
+        pdf.set_font('Helvetica', 'I', 10)
+        pdf.multi_cell(0, 5, f"Observações Gerais:\n{notes}")
+        
+    # Footer
+    pdf.ln(10)
+    pdf.set_font('Helvetica', 'I', 8)
+    pdf.cell(0, 5, "Este orçamento é válido somente até a data informada.", align='C', new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 5, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", align='C')
+    
+    return io.BytesIO(pdf.output(dest='S'))
+
+def generate_receipt_pdf(order_data):
+    """Generates a PDF receipt for a commission order."""
+    pdf = PDFReport(f"Recibo de Encomenda #{order_data['id']}", orientation='P')
+    
+    # Header Info
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, f"Data do Pedido: {order_data['date']}", align='L', new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, f"Previsão de Entrega: {order_data['date_due']}", align='L', new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, f"Cliente: {order_data['client_name']}", align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    # Order Notes (Global)
+    if order_data.get('notes'):
+        pdf.multi_cell(0, 6, f"Observações: {order_data['notes']}", align='L')
+        
+    pdf.ln(5)
+    
+    # Items Table
+    # Layout similar to Quote: Product (90), Qty (15), Price (35), Total (40)
+    w_prod = 90
+    w_qty = 15
+    w_price = 35
+    w_sub = 40
+    
+    # Header
+    pdf.set_fill_color(51, 51, 51)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font('Helvetica', 'B', 10)
+    
+    pdf.cell(w_prod, 8, "Item", border=1, align='C', fill=True)
+    pdf.cell(w_qty, 8, "Qtd", border=1, align='C', fill=True)
+    pdf.cell(w_price, 8, "Unit. (R$)", border=1, align='C', fill=True)
+    pdf.cell(w_sub, 8, "Total (R$)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font('Helvetica', '', 10)
+    
+    for item in order_data.get('items', []):
+        name = item['name']
+        qty = item['qty']
+        price = item['price']
+        total_p = qty * price
+        notes = item.get('notes', '')
+        images = item.get('images', [])
+        
+        # Prepare Display Text
+        display_text = name
+        if notes:
+            display_text += f"\nObs: {notes}"
+            
+        # Calculate Row Height
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
+        
+        # 1. Text Height
+        pdf.set_xy(x_start, y_start)
+        pdf.multi_cell(w_prod, 6, display_text, border=0, align='L')
+        h_text = pdf.get_y() - y_start
+        
+        # 2. Images Height
+        h_imgs = 0
+        if images:
+             h_imgs = 20 # Fixed height for image row
+             
+        # Total Row Height
+        real_h = max(h_text + (h_imgs + 2 if h_imgs else 0), 12)
+        
+        # Draw Product Cell
+        pdf.set_xy(x_start, y_start)
+        # Text
+        pdf.multi_cell(w_prod, 6, display_text, border=0, align='L')
+        # Images
+        if images:
+            y_imgs = y_start + h_text + 2
+            x_img_curr = x_start + 2
+            for img_p in images:
+                 try:
+                     if x_img_curr + 16 > x_start + w_prod: break 
+                     pdf.image(img_p, x=x_img_curr, y=y_imgs, w=16, h=16)
+                     x_img_curr += 18
+                 except: pass
+
+        # Draw Border
+        pdf.set_xy(x_start, y_start)
+        pdf.rect(x_start, y_start, w_prod, real_h)
+        
+        # Draw Other Cells
+        pdf.set_xy(x_start + w_prod, y_start)
+        pdf.cell(w_qty, real_h, str(qty), border=1, align='C')
+        
+        pdf.set_xy(x_start + w_prod + w_qty, y_start)
+        pdf.cell(w_price, real_h, f"{price:.2f}", border=1, align='R')
+        
+        pdf.set_xy(x_start + w_prod + w_qty + w_price, y_start)
+        pdf.cell(w_sub, real_h, f"{total_p:.2f}", border=1, align='R')
+        
+        pdf.set_y(y_start + real_h)
+        
+    pdf.ln(5)
+    
+    # Totals
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(140, 10, "Total Final:", align='R')
+    pdf.cell(40, 10, f"R$ {order_data['total']:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
+    
+    if order_data.get('deposit'):
+        pdf.set_font('Helvetica', '', 10)
+        pdf.cell(140, 6, "Sinal Pago:", align='R')
+        pdf.cell(40, 6, f"R$ {order_data['deposit']:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
+        
+        remaining = order_data['total'] - order_data['deposit']
+        pdf.cell(140, 6, "Restante a Pagar:", align='R')
+        pdf.cell(40, 6, f"R$ {remaining:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
+
+    return bytes(pdf.output(dest='S'))

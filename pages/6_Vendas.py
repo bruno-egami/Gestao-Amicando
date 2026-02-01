@@ -54,18 +54,39 @@ def show_receipt_dialog(order_data):
         # Calculate totals from items if not explicit
         # But order_data has total.
         
+        if str(order_data.get('id', '')).startswith('ENC'):
+             formatted_id = order_data.get('id') # Already formatted
+             type_lbl = "Encomenda"
+        else:
+             # Venda format
+             # Needs Date. order_data['date'] might be DD/MM/YYYY string or object.
+             # Assuming 'date' key exists and is formatted or we use current date if new sale.
+             # Actually, for new sales, ID is not generated until inserted. 
+             # If order_data comes from DB, it has ID.
+             # Let's assume order_data has 'date_created' or we use today.
+             current_dt = datetime.now()
+             # Try to parse date if string
+             try:
+                 if 'date' in order_data:
+                     # Default format from show_receipt_dialog call might be string
+                     current_dt = datetime.strptime(order_data['date'], '%d/%m/%Y')
+             except: pass
+             
+             formatted_id = f"VEN-{current_dt.strftime('%y%m%d')}-{order_data.get('id')}"
+             type_lbl = "Venda"
+
         rep_data = {
-            "id": order_data.get('id', '???'),
-            "type": "Encomenda" if str(order_data.get('id', '')).startswith('ENC') else "Venda",
+            "id": formatted_id,
+            "type": type_lbl,
             "date": datetime.now().strftime("%d/%m/%Y"),
             "client_name": order_data.get('client', 'Cliente'),
             "salesperson": order_data.get('salesperson', '-'),
-            "payment_method": order_data.get('payment_method', '-'), # Need to ensure this is passed/available
-            "notes": order_data.get('notes', ''), # Need to ensure this is passed
+            "payment_method": order_data.get('payment_method', '-'), 
+            "notes": order_data.get('notes', ''), 
             "date_due": order_data.get('date_due', None),
             "items": [],
             "total": order_data.get('total', 0),
-            "discount": 0, # Not carried over easily in session state currently, maybe add to session state later
+            "discount": 0, 
             "deposit": order_data.get('deposit', 0)
         }
         
@@ -82,7 +103,7 @@ def show_receipt_dialog(order_data):
         st.download_button(
             label="📄 Baixar Recibo (PDF)",
             data=pdf_bytes,
-            file_name=f"recibo_{order_data.get('id')}.pdf",
+            file_name=f"{formatted_id}.pdf",
             mime="application/pdf"
         )
     except Exception as e:

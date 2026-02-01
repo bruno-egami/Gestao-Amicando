@@ -121,12 +121,16 @@ if orders.empty:
     st.info("Nenhuma encomenda encontrada.")
 else:
     for _, order in orders.iterrows():
-        with st.expander(f"📦 #{order['id']} - {order['client']} (Prazo: {pd.to_datetime(order['date_due']).strftime('%d/%m/%Y')}) - {order['status']}"):
+        # Format ID for Display
+        created_dt = pd.to_datetime(order['date_created']) if order['date_created'] else datetime.now()
+        fmt_id = f"ENC-{created_dt.strftime('%y%m%d')}-{order['id']}"
+        
+        with st.expander(f"📦 {fmt_id} - {order['client']} (Prazo: {pd.to_datetime(order['date_due']).strftime('%d/%m/%Y')}) - {order['status']}"):
             
             # Fetch Items
             # Fetch Items
             items = pd.read_sql("""
-                SELECT ci.id, p.name, ci.quantity, ci.quantity_from_stock, ci.quantity_produced, ci.product_id, ci.unit_price
+                SELECT ci.id, p.name, ci.quantity, ci.quantity_from_stock, ci.quantity_produced, ci.product_id, ci.unit_price, ci.notes, p.image_paths
                 FROM commission_items ci
                 LEFT JOIN products p ON ci.product_id = p.id
                 WHERE ci.order_id = ?
@@ -138,6 +142,13 @@ else:
                     return int.from_bytes(val, 'little')
                 return val
             
+            # Helper for images from product
+            def get_prod_imgs(p_str):
+                try:
+                    l = eval(p_str)
+                    return l if l and isinstance(l, list) else []
+                except: return []
+            
             # Apply cleanup
             for col in ['quantity', 'quantity_from_stock', 'quantity_produced', 'product_id']:
                 items[col] = items[col].apply(clean_numeric)
@@ -146,6 +157,8 @@ else:
             items['quantity_from_stock'] = items['quantity_from_stock'].fillna(0).astype(int)
             items['quantity_produced'] = items['quantity_produced'].fillna(0).astype(int)
             items['name'] = items['name'].fillna("Produto Desconhecido")
+            items['notes'] = items['notes'].fillna("")
+            items['image_paths'] = items['image_paths'].apply(get_prod_imgs)
             
             # Financials & Dates Highlighting
             c_inf1, c_inf2, c_inf3, c_inf4 = st.columns(4)
@@ -327,25 +340,38 @@ else:
 
  
             
-            # Direct Download Button attempt (cleaner than nested button state)
+            # Format Order ID (ENC-YYMMDD-ID)
+            created_dt = pd.to_datetime(order['date_created']) if order['date_created'] else datetime.now()
+            formatted_id = f"ENC-{created_dt.strftime('%y%m%d')}-{order['id']}"
+            
+            # Formatted Filename
+            fname = f"{formatted_id}.pdf"
+            
+            # Direct Download Button
             c_act4.download_button(
                 label="📄 PDF",
                 data=reports.generate_receipt_pdf({
-                        "id": f"ENC-{order['id']}",
+                        "id": formatted_id,
                         "type": "Encomenda",
-                        "date": pd.to_datetime(order['date_created']).strftime('%d/%m/%Y') if order['date_created'] else datetime.now().strftime('%d/%m/%Y'),
+                        "date": created_dt.strftime('%d/%m/%Y'),
                         "date_due": pd.to_datetime(order['date_due']).strftime('%d/%m/%Y'),
                         "client_name": order['client'],
                         "notes": order['notes'],
                         "items": [
-                            {"name": r['name'], "qty": r['quantity'], "price": r['unit_price']} 
+                            {
+                                "name": r['name'], 
+                                "qty": r['quantity'], 
+                                "price": r['unit_price'],
+                                "notes": r['notes'],
+                                "images": r['image_paths']
+                            } 
                             for _, r in items.iterrows()
                         ],
                         "total": order['total_price'],
                         "discount": order['manual_discount'] or 0,
                         "deposit": order['deposit_amount'] or 0
                 }),
-                file_name=f"encomenda_{order['id']}.pdf",
+                file_name=fname,
                 mime="application/pdf",
                 key=f"dl_pdf_{order['id']}"
             )
@@ -358,11 +384,21 @@ else:
             for _, item in items.iterrows():
                 target_prod = item['quantity'] - item['quantity_from_stock']
                 
-                # Create columns for item display
-                ci1, ci2, ci3 = st.columns([2, 2, 1.5])
+                # Create columns for item display (Added Img col)
+                ci_img, ci1, ci2, ci3 = st.columns([0.5, 2, 2, 1.5])
+                
+                with ci_img:
+                    if item['image_paths']:
+                         if os.path.exists(item['image_paths'][0]):
+                             st.image(item['image_paths'][0], width=50)
+                         else: st.write("📦")
+                    else: st.write("📦")
+
                 with ci1:
                     # Display Product Name and Edit Popover
                     st.markdown(f"📦 **{item['name']}**")
+                    if item['notes']:
+                        st.caption(f"📝 {item['notes']}")
                     
                     # Edit Quantity Popover
                     with st.popover(f"Qtd: {item['quantity']}"):

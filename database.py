@@ -442,6 +442,36 @@ def init_db():
         )
     ''') 
     
+    # Quotes (Orçamentos)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            date_created TEXT,
+            date_valid_until TEXT,
+            status TEXT DEFAULT 'Pendente',
+            total_price REAL DEFAULT 0,
+            discount REAL DEFAULT 0,
+            notes TEXT,
+            converted_order_id INTEGER,
+            FOREIGN KEY (client_id) REFERENCES clients (id),
+            FOREIGN KEY (converted_order_id) REFERENCES commission_orders (id)
+        )
+    ''')
+    
+    # Quote Items (Itens do Orçamento)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS quote_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quote_id INTEGER,
+            product_id INTEGER,
+            quantity INTEGER,
+            unit_price REAL,
+            FOREIGN KEY (quote_id) REFERENCES quotes (id),
+            FOREIGN KEY (product_id) REFERENCES products (id)
+        )
+    ''') 
+    
     # Drop old table if exists (during dev phase)
     try:
         cursor.execute("DROP TABLE IF EXISTS commissions")
