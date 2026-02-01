@@ -1,7 +1,24 @@
-streamlit
-pandas
-matplotlib
-plotly
-Pillow
-openpyxl
-bcrypt
+# Gestao-Amicando - Requirements
+# Python 3.9+
+
+# Web Framework
+streamlit>=1.30.0
+
+# Data Manipulation
+pandas>=2.0.0
+
+# PDF Generation
+fpdf2>=2.7.0
+
+# Authentication
+bcrypt>=4.0.0
+
+# Excel Export/Import
+openpyxl>=3.1.0
+
+# Charts and Visualization
+plotly>=5.15.0
+matplotlib>=3.7.0
+
+# Image Processing
+Pillow>=10.0.0

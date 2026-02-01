@@ -7,6 +7,7 @@ import audit
 import reports
 import time
 import auth
+import uuid
 
 st.set_page_config(page_title="Encomendas", page_icon="📦")
 
@@ -486,11 +487,6 @@ else:
                                 {'stock_quantity': old_stock}, {'stock_quantity': old_stock + it['quantity']})
                         
                         # 2. Create Sale Record
-                        import uuid
-                        ord_uuid = f"ENC-{datetime.now().strftime('%y%m%d')}-{order['id']}"
-                        
-                        # 2. Create Sale Record
-                        import uuid
                         ord_uuid = f"ENC-{datetime.now().strftime('%y%m%d')}-{order['id']}"
                         
                         # Calculate Deposit Ratio (Pro-rata)

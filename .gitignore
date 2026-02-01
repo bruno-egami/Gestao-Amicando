@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+
+# Database
+data/*.db
+*.db
+temp_restore.db
+
+# Generated files
+*.pdf
+recibo_*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads
+assets/uploads/
+assets/firing_images/
+assets/product_images/
+
+# Logs
+*.log
+
+# Virtual Environment
+venv/
+env/
+.env
+
+# Debug files (temporary)
+debug_*.py
+fix_*.py

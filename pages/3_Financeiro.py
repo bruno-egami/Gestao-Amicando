@@ -504,7 +504,7 @@ with tab_relatorios:
         SELECT s.id, s.date, s.total_price, s.discount, s.payment_method, s.salesperson,
                p.name as product_name, p.category as product_category, c.name as client_name
         FROM sales s
-        JOIN products p ON s.product_id = p.id
+        LEFT JOIN products p ON s.product_id = p.id
         LEFT JOIN clients c ON s.client_id = c.id
         WHERE s.date BETWEEN ? AND ?
     """, conn, params=(start_date, end_date))

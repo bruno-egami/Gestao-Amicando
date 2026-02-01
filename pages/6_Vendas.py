@@ -6,6 +6,7 @@ import auth
 import audit
 import reports
 import time
+import uuid
 from datetime import datetime, date
 
 st.set_page_config(page_title="Vendas", page_icon="💰")
@@ -496,7 +497,6 @@ with col_cart:
                         if valid_client:
                              # EXECUTE A (Mixed)
                              try:
-                                 import uuid
                                  # 1. Generate IDs
                                  trans_uuid = f"TRX-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}"
                                  

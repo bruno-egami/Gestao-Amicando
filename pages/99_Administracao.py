@@ -6,12 +6,10 @@ import auth
 import audit
 import json
 import os
-from datetime import datetime
-import json
-import os
 import io
-from datetime import datetime
 import time
+from datetime import datetime
+
 
 st.set_page_config(page_title="Administração", page_icon="⚙️", layout="wide")
 
