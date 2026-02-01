@@ -44,8 +44,6 @@ admin_utils.render_header_logo()
 st.title("📊 Dashboard")
 st.write(f"Hoje: **{date.today().strftime('%d/%m/%Y')}**")
 
-conn = database.get_connection()
-
 # --- PRODUCTION SUMMARY ---
 st.markdown("### 🔨 Resumo de Produção")
 

@@ -62,7 +62,7 @@ with tab1:
             try:
                 row_edit = pd.read_sql("SELECT * FROM firings WHERE id = ?", conn, params=(st.session_state.firing_edit_id,)).iloc[0]
                 default_data = row_edit
-            except:
+            except Exception:
                 st.error("Erro ao carregar dados.")
                 st.session_state.firing_edit_id = None
                 st.rerun()
@@ -251,7 +251,7 @@ with tab2:
             try:
                 m_row = pd.read_sql("SELECT * FROM kiln_maintenance WHERE id = ?", conn, params=(st.session_state.maint_edit_id,)).iloc[0]
                 m_default = m_row
-            except:
+            except Exception:
                 st.session_state.maint_edit_id = None
                 st.rerun()
         

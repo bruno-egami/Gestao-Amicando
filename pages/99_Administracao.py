@@ -276,7 +276,8 @@ with tab_import:
                                                  cursor.execute("SELECT id FROM expenses WHERE id=?", (tid,))
                                                  if cursor.fetchone():
                                                      target_id = tid
-                                             except: pass
+                                             except Exception:
+                                                 pass
                                         
                                         if target_id:
                                             # UPDATE
@@ -323,7 +324,8 @@ with tab_import:
                                                  cursor.execute("SELECT id FROM sales WHERE id=?", (tid,))
                                                  if cursor.fetchone():
                                                      target_id = tid
-                                             except: pass
+                                             except Exception:
+                                                 pass
                                         
                                         if target_id:
                                             # UPDATE
@@ -373,7 +375,8 @@ with tab_import:
                                         if pd.notna(row['Data Nascimento']) and str(row['Data Nascimento']).strip():
                                             try:
                                                 dob = pd.to_datetime(row['Data Nascimento']).strftime('%Y-%m-%d')
-                                            except: pass
+                                            except Exception:
+                                                pass
 
                                         if res:
                                             # UPDATE
@@ -618,7 +621,7 @@ with tab_users:
                 def_name = edit_row['name'] or ""
                 def_role = edit_row['role'] or "vendedor"
                 def_active = bool(edit_row['active'])
-            except:
+            except Exception:
                 st.session_state.user_edit_id = None
                 st.rerun()
         
@@ -823,7 +826,7 @@ with tab_audit:
                             try:
                                 old = json.loads(row['old_data'])
                                 st.json(old)
-                            except:
+                            except Exception:
                                 st.code(row['old_data'])
                         else:
                             st.caption("N/A")
@@ -833,7 +836,7 @@ with tab_audit:
                             try:
                                 new = json.loads(row['new_data'])
                                 st.json(new)
-                            except:
+                            except Exception:
                                 st.code(row['new_data'])
                         else:
                             st.caption("N/A")
@@ -898,7 +901,8 @@ with tab_db:
                     curr_log = pd.read_sql("SELECT timestamp FROM audit_log ORDER BY id DESC LIMIT 1", conn)
                     if not curr_log.empty:
                         curr_last_log = curr_log.iloc[0]['timestamp']
-                except: pass
+                except Exception:
+                    pass
 
                 # Get New (Backup) Stats
                 import sqlite3
@@ -909,7 +913,8 @@ with tab_db:
                     new_log = pd.read_sql("SELECT timestamp FROM audit_log ORDER BY id DESC LIMIT 1", conn_temp)
                     if not new_log.empty:
                         new_last_log = new_log.iloc[0]['timestamp']
-                except: pass
+                except Exception:
+                    pass
                 conn_temp.close()
                 
                 # 3. Display Comparison
@@ -933,7 +938,7 @@ with tab_db:
                         diff_msg = f"⚠️ O backup é {diff.days} dias mais antigo que o atual!"
                     else:
                         diff_msg = "✅ O backup é mais recente ou igual."
-                except:
+                except Exception:
                     diff_msg = "Não foi possível comparar datas."
 
                 with res_col1:

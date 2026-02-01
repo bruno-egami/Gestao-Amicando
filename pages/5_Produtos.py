@@ -33,7 +33,7 @@ with tab1:
     try:
         cat_df = pd.read_sql("SELECT name FROM product_categories", conn)
         cat_opts = cat_df['name'].tolist()
-    except:
+    except Exception:
         cat_opts = ["Utilitário", "Decorativo", "Outros"]
 
     with st.expander("Gerenciar Categorias", expanded=False):
@@ -484,7 +484,8 @@ with tab1:
                 # Ensure cat_opts available (fetched at top of tab)
                 if 'cat_opts' not in locals():
                      try: cat_opts = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
-                     except: cat_opts = ["Utilitário", "Decorativo", "Outros"]
+                     except Exception:
+                         cat_opts = ["Utilitário", "Decorativo", "Outros"]
 
                 curr_cat = curr_prod['category']
                 cat_idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 0
@@ -619,7 +620,8 @@ with tab1:
                                 cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(curr_imgs), selected_prod_id))
                                 conn.commit()
                                 st.rerun()
-                        except: pass
+                        except Exception:
+                            pass
             
             new_imgs = st.file_uploader("Upload Novas Imagens", accept_multiple_files=True, key="new_imgs_tab")
             if new_imgs:
@@ -655,7 +657,8 @@ with tab1:
                             with c_imgs[idx % 6]:
                                 try:
                                     st.image(p_img, width=100)
-                                except: pass
+                                except Exception:
+                                    pass
 
         # --- TAB 4: PRECIFICAÇÃO ---
         with tab_pricing:

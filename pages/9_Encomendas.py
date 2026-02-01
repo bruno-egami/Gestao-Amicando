@@ -61,15 +61,16 @@ def delete_order(oid):
         audit.log_action(conn, 'DELETE', 'commission_orders', oid, old_data, None)
         
         return True
-    except:
+    except Exception as e:
         conn.rollback()
+        st.error(f"Erro ao excluir encomenda: {e}")
         return False
 
 # --- Filters ---
 kf1, kf2, kf3 = st.columns([1.5, 1.5, 2])
 with kf1:
     # Status Filter
-    all_statuses = ["Pendente", "Em Produção", "Entregue"]
+    all_statuses = ["Pendente", "Em Produção", "Concluída", "Entregue"]
     sel_status = st.multiselect("Status", all_statuses, default=["Pendente", "Em Produção"])
 
 with kf2:
@@ -174,7 +175,8 @@ else:
                         try:
                             prods_df = pd.read_sql("SELECT id, name, stock_quantity, base_price FROM products ORDER BY name", conn)
                             prod_opts = [f"{r['name']} (R$ {r['base_price']:.2f})" for _, r in prods_df.iterrows()]
-                        except: prod_opts = []
+                        except Exception:
+                            prod_opts = []
                         
                         sel_new_prod = st.selectbox("Produto", prod_opts)
                         new_qty = st.number_input("Quantidade", min_value=1, value=1)
@@ -212,8 +214,9 @@ else:
                                 
                                 conn.commit()
                                 success = True
-                            except:
+                            except Exception as e:
                                 conn.rollback()
+                                st.error(f"Erro ao adicionar item: {e}")
                             
                             if success:
                                 st.success("Item adicionado!")
@@ -234,7 +237,8 @@ else:
                             cli_list = all_clients['name'].tolist()
                             if order['client'] in cli_list:
                                 current_cli_index = cli_list.index(order['client'])
-                        except: cli_list = []
+                        except Exception:
+                            cli_list = []
                         
                         new_client_name = st.selectbox("Cliente", cli_list, index=current_cli_index)
 
@@ -326,7 +330,9 @@ else:
                                         
                                         conn.commit()
                                         success = True
-                                    except: conn.rollback()
+                                    except Exception as e:
+                                        conn.rollback()
+                                        st.error(f"Erro na operação: {e}")
                                     
                                     if success:
                                         st.rerun()

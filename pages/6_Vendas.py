@@ -92,9 +92,6 @@ if 'last_order' in st.session_state:
     show_receipt_dialog(st.session_state['last_order'])
 
 # --- New Sale ---
-# --- New Sale ---
-# --- New Sale ---
-# --- New Sale ---
 # 1. Select Client (Global fetch for Form and History)
 clients_df = pd.read_sql("SELECT id, name FROM clients", conn)
 client_dict = {row['name']: row['id'] for _, row in clients_df.iterrows()}
@@ -129,7 +126,8 @@ with col_catalog:
             p = eval(paths_str)
             if p and len(p) > 0: return p[0]
             return None
-        except: return None
+        except Exception:
+            return None
 
     # Compute Thumbs globally on products_df so it is available for selection
     if not products_df.empty:
@@ -140,7 +138,7 @@ with col_catalog:
     # Get Categories from DB
     try:
         all_cats = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
-    except:
+    except Exception:
         all_cats = products_df['category'].dropna().unique().tolist()
         
     if all_cats:
@@ -971,8 +969,8 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                                         q_restore = int.from_bytes(q_raw, 'little')
                                     else:
                                         q_restore = int(q_raw)
-                                except:
-                                    q_restore = 1 # Fallback if totally corrupted
+                                except Exception:
+                                    q_restore = 1  # Fallback if totally corrupted
                                     
                                 p_id = orig_row['product_id']
                                 

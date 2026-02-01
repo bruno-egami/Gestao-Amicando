@@ -220,7 +220,8 @@ def init_db():
         for d in defaults:
             try:
                 cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (d,))
-            except: pass
+            except Exception:
+                pass
         conn.commit()
 
     # Firings (Update existing if needed, else created above)
@@ -439,7 +440,8 @@ def init_db():
     # Drop old table if exists (during dev phase)
     try:
         cursor.execute("DROP TABLE IF EXISTS commissions")
-    except: pass
+    except Exception:
+        pass
 
     # --- Drop Deprecated Tables ---
     cursor.execute("DROP TABLE IF EXISTS formulas")

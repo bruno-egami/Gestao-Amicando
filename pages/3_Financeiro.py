@@ -141,7 +141,7 @@ with tab_gestao:
                         conn.commit()
                         st.success(f"Categoria '{new_cat}' adicionada!")
                         st.rerun()
-                    except:
+                    except Exception:
                         st.error("Categoria já existe.")
         with c_cat2:
             st.write("Categorias Existentes:")
@@ -187,7 +187,7 @@ with tab_gestao:
                     if row_edit['supplier_id']:
                         s_name = next((k for k, v in sup_map.items() if v == row_edit['supplier_id']), None)
                         if s_name in sup_options: idx_sup = sup_options.index(s_name)
-                except:
+                except Exception:
                     st.session_state.exp_edit_id = None
                     st.rerun()
                     
@@ -342,8 +342,8 @@ with tab_gestao:
                         VALUES (?, ?, ?, ?)
                     """, (due_date_obj, fc['description'], fc['value'], fc['category']))
                     added_count += 1
-            except:
-                pass 
+            except Exception:
+                pass
                 
         if added_count > 0:
             conn.commit()
@@ -377,7 +377,7 @@ with tab_gestao:
                     fd_day = int(frow['due_day']) if frow['due_day'] else 5
                     if frow['periodicity'] in periodicities: fd_per_idx = periodicities.index(frow['periodicity'])
                     if frow['category'] in expense_categories: fd_cat_idx = expense_categories.index(frow['category'])
-                except:
+                except Exception:
                     st.session_state.fix_edit_id = None
                     st.rerun()
             
@@ -410,7 +410,7 @@ with tab_gestao:
                             audit.log_action(conn, 'CREATE', 'fixed_costs', new_id, None,
                                 {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
                             st.success("Criado!")
-                        except:
+                        except Exception:
                             st.error("Erro: Descrição deve ser única.")
                     st.rerun()
                     

@@ -46,7 +46,7 @@ with col_form:
             def_phone = edit_row['phone'] or ""
             def_email = edit_row['email'] or ""
             def_notes = edit_row['notes'] or ""
-        except:
+        except Exception:
             st.session_state.cli_edit_id = None
             st.rerun()
     
