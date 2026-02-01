@@ -366,7 +366,7 @@ with tab_cat:
                         
                         # Stock Highlight
                         stock_val = row['stock_level']
-                        if row['type'] == 'Mão de Obra' or row['unit'] == 'hora (mão de obra)':
+                        if row['type'] in ['Mão de Obra', 'Queima'] or row['unit'] in ['hora (mão de obra)', 'fornada']:
                             st.write("Estoque: N/A")
                         else:
                             color = "red" if stock_val <= row['min_stock_alert'] else "green"
