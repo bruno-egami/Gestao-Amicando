@@ -397,7 +397,21 @@ with col_cart:
                 with st.container(border=True):
                     st.markdown("### Finalizar Pedido")
                     
-                    d_comm = st.date_input("Prazo para Encomenda (se houver)", value=datetime.now() + pd.Timedelta(days=15))
+                    # Calculate Default Deposit (50% of Order Portion)
+                    # If shortage exists, assume Option A (Mixed) -> 50% of Shortage Value
+                    # If no shortage, assume Option B (Force Order) -> 50% of Total Value
+                    calc_shortage_val = sum([c['must_order'] * c['item']['base_price'] for c in cart_analysis])
+                    calc_total_val = sum([c['item']['qty'] * c['item']['base_price'] for c in cart_analysis])
+                    
+                    default_dep = 0.0
+                    if calc_shortage_val > 0:
+                        default_dep = calc_shortage_val * 0.5
+                    else:
+                        default_dep = calc_total_val * 0.5
+                        
+                    c_dates1, c_dates2 = st.columns(2)
+                    d_comm = c_dates1.date_input("Prazo para Encomenda (se houver)", value=datetime.now() + pd.Timedelta(days=15))
+                    deposit_val = c_dates2.number_input("Valor Sinal/Adiantamento (R$)", min_value=0.0, step=10.0, value=float(round(default_dep, 2)))
                     
                     col_act1, col_act2 = st.columns(2)
                     
@@ -507,9 +521,9 @@ with col_cart:
                                  if order_items:
                                      # Create Order Header
                                      cursor.execute("""
-                                        INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes)
-                                        VALUES (?, ?, ?, ?, ?, ?)
-                                     """, (final_client_id, date.today(), d_comm, "Pendente", 0, f"Gerado via Venda #{trans_uuid}"))
+                                        INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes, deposit_amount)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                                     """, (final_client_id, date.today(), d_comm, "Pendente", 0, f"Gerado via Venda #{trans_uuid}", deposit_val))
                                      new_ord_id = cursor.lastrowid
                                      
                                      total_ord_val = 0
@@ -595,9 +609,9 @@ with col_cart:
                              
                              # Create Order Header
                              cursor.execute("""
-                                INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                             """, (final_client_id, date.today(), d_comm, "Pendente", 0, f"Encomenda Total (Venda Convertida)"))
+                                INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes, deposit_amount)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                             """, (final_client_id, date.today(), d_comm, "Pendente", 0, f"Encomenda Total (Venda Convertida)", deposit_val))
                              new_ord_id = cursor.lastrowid
                              
                              total_ord_val = 0
@@ -701,36 +715,75 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
         with tab_encomendas:
             # Query Construction (Orders)
             # Query Construction (Orders)
-            q_enc = """
-                SELECT co.id, co.date_created, c.name as cliente, 
-                       GROUP_CONCAT(p.name || ' (' || ci.quantity || ')', ', ') as produtos,
-                       co.total_price, co.status, co.date_due
+            q_orders = """
+                SELECT co.id, co.date_created, c.name as cliente, co.total_price, co.status, co.date_due
                 FROM commission_orders co
                 LEFT JOIN clients c ON co.client_id = c.id
-                LEFT JOIN commission_items ci ON co.id = ci.order_id
-                LEFT JOIN products p ON ci.product_id = p.id
                 WHERE 1=1
             """
-            p_enc = []
+            p_orders = []
             
             if len(fil_date) == 2:
-                q_enc += " AND co.date_created BETWEEN ? AND ?"
-                p_enc.append(fil_date[0])
-                p_enc.append(fil_date[1])
+                q_orders += " AND co.date_created BETWEEN ? AND ?"
+                p_orders.append(fil_date[0])
+                p_orders.append(fil_date[1])
             if fil_client:
-                q_enc += " AND c.name = ?"
-                p_enc.append(fil_client)
-            # Cannot filter PayMethod/Salesperson on Orders as easily yet (fields might differ)
+                q_orders += " AND c.name = ?"
+                p_orders.append(fil_client)
             
-            q_enc += " GROUP BY co.id ORDER BY co.date_created DESC"
+            q_orders += " ORDER BY co.date_created DESC"
             
-            enc_view = pd.read_sql(q_enc, conn, params=p_enc)
+            enc_view = pd.read_sql(q_orders, conn, params=p_orders)
             
             if not enc_view.empty:
-               enc_view['date_created'] = pd.to_datetime(enc_view['date_created']).dt.strftime('%d/%m/%Y')
-               enc_view['date_due'] = pd.to_datetime(enc_view['date_due']).dt.strftime('%d/%m/%Y')
+                # Manual Fetch of Items to Handle Binary Data Issues
+                order_ids = enc_view['id'].tolist()
+                order_ids_placeholder = ",".join(["?"] * len(order_ids))
+                
+                # Fetch Items
+                q_items = f"""
+                    SELECT ci.order_id, ci.product_id, ci.quantity 
+                    FROM commission_items ci 
+                    WHERE ci.order_id IN ({order_ids_placeholder})
+                """
+                items_df = pd.read_sql(q_items, conn, params=order_ids)
+                
+                if not items_df.empty:
+                    # Clean Binary Product IDs
+                    def clean_pid(pid):
+                        if isinstance(pid, bytes):
+                            return int.from_bytes(pid, 'little')
+                        return pid
+                    
+                    items_df['product_id'] = items_df['product_id'].apply(clean_pid)
+                    
+                    # Fetch Product Names
+                    unique_pids = items_df['product_id'].dropna().unique().tolist()
+                    if unique_pids:
+                        p_ph = ",".join(["?"] * len(unique_pids))
+                        p_df = pd.read_sql(f"SELECT id, name FROM products WHERE id IN ({p_ph})", conn, params=unique_pids)
+                        
+                        # Merge Name -> Items
+                        items_df = items_df.merge(p_df, left_on='product_id', right_on='id', how='left')
+                        items_df['name'] = items_df['name'].fillna("Desconhecido")
+                        
+                        # Create Display String: "Name (Qty)"
+                        items_df['desc'] = items_df['name'] + " (" + items_df['quantity'].astype(str) + ")"
+                        
+                        # Group by Order
+                        grouped = items_df.groupby('order_id')['desc'].apply(lambda x: ", ".join(x)).reset_index()
+                        grouped.columns = ['id', 'produtos']
+                        
+                        # Merge back to Orders
+                        enc_view = enc_view.merge(grouped, on='id', how='left')
+                        enc_view['produtos'] = enc_view['produtos'].fillna("-")
+                else:
+                     enc_view['produtos'] = "-"
+
+                enc_view['date_created'] = pd.to_datetime(enc_view['date_created']).dt.strftime('%d/%m/%Y')
+                enc_view['date_due'] = pd.to_datetime(enc_view['date_due']).dt.strftime('%d/%m/%Y')
                
-               st.dataframe(
+                st.dataframe(
                    enc_view,
                    column_config={
                        "id": st.column_config.NumberColumn("ID"),
@@ -743,7 +796,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                    },
                    hide_index=True,
                    use_container_width=True
-               )
+                )
             else:
                 st.info("Nenhuma encomenda encontrada com estes filtros.")
         

@@ -30,6 +30,15 @@ def delete_order(oid):
     # 1. Get reserved items to restore
     items = pd.read_sql("SELECT product_id, quantity_from_stock FROM commission_items WHERE order_id=?", conn, params=(oid,))
     
+    # Helper for binary
+    def clean_bin(val):
+        if isinstance(val, bytes):
+            return int.from_bytes(val, 'little')
+        return val
+
+    items['quantity_from_stock'] = items['quantity_from_stock'].apply(clean_bin)
+    items['product_id'] = items['product_id'].apply(clean_bin)
+
     # Get order data for audit
     order_data = pd.read_sql("SELECT client_id, total_price, status FROM commission_orders WHERE id=?", conn, params=(oid,))
     old_data = order_data.iloc[0].to_dict() if not order_data.empty else {}
@@ -37,9 +46,10 @@ def delete_order(oid):
     cursor.execute("BEGIN TRANSACTION")
     try:
         for _, it in items.iterrows():
-            if it['quantity_from_stock'] > 0:
+            qty_rest = int(it['quantity_from_stock'])
+            if qty_rest > 0:
                 cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                             (it['quantity_from_stock'], it['product_id']))
+                             (qty_rest, int(it['product_id'])))
         
         cursor.execute("DELETE FROM commission_items WHERE order_id=?", (oid,))
         cursor.execute("DELETE FROM commission_orders WHERE id=?", (oid,))
@@ -117,6 +127,17 @@ else:
                 LEFT JOIN products p ON ci.product_id = p.id
                 WHERE ci.order_id = ?
             """, conn, params=(order['id'],))
+            
+            # Helper for binary data cleanup
+            def clean_numeric(val):
+                if isinstance(val, bytes):
+                    return int.from_bytes(val, 'little')
+                return val
+            
+            # Apply cleanup
+            for col in ['quantity', 'quantity_from_stock', 'quantity_produced', 'product_id']:
+                items[col] = items[col].apply(clean_numeric)
+
             items['quantity'] = items['quantity'].fillna(0).astype(int)
             items['quantity_from_stock'] = items['quantity_from_stock'].fillna(0).astype(int)
             items['quantity_produced'] = items['quantity_produced'].fillna(0).astype(int)
@@ -296,7 +317,7 @@ else:
                         if produced < target_prod:
                             all_complete = False
                             # Production Input
-                            with st.popover(f"Lançar Produção ({item['id']})"):
+                            with st.popover("Lançar Produção"):
                                 amount = st.number_input("Qtd", min_value=1, max_value=(target_prod - produced), key=f"prod_in_{item['id']}")
                                 if st.button("Confirmar", key=f"conf_{item['id']}"):
                                     # Deduct materials query...
