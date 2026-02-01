@@ -623,7 +623,7 @@ with tab1:
                         except Exception:
                             pass
             
-            new_imgs = st.file_uploader("Upload Novas Imagens", accept_multiple_files=True, key="new_imgs_tab")
+            new_imgs = st.file_uploader("Upload Novas Imagens", accept_multiple_files=True, type=["png", "jpg", "jpeg", "webp"], key="new_imgs_tab")
             if new_imgs:
                 if st.button("Salvar Imagens"):
                     save_dir = "assets/product_images"

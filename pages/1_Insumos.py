@@ -184,7 +184,7 @@ with tab_cat:
                 if curr_img and os.path.exists(curr_img):
                     st.image(curr_img, width=150, caption="Imagem Atual")
                     
-                new_img_file = st.file_uploader("Carregar nova imagem", type=["png", "jpg", "jpeg"])
+                new_img_file = st.file_uploader("Carregar nova imagem", type=["png", "jpg", "jpeg", "webp"])
                 
                 # Buttons
                 submitted = st.form_submit_button("Salvar Insumo")

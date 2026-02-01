@@ -28,6 +28,7 @@ Thumbs.db
 assets/uploads/
 assets/firing_images/
 assets/product_images/
+assets/orders/
 
 # Logs
 *.log

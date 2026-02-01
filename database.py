@@ -37,6 +37,11 @@ def run_migrations(conn):
         cursor.execute("ALTER TABLE sales ADD COLUMN client_id INTEGER")
     except sqlite3.OperationalError: pass
 
+    # 3. Commission Orders: Add 'image_paths' for reference photos
+    try:
+        cursor.execute("ALTER TABLE commission_orders ADD COLUMN image_paths TEXT")
+    except sqlite3.OperationalError: pass
+
     # Inventory Transactions (Stock History) - ensuring existence
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS inventory_transactions (

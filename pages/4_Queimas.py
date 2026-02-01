@@ -128,7 +128,7 @@ with tab1:
                  if os.path.exists(default_data['image_path']):
                      st.image(default_data['image_path'], width=100)
             
-            img_file = st.file_uploader("Foto da Fornada", type=["jpg", "png", "jpeg"])
+            img_file = st.file_uploader("Foto da Fornada", type=["jpg", "png", "jpeg", "webp"])
             
             btn_txt = "Salvar Alterações" if is_edit else "Registrar Queima"
             submitted = st.form_submit_button(btn_txt)
@@ -284,7 +284,7 @@ with tab2:
                  if os.path.exists(m_default['image_path']):
                      st.image(m_default['image_path'], width=100)
             
-            m_img = st.file_uploader("Foto da Manutenção", type=["jpg", "png", "jpeg"], key="m_img_upl")
+            m_img = st.file_uploader("Foto da Manutenção", type=["jpg", "png", "jpeg", "webp"], key="m_img_upl")
             
             btn_mtxt = "Salvar Alterações" if is_m_edit else "Salvar Manutenção"
             if st.form_submit_button(btn_mtxt):

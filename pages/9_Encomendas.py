@@ -8,6 +8,7 @@ import reports
 import time
 import auth
 import uuid
+import os
 
 st.set_page_config(page_title="Encomendas", page_icon="📦")
 
@@ -86,7 +87,7 @@ with kf3:
 # Fetch Orders
 orders = pd.read_sql("""
     SELECT o.id, c.name as client, o.date_due, o.status, o.total_price, o.notes, o.client_id,
-           o.manual_discount, o.deposit_amount, o.date_created
+           o.manual_discount, o.deposit_amount, o.date_created, o.image_paths
     FROM commission_orders o
     JOIN clients c ON o.client_id = c.id
     ORDER BY o.date_due ASC
@@ -161,6 +162,68 @@ else:
             c_inf2.metric("Valor Total", f"R$ {total_val:.2f}")
             c_inf3.metric("Sinal Pago", f"R$ {deposit_val:.2f}")
             c_inf4.metric("Restante", f"R$ {remaining_val:.2f}")
+
+            # --- Reference Photos Section ---
+            with st.expander("📸 Fotos de Referência", expanded=False):
+                # Parse existing images
+                order_images = []
+                if order.get('image_paths'):
+                    try:
+                        order_images = eval(order['image_paths'])
+                        if not isinstance(order_images, list):
+                            order_images = []
+                    except Exception:
+                        order_images = []
+                
+                # Display existing images
+                if order_images:
+                    st.caption(f"📷 {len(order_images)} foto(s)")
+                    img_cols = st.columns(min(len(order_images), 4))
+                    for idx, img_path in enumerate(order_images):
+                        with img_cols[idx % 4]:
+                            if os.path.exists(img_path):
+                                st.image(img_path, width=150)
+                                if st.button("🗑️", key=f"del_img_{order['id']}_{idx}"):
+                                    order_images.pop(idx)
+                                    cursor = conn.cursor()
+                                    cursor.execute("UPDATE commission_orders SET image_paths=? WHERE id=?", 
+                                                   (str(order_images), order['id']))
+                                    conn.commit()
+                                    st.rerun()
+                else:
+                    st.caption("Nenhuma foto anexada")
+                
+                # Upload new photos using form to preserve state
+                with st.form(f"photo_form_{order['id']}"):
+                    new_photos = st.file_uploader(
+                        "Adicionar fotos de referência",
+                        accept_multiple_files=True,
+                        type=['png', 'jpg', 'jpeg', 'webp'],
+                        key=f"upload_ref_{order['id']}"
+                    )
+                    
+                    if st.form_submit_button("💾 Salvar Fotos"):
+                        if new_photos:
+                            # Create folder for order images
+                            img_folder = f"assets/orders/{order['id']}"
+                            if not os.path.exists(img_folder):
+                                os.makedirs(img_folder)
+                            
+                            for photo in new_photos:
+                                file_path = os.path.join(img_folder, f"{uuid.uuid4().hex[:8]}_{photo.name}")
+                                with open(file_path, "wb") as f:
+                                    f.write(photo.getbuffer())
+                                order_images.append(file_path)
+                            
+                            # Save to database
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE commission_orders SET image_paths=? WHERE id=?", 
+                                           (str(order_images), order['id']))
+                            conn.commit()
+                            st.success(f"✅ {len(new_photos)} foto(s) salva(s)!")
+                            st.rerun()
+                        else:
+                            st.warning("Selecione pelo menos uma foto.")
 
             st.divider()
             
