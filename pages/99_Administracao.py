@@ -261,7 +261,59 @@ with tab_import:
                                                 INSERT INTO products (name, base_price, stock_quantity, category, weight_g)
                                                 VALUES (?, ?, ?, ?, ?)
                                             """, (row['Nome'], row['Preço Base'], row['Estoque'], row['Categoria'], row['Peso (g)']))
-                                            audit.log_action(conn, 'IMPORT', 'products', cursor.lastrowid, None, row.to_dict())
+                                            target_id = cursor.lastrowid
+                                            audit.log_action(conn, 'IMPORT', 'products', target_id, None, row.to_dict())
+                                        
+                                        # 3. Handle Composition (Recipe/Kits)
+                                        comp_str = str(row.get('Composição', '')).strip()
+                                        if comp_str and target_id:
+                                            try:
+                                                # Clear existing (Safe Replace)
+                                                cursor.execute("DELETE FROM product_recipes WHERE product_id=?", (target_id,))
+                                                cursor.execute("DELETE FROM product_kits WHERE parent_product_id=?", (target_id,))
+                                                
+                                                # Format: TYPE: Name: Qty; Name: Qty
+                                                parts = comp_str.split(':', 1)
+                                                if len(parts) == 2:
+                                                    ctype = parts[0].strip().upper()
+                                                    items_str = parts[1].strip()
+                                                    
+                                                    items = [i.strip() for i in items_str.split(';') if i.strip()]
+                                                    
+                                                    if ctype == 'RECIPE':
+                                                        for item in items:
+                                                            # item = "Argila: 0.5"
+                                                            iparts = item.rsplit(':', 1)
+                                                            if len(iparts) == 2:
+                                                                m_name = iparts[0].strip()
+                                                                m_qty = float(iparts[1].strip())
+                                                                
+                                                                # Lookup Material by Name
+                                                                cursor.execute("SELECT id FROM materials WHERE name=?", (m_name,))
+                                                                m_res = cursor.fetchone()
+                                                                if m_res:
+                                                                    cursor.execute("INSERT INTO product_recipes (product_id, material_id, quantity) VALUES (?, ?, ?)", (target_id, m_res[0], m_qty))
+                                                                else:
+                                                                    print(f"Import Warning: Material '{m_name}' not found for product '{row['Nome']}'")
+
+                                                    elif ctype == 'KIT':
+                                                        for item in items:
+                                                            iparts = item.rsplit(':', 1)
+                                                            if len(iparts) == 2:
+                                                                p_name = iparts[0].strip()
+                                                                p_qty = int(float(iparts[1].strip())) # Allow float parsing but cast to int for kit qty
+                                                                
+                                                                # Lookup Product by Name
+                                                                cursor.execute("SELECT id FROM products WHERE name=?", (p_name,))
+                                                                p_res = cursor.fetchone()
+                                                                if p_res:
+                                                                    # Avoid self-reference loop?
+                                                                    if p_res[0] != target_id:
+                                                                        cursor.execute("INSERT INTO product_kits (parent_product_id, child_product_id, quantity) VALUES (?, ?, ?)", (target_id, p_res[0], p_qty))
+                                                                else:
+                                                                    print(f"Import Warning: Component '{p_name}' not found for kit '{row['Nome']}'")
+                                            except Exception as e:
+                                                print(f"Composition Parse Error for '{row['Nome']}': {e}")
 
                                     elif import_type == "Despesas":
                                         # Expenses - Upsert Logic
@@ -463,7 +515,9 @@ with tab_export:
         elif export_type == "Produtos":
             # Match Import Schema: ["Nome", "Preço Base", "Estoque", "Categoria", "Peso (g)"]
             query = """
+            query = """
                 SELECT 
+                    p.id as ID_INTERNO,
                     p.name as "Nome", 
                     p.base_price as "Preço Base", 
                     p.stock_quantity as "Estoque", 
@@ -472,7 +526,47 @@ with tab_export:
                 FROM products p
                 ORDER BY p.name
             """
-            df_exp = pd.read_sql(query, conn)
+            products_df = pd.read_sql(query, conn)
+            
+            # --- BUILD COMPOSITION STRING ---
+            comp_list = []
+            for _, prow in products_df.iterrows():
+                pid = prow['ID_INTERNO']
+                comp_str = ""
+                
+                # 1. Check if Kit
+                kits = pd.read_sql("""
+                    SELECT pk.quantity, p.name 
+                    FROM product_kits pk
+                    JOIN products p ON pk.child_product_id = p.id
+                    WHERE pk.parent_product_id = ?
+                """, conn, params=(pid,))
+                
+                if not kits.empty:
+                    # Format: KIT: Item1: Qtd; Item2: Qtd
+                    items = [f"{k['name']}: {k['quantity']}" for _, k in kits.iterrows()]
+                    comp_str = "KIT: " + "; ".join(items)
+                else:
+                    # 2. Check Recipe
+                    recipes = pd.read_sql("""
+                        SELECT m.name, pr.quantity
+                        FROM product_recipes pr
+                        JOIN materials m ON pr.material_id = m.id
+                        WHERE pr.product_id = ?
+                    """, conn, params=(pid,))
+                    
+                    if not recipes.empty:
+                        # Format: RECIPE: Mat1: Qtd; Mat2: Qtd
+                        items = [f"{r['name']}: {r['quantity']}" for _, r in recipes.iterrows()]
+                        comp_str = "RECIPE: " + "; ".join(items)
+                
+                comp_list.append(comp_str)
+            
+            products_df['Composição'] = comp_list
+            # Remove internal ID before export
+            del products_df['ID_INTERNO']
+            
+            df_exp = products_df
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
