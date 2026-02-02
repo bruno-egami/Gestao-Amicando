@@ -197,14 +197,18 @@ with col_catalog:
                             if product.thumb_path:
                                 display_thumbs.append(product.thumb_path)
                             
-                            # ALways check for Kit Components to append their images
+                            # ALways check for Kit Components to append (now PREPEND) their images
                             kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(product.id,))
                             if not kit_children.empty:
                                 c_ids = ",".join(map(str, kit_children['child_product_id'].tolist()))
                                 c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
+                                comp_imgs = []
                                 for _, ci_row in c_imgs_df.iterrows():
                                     ci_list = eval(ci_row['image_paths']) if ci_row['image_paths'] else []
-                                    if ci_list: display_thumbs.extend(ci_list)
+                                    if ci_list: comp_imgs.extend(ci_list)
+                                
+                                # Prepend components (Prioritize dynamic)
+                                display_thumbs = comp_imgs + display_thumbs
                             
                             # Limit to distinct images (simple dedup by path string)
                             seen = set()
@@ -560,7 +564,7 @@ with col_cart:
                                             st.toast(f"ℹ️ Item ID {p_id} identificado como KIT. Baixando componentes...", icon="🧩")
                                             for _, kc in kit_comps.iterrows():
                                                 qtd_deduct = q_sell * kc['quantity']
-                                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (qtd_deduct, kc['child_product_id']))
+                                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (int(qtd_deduct), int(kc['child_product_id'])))
                                                 st.toast(f" - Baixado {qtd_deduct} de Componente ID {kc['child_product_id']}", icon="📉")
                                         else:
                                             cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (q_sell, p_id))
@@ -720,7 +724,7 @@ with col_cart:
                                     kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(p_id,))
                                     if not kit_comps.empty:
                                         for _, kc in kit_comps.iterrows():
-                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (q_res * kc['quantity'], kc['child_product_id']))
+                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (int(q_sell * kc['quantity']), int(kc['child_product_id'])))
                                     else:
                                         cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (q_res, p_id))
 
@@ -875,8 +879,8 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                 else:
                      enc_view['produtos'] = "-"
 
-                enc_view['date_created'] = pd.to_datetime(enc_view['date_created']).dt.strftime('%d/%m/%Y')
-                enc_view['date_due'] = pd.to_datetime(enc_view['date_due']).dt.strftime('%d/%m/%Y')
+                enc_view['date_created'] = pd.to_datetime(enc_view['date_created'], format='mixed', errors='coerce').dt.strftime('%d/%m/%Y')
+                enc_view['date_due'] = pd.to_datetime(enc_view['date_due'], format='mixed', errors='coerce').dt.strftime('%d/%m/%Y')
                
                 st.dataframe(
                    enc_view,
@@ -1006,7 +1010,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                                 if not kit_restore.empty:
                                     for _, kr in kit_restore.iterrows():
                                         restore_qty = q_restore * kr['quantity']
-                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (restore_qty, kr['child_product_id']))
+                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(restore_qty), int(kr['child_product_id'])))
                                 else:
                                     cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (q_restore, int(p_id)))
                                 

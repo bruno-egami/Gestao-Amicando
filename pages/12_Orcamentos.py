@@ -568,7 +568,15 @@ else:
                             format="%.2f",
                             key=f"dep_app_{quote['id']}"
                         )
-                        
+                        # Payment Method (Only if deposit > 0)
+                        pay_method = "Pix"
+                        if deposit_val > 0:
+                            pay_method = st.selectbox(
+                                "Método de Pagamento (Sinal)", 
+                                ["Pix", "Cartão Crédito", "Cartão Débito", "Dinheiro", "Outro"],
+                                key=f"pay_app_{quote['id']}"
+                            )
+
                         if st.button("Confirmar", key=f"confirm_app_{quote['id']}", type="primary"):
                             if items.empty:
                                 st.error("Adicione pelo menos um item!")
@@ -603,6 +611,27 @@ else:
                                         VALUES (?, ?, ?, ?, ?)
                                     """, (order_id, item['product_id'], item['quantity'], item['unit_price'], item.get('item_notes', '')))
                                     
+                                # Create Financial Record (Sale) for Deposit
+                                if deposit_val > 0:
+                                    fmt_enc_id = f"ENC-{datetime.now().strftime('%y%m%d')}-{order_id}"
+                                    cursor.execute("""
+                                        INSERT INTO sales 
+                                        (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id)
+                                        VALUES (?, NULL, 1, ?, 'Finalizada', ?, 0, ?, ?, ?, ?)
+                                    """, (
+                                        date.today().isoformat(),
+                                        deposit_val,
+                                        quote['client_id'],
+                                        pay_method,
+                                        f"Sinal Orçamento #{fmt_q_id}",
+                                        current_user['name'] if current_user else "Sistema",
+                                        fmt_enc_id
+                                    ))
+                                    # Audit
+                                    audit.log_action(conn, 'CREATE', 'sales', cursor.lastrowid, None, {
+                                        'note': 'Deposit from Quote', 'amount': deposit_val
+                                    }, commit=False)
+
                                 # Update quote status
                                 cursor.execute(
                                     "UPDATE quotes SET status='Aprovado', converted_order_id=? WHERE id=?",
@@ -610,7 +639,7 @@ else:
                                 )
                                 conn.commit()
                                 
-                                st.success(f"✅ Orçamento aprovado! Encomenda #{order_id} criada.")
+                                st.success(f"✅ Orçamento aprovado! Encomenda #{order_id} criada e Recebimento lançado.")
                                 st.rerun()
                 
                 # Reject

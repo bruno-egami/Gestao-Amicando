@@ -590,17 +590,35 @@ def generate_receipt_pdf(order_data):
     pdf.ln(5)
     
     # Totals
+    # Totals
     pdf.set_font('Helvetica', 'B', 12)
     pdf.cell(140, 10, "Total Final:", align='R')
     pdf.cell(40, 10, f"R$ {order_data['total']:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
+    
+    # Check if fully paid (Status Entregue or explicit flag)
+    is_paid = order_data.get('status') == 'Entregue' or order_data.get('is_paid')
     
     if order_data.get('deposit'):
         pdf.set_font('Helvetica', '', 10)
         pdf.cell(140, 6, "Sinal Pago:", align='R')
         pdf.cell(40, 6, f"R$ {order_data['deposit']:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
         
-        remaining = order_data['total'] - order_data['deposit']
-        pdf.cell(140, 6, "Restante a Pagar:", align='R')
-        pdf.cell(40, 6, f"R$ {remaining:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
+    remaining = order_data['total'] - order_data.get('deposit', 0)
+    
+    if is_paid:
+        pdf.set_font('Helvetica', 'B', 12)
+        pdf.set_text_color(0, 100, 0) # Green
+        pdf.cell(140, 8, "Pagamento Final (Entrega):", align='R')
+        pdf.cell(40, 8, f"R$ {remaining:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
+        
+        pdf.cell(140, 8, "Situação:", align='R')
+        pdf.cell(40, 8, "QUITADO", align='R', new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+    else:
+        # Standard Remaining
+        if order_data.get('deposit'):
+            pdf.set_font('Helvetica', 'B', 12)
+            pdf.cell(140, 8, "Restante a Pagar:", align='R')
+            pdf.cell(40, 8, f"R$ {remaining:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
 
     return bytes(pdf.output(dest='S'))

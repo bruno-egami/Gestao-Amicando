@@ -174,7 +174,9 @@ with tab_cat:
                 price = c5.number_input("Preço Unit. (R$)", value=float(target_data.get('price_per_unit', 0.0)), step=0.01)
                 unit = c6.selectbox("Unidade", ["kg", "L", "unidade", "hora (mão de obra)", "fornada"], index=["kg", "L", "unidade", "hora (mão de obra)", "fornada"].index(target_data.get('unit', 'kg')) if not is_new else 0)
                 
-                stock = c7.number_input("Estoque Atual (Ajuste Manual)", value=float(target_data.get('stock_level', 0.0)), step=0.1, help="Use a aba Histórico para registrar entradas/saídas do dia a dia.", key=f"stock_adj_{target_data['id']}_{target_data.get('stock_level')}")
+                # Safe Key Generation
+                safe_id = target_data.get('id', 'new')
+                stock = c7.number_input("Estoque Atual (Ajuste Manual)", value=float(target_data.get('stock_level', 0.0)), step=0.1, help="Use a aba Histórico para registrar entradas/saídas do dia a dia.", key=f"stock_adj_{safe_id}_{target_data.get('stock_level')}")
                 min_alert = st.number_input("Alerta Mínimo", value=float(target_data.get('min_stock_alert', 0.0)), step=0.1)
                 
                 # Image Upload

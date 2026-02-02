@@ -118,16 +118,19 @@ with tab1:
                     # Image
                     imgs = eval(row['image_paths']) if row['image_paths'] else []
                     
-                    # Logic: If no direct images, check if it is a Kit and fetch component images
-                    if not imgs:
-                        kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
-                        if not kit_children.empty:
-                            c_ids = ",".join(map(str, kit_children['child_product_id'].tolist()))
-                            c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
-                            for _, ci_row in c_imgs_df.iterrows():
-                                ci_list = eval(ci_row['image_paths']) if ci_row['image_paths'] else []
-                                if ci_list:
-                                    imgs.extend(ci_list)
+                    # Logic: Always fetch component images for Kits to ensure freshness
+                    kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
+                    if not kit_children.empty:
+                        c_ids = ",".join(map(str, kit_children['child_product_id'].tolist()))
+                        c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
+                        comp_imgs = []
+                        for _, ci_row in c_imgs_df.iterrows():
+                            ci_list = eval(ci_row['image_paths']) if ci_row['image_paths'] else []
+                            if ci_list:
+                                comp_imgs.extend(ci_list)
+                        
+                        # Prepend component images (Dynamic) to static images
+                        imgs = comp_imgs + imgs
                     
                     with c1:
                         if imgs:

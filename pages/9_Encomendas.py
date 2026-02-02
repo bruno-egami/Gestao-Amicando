@@ -26,6 +26,18 @@ st.title("📦 Gestão de Encomendas")
 cursor = conn.cursor()
 
 # --- FILTERS & MANAGEMENT ---
+if 'delivered_pdf' in st.session_state:
+    d_pdf = st.session_state['delivered_pdf']
+    d_name = st.session_state.get('delivered_name', 'recibo.pdf')
+    st.balloons()
+    with st.container():
+        st.success("✅ Entrega realizada e registrada com sucesso!")
+        st.download_button("📄 BAIXAR RECIBO (FINAL)", data=d_pdf, file_name=d_name, mime="application/pdf", type="primary")
+        if st.button("Fechar aviso"):
+            del st.session_state['delivered_pdf']
+            st.rerun()
+    st.divider()
+
 st.subheader("Gerenciar Pedidos")
     
 # Logic to Delete Order (and restore stock)
@@ -281,7 +293,7 @@ else:
                                     if not kit_comps.empty:
                                         for _, kc in kit_comps.iterrows():
                                             deduct_res = qty_res_new * kc['quantity']
-                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_res), kc['child_product_id']))
+                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_res), int(kc['child_product_id'])))
                                     else:
                                         cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(p_row['id'])))
                                 
@@ -369,7 +381,8 @@ else:
                         ],
                         "total": order['total_price'],
                         "discount": order['manual_discount'] or 0,
-                        "deposit": order['deposit_amount'] or 0
+                        "deposit": order['deposit_amount'] or 0,
+                        "status": order['status']
                 }),
                 file_name=fname,
                 mime="application/pdf",
@@ -453,15 +466,39 @@ else:
                                 amount = st.number_input("Qtd", min_value=1, max_value=(target_prod - produced), key=f"prod_in_{item['id']}")
                                 if st.button("Confirmar", key=f"conf_{item['id']}"):
                                     # Deduct materials query...
-                                    recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(item['product_id'],))
+                                    # Deduct materials query (Handle Kits Recursively)
+                                    # 1. Get Direct Recipe
+                                    recipes_to_deduct = []
+                                    
+                                    # Check direct recipe
+                                    direct_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(item['product_id'],))
+                                    for _, r in direct_recipe.iterrows():
+                                        recipes_to_deduct.append({'mid': r['material_id'], 'qty_per_unit': r['quantity']})
+                                        
+                                    # Check Kit Children Recipes
+                                    kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(item['product_id'],))
+                                    for _, kc in kit_comps.iterrows():
+                                        # For each child, get its recipe
+                                        child_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(int(kc['child_product_id']),))
+                                        for _, cr in child_recipe.iterrows():
+                                            # Total Qty = Child Qty in Kit * Ingredient Qty in Child
+                                            recipes_to_deduct.append({'mid': cr['material_id'], 'qty_per_unit': cr['quantity'] * kc['quantity']})
+
                                     success = False
                                     old_order_status = order['status']
                                     cursor.execute("BEGIN TRANSACTION")
                                     try:
                                         # Update Materials
-                                        for _, r in recipe.iterrows():
-                                             cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", 
-                                                          (r['quantity'] * amount, r['material_id']))
+                                        for rd in recipes_to_deduct:
+                                            deducted_qty = rd['qty_per_unit'] * amount
+                                            cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", 
+                                                          (deducted_qty, rd['mid']))
+                                             
+                                            # Log Transaction
+                                            cursor.execute("""
+                                                INSERT INTO inventory_transactions (date, material_id, quantity, type, notes)
+                                                VALUES (?, ?, ?, 'production', ?)
+                                            """, (date.today().isoformat(), rd['mid'], deducted_qty, f"Produção Encomenda #{fmt_id}"))
                                         
                                         # Update Item
                                         cursor.execute("UPDATE commission_items SET quantity_produced = quantity_produced + ? WHERE id=?", (amount, item['id']))
@@ -524,7 +561,7 @@ else:
                                 if not kit_comps.empty:
                                     for _, kc in kit_comps.iterrows():
                                         restore_amt = rest_qty * kc['quantity']
-                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (restore_amt, kc['child_product_id']))
+                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(restore_amt), int(kc['child_product_id'])))
                                 else:
                                     cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
                                                  (rest_qty, item['product_id']))
@@ -583,7 +620,7 @@ else:
                             if not kit_comps.empty:
                                 for _, kc in kit_comps.iterrows():
                                     restore_amt = it['quantity'] * kc['quantity'] 
-                                    cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (restore_amt, kc['child_product_id']))
+                                    cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(restore_amt), int(kc['child_product_id'])))
                             else:
                                 cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
                                              (it['quantity'], it['product_id']))
@@ -631,7 +668,7 @@ else:
                                 if not kit_comps.empty:
                                      for _, kc in kit_comps.iterrows():
                                         deduct_amt = it['quantity'] * kc['quantity']
-                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (deduct_amt, kc['child_product_id']))
+                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_amt), int(kc['child_product_id'])))
                                 else:
                                     cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", 
                                                  (it['quantity'], it['product_id']))
@@ -658,8 +695,37 @@ else:
                         st.error(f"Erro: {e}")
                     
                     if success:
-                        st.success("Entrega realizada com sucesso!")
-                        st.balloons()
+                        # Prepare data for Receipt
+                        rec_data = {
+                            "id": formatted_id,
+                            "type": "Encomenda (Entrega)",
+                            "date": created_dt.strftime('%d/%m/%Y'),
+                            "date_due": pd.to_datetime(order['date_due']).strftime('%d/%m/%Y'),
+                            "client_name": order['client'],
+                            "items": [
+                                {
+                                    "name": r['name'], 
+                                    "qty": r['quantity'], 
+                                    "price": r['unit_price'],
+                                    "notes": r['notes'],
+                                    "images": r['image_paths']
+                                } 
+                                for _, r in items.iterrows()
+                            ],
+                            "total": order['total_price'],
+                            "discount": order['manual_discount'] or 0,
+                            "deposit": order['deposit_amount'] or 0,
+                            "status": "Entregue",
+                            "notes": order['notes']
+                        }
+                        
+                        # Generate PDF
+                        pdf_bytes = reports.generate_receipt_pdf(rec_data)
+                        
+                        # Set Session State to show Download Button after rerun
+                        st.session_state['delivered_pdf'] = pdf_bytes
+                        st.session_state['delivered_name'] = f"Recibo_Final_{formatted_id}.pdf"
+                        
                         st.rerun()
 
 conn.close()
