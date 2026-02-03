@@ -21,7 +21,6 @@ def startup_db():
     database.init_db()
 
 startup_db()
-@st.cache_resource
 def get_db_connection():
     return database.get_connection()
 

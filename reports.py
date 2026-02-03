@@ -622,3 +622,105 @@ def generate_receipt_pdf(order_data):
             pdf.cell(40, 8, f"R$ {remaining:.2f}", align='R', new_x="LMARGIN", new_y="NEXT")
 
     return bytes(pdf.output(dest='S'))
+
+def generate_student_statement(student_data, items, total_due):
+    """
+    Generates a PDF statement for a student with centered header and quantity column.
+    """
+    class PDF(FPDF):
+        def header(self):
+            # Centered Header Standard
+            try:
+                self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
+            except Exception:
+                pass
+            
+            self.set_y(55) # Below logo
+            self.set_font('Helvetica', 'B', 14)
+            self.cell(0, 6, "Amicando Atelier de Cerâmicas", align='C', new_x="LMARGIN", new_y="NEXT")
+            
+            self.set_font('Helvetica', '', 9)
+            self.cell(0, 5, "Instagram: @amicandoatelier | WhatsApp: (54) 99912-1757", align='C', new_x="LMARGIN", new_y="NEXT")
+            self.cell(0, 5, "Rua Alagoas, 45, sala 103, Bairro Humaitá", align='C', new_x="LMARGIN", new_y="NEXT")
+            self.cell(0, 5, "Bento Gonçalves, Rio Grande do Sul", align='C', new_x="LMARGIN", new_y="NEXT")
+            self.ln(10)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Helvetica', 'I', 8)
+            self.cell(0, 10, f'Página {self.page_no()}/{{nb}} - Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M")}', align='C')
+
+    pdf = PDF(orientation='P')
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    
+    # Title
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(0, 8, "EXTRATO DE AULAS E CONSUMO", align='C', new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+
+    # Student Info
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(20, 6, "Aluno(a):", align='L')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, f"{student_data.get('name')}", align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    if student_data.get('month'):
+         pdf.set_font('Helvetica', 'B', 10)
+         pdf.cell(25, 6, "Referência:", align='L')
+         pdf.set_font('Helvetica', '', 10)
+         pdf.cell(0, 6, f"{student_data.get('month')}", align='L', new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.ln(5)
+    
+    # Table Header
+    # Cols: Data (25), Descrição (85), Qtd (20), Valor (30), Status (30)
+    headers = ["Data", "Descrição", "Qtd", "Valor (R$)", "Status"]
+    col_widths = [25, 85, 20, 30, 30]
+    
+    pdf.set_fill_color(51, 51, 51)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font('Helvetica', 'B', 9)
+    
+    for i, h in enumerate(headers):
+        pdf.cell(col_widths[i], 8, h, border=1, fill=True, align='C')
+    pdf.ln()
+    
+    # Table Data
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font('Helvetica', '', 9)
+    
+    fill = False
+    for item in items:
+        # Determine Fill
+        pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+        
+        qty_val = item.get('quantity', 1)
+        # Format Qty: Int if integer, else float
+        qty_str = f"{int(qty_val)}" if qty_val == int(qty_val) else f"{qty_val:.2f}"
+        
+        row_data = [
+            str(item.get('date', '-')),
+            str(item.get('description', '-'))[:45], # truncate
+            qty_str,
+            f"{float(item.get('value', 0)):.2f}",
+            str(item.get('status', 'Pendente'))
+        ]
+        
+        for i, dh in enumerate(row_data):
+            align = 'R' if i in [2, 3] else 'L' # Qtd and Value right aligned
+            if i == 4: align = 'C' # Status centered
+            pdf.cell(col_widths[i], 7, dh, border=1, fill=fill, align=align)
+        
+        pdf.ln()
+        fill = not fill
+    
+    # Total
+    pdf.ln(5)
+    pdf.set_font('Helvetica', 'B', 12)
+    # Align total with Value column roughly
+    # Sum of first 3 cols = 25+85+20 = 130
+    pdf.cell(130, 10, "Total a Pagar:", align='R')
+    pdf.cell(60, 10, f"R$ {total_due:.2f}", align='R', border=1)
+    
+    return io.BytesIO(pdf.output(dest='S'))

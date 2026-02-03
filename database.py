@@ -6,7 +6,8 @@ DB_NAME = "ceramic_admin.db"
 DB_PATH = os.path.join(DB_FOLDER, DB_NAME)
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
     # run_migrations(conn) # REMOVED: Migrations should run only on init_db
     return conn
 
@@ -295,6 +296,12 @@ def init_db():
     pass
 
 
+    # 8. Students: Add 'class_id' (Migration)
+    try:
+        cursor.execute("ALTER TABLE students ADD COLUMN class_id INTEGER")
+    except sqlite3.OperationalError: pass
+
+
 
 
 
@@ -521,6 +528,16 @@ def init_db():
         )
     ''')
     
+    # Classes (Turmas)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE, -- e.g. "Terça Manhã"
+            schedule TEXT, -- e.g. "Terça 09:00 - 12:00"
+            notes TEXT
+        )
+    ''')
+
     # --- INDEXES for Performance ---
     # Sales indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date)")

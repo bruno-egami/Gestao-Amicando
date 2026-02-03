@@ -28,7 +28,8 @@ PAGE_ACCESS = {
     'Clientes': ['admin', 'vendedor'],
     'Encomendas': ['admin', 'vendedor'],
     'Relatorios': ['admin'],
-    'Administracao': ['admin']
+    'Administracao': ['admin'],
+    'Gestao_Aulas': ['admin', 'vendedor']
 }
 
 # Navigation Menu Configuration
@@ -39,6 +40,7 @@ NAV_MENU = {
         ("Vendas", "🛒", "pages/6_Vendas.py"),
         ("Orçamentos", "📝", "pages/12_Orcamentos.py"),
         ("Encomendas", "📦", "pages/9_Encomendas.py"),
+        ("Aulas & Alunos", "🎓", "pages/13_Gestao_Aulas.py"),
         ("Queimas", "🔥", "pages/4_Queimas.py"),
         ("Produtos", "🏺", "pages/5_Produtos.py"),
         ("Insumos", "🧪", "pages/1_Insumos.py"),
@@ -53,6 +55,7 @@ NAV_MENU = {
         ("Vendas", "🛒", "pages/6_Vendas.py"),
         ("Orçamentos", "📝", "pages/12_Orcamentos.py"),
         ("Encomendas", "📦", "pages/9_Encomendas.py"),
+        ("Aulas & Alunos", "🎓", "pages/13_Gestao_Aulas.py"),
         ("Produtos", "🏺", "pages/5_Produtos.py"),
         ("Insumos", "🧪", "pages/1_Insumos.py"),
         ("Clientes", "🤝", "pages/8_Clientes.py"),
