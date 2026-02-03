@@ -496,6 +496,7 @@ def init_db():
             name TEXT NOT NULL,
             phone TEXT,
             active INTEGER DEFAULT 1,
+            class_id INTEGER,
             join_date TEXT
         )
     ''')

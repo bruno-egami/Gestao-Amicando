@@ -47,17 +47,44 @@ def create_student(conn, name, phone, class_id=None, join_date=None):
     conn.commit()
     return new_id
 
-def update_student(conn, student_id, name, phone, active, class_id=None):
-    """Updates student info."""
+def update_student(conn, student_id, name, phone, active):
+    """Updates student info (Name, Phone, Active). Class is handled separately."""
     # Get old data
     old = pd.read_sql(f"SELECT * FROM students WHERE id={student_id}", conn).iloc[0].to_dict()
     
     cursor = conn.cursor()
-    cursor.execute("UPDATE students SET name=?, phone=?, active=?, class_id=? WHERE id=?", 
-                   (name, phone, int(active), class_id, student_id))
+    cursor.execute("UPDATE students SET name=?, phone=?, active=? WHERE id=?", 
+                   (name, phone, int(active), student_id))
     
-    audit.log_action(conn, 'UPDATE', 'students', student_id, old, {'name': name, 'phone': phone, 'active': active, 'class': class_id}, commit=False)
+    audit.log_action(conn, 'UPDATE', 'students', student_id, old, {'name': name, 'phone': phone, 'active': active}, commit=False)
     conn.commit()
+    try:
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    except: pass
+
+def update_student_class(conn, student_id, class_id):
+    """Updates only the student's class."""
+    # Get old data for audit
+    try:
+        old = pd.read_sql(f"SELECT class_id FROM students WHERE id={student_id}", conn).iloc[0].to_dict()
+    except:
+        old = {}
+        
+    cursor = conn.cursor()
+    cursor.execute("UPDATE students SET class_id=? WHERE id=?", (class_id, student_id))
+    
+    if cursor.rowcount == 0:
+        print(f"WARNING: Update failed for student {student_id} (Row not found?)")
+    
+    audit.log_action(conn, 'UPDATE_CLASS', 'students', student_id, old, {'class_id': class_id}, commit=False)
+    conn.commit()
+    
+    # Force Checkpoint to ensure visibility
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except: pass
+    
+    return True
 
 # --- Consumption Logic ---
 

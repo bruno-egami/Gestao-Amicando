@@ -30,7 +30,6 @@ admin_utils.render_header_logo()
 st.title("🎓 Gestão de Aulas e Alunos")
 
 # TABS
-# TABS
 tab_summary, tab_classes, tab_students, tab_consume, tab_finance = st.tabs(["📊 Resumo", "🗓️ Turmas", "👥 Alunos", "📦 Lançar Consumo", "💰 Financeiro e Extratos"])
 
 # ==============================================================================
@@ -153,41 +152,65 @@ with tab_students:
                     # Filter by ID to be safe
                     row = df_students[df_students['id'] == sid_target].iloc[0]
                     
-                    with st.form(key=f"edit_student_{row['id']}"):
+                    # --- Reactive Class Update ---
+                    st.markdown("#### Alterar Turma")
+                    
+                    e_curr_class_id = row['class_id']
+                    curr_cls_name = ""
+                    for name, cid in class_opts.items():
+                         if cid == e_curr_class_id:
+                             curr_cls_name = name
+                             break
+                    
+                    cls_names = [""] + list(class_opts.keys())
+                    try:
+                        curr_idx = cls_names.index(curr_cls_name)
+                    except: curr_idx = 0
+                    
+                    def on_class_change(k, sid):
+                        # Callback to update class immediately
+                        if k in st.session_state:
+                            sel_val = st.session_state[k]
+                            new_cid = class_opts.get(sel_val)
+                            # Explicit int conversion if valid
+                            if new_cid is not None: new_cid = int(new_cid)
+                            else: new_cid = None
+                            
+                            # Use FRESH connection for callback logic to ensure isolation/commit visibility
+                            conn_cb = database.get_connection()
+                            try:
+                                # CAST sid to native int to prevent numpy type issues in SQLite
+                                student_service.update_student_class(conn_cb, int(sid), new_cid)
+                                st.toast(f"✅ Turma do Aluno {sid} alterada para: {sel_val} (ID Turma: {new_cid})", icon="💾")
+                            finally:
+                                conn_cb.close()
+                                
+                            st.cache_data.clear()
+                    
+                    st.selectbox(
+                        "Turma", 
+                        cls_names, 
+                        index=curr_idx, 
+                        key=f"class_sel_{row['id']}", 
+                        on_change=on_class_change,
+                        args=(f"class_sel_{row['id']}", row['id'])
+                    )
+                    
+                    st.divider()
+                    
+                    # --- Other Details Form ---
+                    with st.form(key=f"edit_student_details_{row['id']}"):
+                        st.markdown("#### Editar Dados Pessoais")
                         en = st.text_input("Nome", value=row['name'], key=f"edit_name_{row['id']}")
                         ep = st.text_input("Telefone", value=row['phone'], key=f"edit_phone_{row['id']}")
-                        
-                        # Edit Class
-                        e_curr_class_id = row['class_id']
-                        # Find index
-                        curr_idx = 0
-                        cls_names = [""] + list(class_opts.keys())
-                        
-                        # Try to find current class name
-                        curr_cls_name = ""
-                        for name, cid in class_opts.items():
-                             if cid == e_curr_class_id:
-                                 curr_cls_name = name
-                                 break
-                        
-                        try:
-                            curr_idx = cls_names.index(curr_cls_name)
-                        except: pass
-                        
-                        e_cl_name = st.selectbox("Turma", cls_names, index=curr_idx, key=f"edit_class_{row['id']}")
-                        
                         ea = st.checkbox("Ativo", value=bool(row['active']), key=f"edit_active_{row['id']}")
                         
-                        if st.form_submit_button("Salvar Alterações"):
+                        if st.form_submit_button("Salvar Dados Pessoais"):
                             try:
-                                new_cid = class_opts.get(e_cl_name)
-                                
-                                # Explicitly casting/handling to ensure correct type passed
-                                if new_cid is not None:
-                                    new_cid = int(new_cid)
-                                
-                                student_service.update_student(conn, row['id'], en, ep, ea, class_id=new_cid)
-                                st.success(f"Atualizado com sucesso!")
+                                # Update only personal details. Class is handled by reactive widget above.
+                                student_service.update_student(conn, row['id'], en, ep, ea)
+                                st.success(f"Dados atualizados!")
+                                st.cache_data.clear()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Erro ao atualizar: {e}")
