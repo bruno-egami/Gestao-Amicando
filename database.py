@@ -7,7 +7,7 @@ DB_PATH = os.path.join(DB_FOLDER, DB_NAME)
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    run_migrations(conn)
+    # run_migrations(conn) # REMOVED: Migrations should run only on init_db
     return conn
 
 def run_migrations(conn):
@@ -43,20 +43,10 @@ def run_migrations(conn):
     except sqlite3.OperationalError: pass
 
     # Inventory Transactions (Stock History) - ensuring existence
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS inventory_transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER,
-            date TEXT,
-            type TEXT, -- 'ENTRADA', 'SAIDA', 'AJUSTE'
-            quantity REAL,
-            cost REAL,
-            notes TEXT,
-            user_id INTEGER,
-            FOREIGN KEY (material_id) REFERENCES materials(id),
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-    ''')
+    # Inventory Transactions (Stock History) - ensuring existence
+    # Moved to init_db or handled there.
+    # Check if table exists before create in migration is fine, but init_db handles creation.
+    pass
 
     conn.commit()
 
@@ -298,38 +288,19 @@ def init_db():
     except sqlite3.OperationalError: pass
 
     # 7. Create product_kits table (Migration)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS product_kits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            parent_product_id INTEGER NOT NULL,
-            child_product_id INTEGER NOT NULL,
-            quantity INTEGER DEFAULT 1,
-            FOREIGN KEY (parent_product_id) REFERENCES products(id),
-            FOREIGN KEY (child_product_id) REFERENCES products(id)
-        )
-    ''')
+    # 7. Create product_kits table (Migration) - Handled in init_db bottom section or consolidated
+    # Removing duplicate create here if it exists below.
+    # Actually, keep it here if it's considered a migration for old DBs? 
+    # But init_db has it at the bottom.
+    pass
 
 
 
 
 
-    # 6. Security Upgrade: Reset Admin Password to 'admin' (bcrypt)
-    # This runs every time but we only want to do it once ideally? 
-    # Or strict requirement: "reset senhas atuais".
-    # We will reset 'admin' user password to 'admin' (bcrypt hashed).
-    # Hash for 'admin' generated with bcrypt (cost 12): 
-    # We can generate it dynamically if we import bcrypt, but let's avoid adding dep to database.py if possible.
-    # Actually, we added bcrypt to requirements, so we can import it.
-    try:
-        import bcrypt
-        admin_hash = bcrypt.hashpw('admin'.encode(), bcrypt.gensalt()).decode()
-        cursor.execute("UPDATE users SET password_hash = ? WHERE username = 'admin'", (admin_hash,))
-        # Optional: Invalidate others?
-        # cursor.execute("UPDATE users SET active = 0 WHERE username != 'admin'")
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"Migration error (reset admin): {e}")
+    # Security Upgrade: Password reset REMOVED (User request)
+    # Admin creation is handled by auth.create_default_admin
+    pass
 
     conn.commit()
     
@@ -509,6 +480,46 @@ def init_db():
             FOREIGN KEY (child_product_id) REFERENCES products(id)
         )
     ''')
+
+    # --- CLASS MANAGEMENT TABLES (Phase 4) ---
+    # Students
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT,
+            active INTEGER DEFAULT 1,
+            join_date TEXT
+        )
+    ''')
+
+    # Tuitions (Mensalidades)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tuitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            month_year TEXT, -- MM/AAAA
+            amount REAL,
+            status TEXT DEFAULT 'Pendente', -- Pendente, Pago
+            payment_date TEXT,
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )
+    ''')
+    
+    # Student Consumptions (Consumo de Aulas/Insumos Extras)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS student_consumptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            description TEXT,
+            quantity REAL,
+            unit_price REAL,
+            total_value REAL,
+            date TEXT,
+            status TEXT DEFAULT 'Pendente', -- Pendente, Pago
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )
+    ''')
     
     # --- INDEXES for Performance ---
     # Sales indexes
@@ -549,10 +560,8 @@ def init_db():
     run_migrations(conn)
     
     # Ensure default data for categories
-    cursor.execute("SELECT count(*) FROM material_categories")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO material_categories (name) VALUES ('Geral')")
-        conn.commit()
+    # Ensure default data for categories (Duplicate removed)
+    pass
 
     conn.close()
     print(f"Database initialized and migrated at {DB_PATH}")

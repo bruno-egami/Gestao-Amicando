@@ -157,7 +157,8 @@ else:
             # Helper for images from product
             def get_prod_imgs(p_str):
                 try:
-                    l = eval(p_str)
+                    import ast
+                    l = ast.literal_eval(p_str)
                     return l if l and isinstance(l, list) else []
                 except: return []
             
@@ -194,7 +195,8 @@ else:
                 order_images = []
                 if order.get('image_paths'):
                     try:
-                        order_images = eval(order['image_paths'])
+                        import ast
+                        order_images = ast.literal_eval(order['image_paths'])
                         if not isinstance(order_images, list):
                             order_images = []
                     except Exception:

@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import date
 import admin_utils
 import auth
+import utils.ui_components as ui_components
 
 # Page config
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
@@ -15,8 +16,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-database.init_db()
-conn = database.get_connection()
+@st.cache_resource
+def startup_db():
+    database.init_db()
+
+startup_db()
+@st.cache_resource
+def get_db_connection():
+    return database.get_connection()
+
+startup_db()
+conn = get_db_connection()
 
 # Ensure default admin exists
 auth.create_default_admin(conn)
@@ -188,7 +198,7 @@ try:
 
     st.divider()
 
-    # --- PRODUCTS STOCK ---
+    # Products Stock
     st.subheader("🏺 Estoque de Peças")
     
     # Search Filter
@@ -196,10 +206,8 @@ try:
     if search:
         products_df = products_df[products_df['name'].str.contains(search, case=False)]
     
-    st.dataframe(
+    ui_components.render_styled_dataframe(
         products_df,
-        hide_index=True, 
-        use_container_width=True,
         column_config={
             "name": "Peça",
             "stock_quantity": st.column_config.NumberColumn("Qtd Atual", format="%d"),

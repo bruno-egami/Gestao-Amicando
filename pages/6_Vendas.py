@@ -5,6 +5,8 @@ import admin_utils
 import auth
 import audit
 import reports
+import services.product_service as product_service
+import services.order_service as order_service
 import time
 import uuid
 from datetime import datetime, date
@@ -119,7 +121,7 @@ client_dict = {row['name']: row['id'] for _, row in clients_df.iterrows()}
 client_opts = [""] + list(client_dict.keys())
 
 # 2. Select Product (Visual Catalog) - OUTSIDE FORM for interactivity
-products_df = pd.read_sql("SELECT id, name, base_price, stock_quantity, image_paths, category FROM products", conn)
+products_df = product_service.get_all_products(conn)
 
 # --- Application State ---
 if 'cart' not in st.session_state:
@@ -141,27 +143,12 @@ with col_catalog:
     c_filt1, c_filt2 = st.columns([1, 1])
     search_term = c_filt1.text_input("🔍 Buscar Produto", placeholder="Nome do produto...")
     
-    # Helper for images (Defined locally or globally)
-    def get_valid_path(paths_str):
-        try:
-            p = eval(paths_str)
-            if p and len(p) > 0: return p[0]
-            return None
-        except Exception:
-            return None
+    # Helper for images handled by Service
 
-    # Compute Thumbs globally on products_df so it is available for selection
-    if not products_df.empty:
-        products_df['thumb_path'] = products_df['image_paths'].apply(get_valid_path)
-    else:
-        products_df['thumb_path'] = None
 
     # Get Categories from DB
-    try:
-        all_cats = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
-    except Exception:
-        all_cats = products_df['category'].dropna().unique().tolist()
-        
+    all_cats = product_service.get_categories(conn, products_df)
+    
     if all_cats:
         sel_cats = c_filt2.multiselect("📂 Filtrar Categoria", options=all_cats, placeholder="Todas")
     else:
@@ -191,59 +178,19 @@ with col_catalog:
                         with st.container(border=True):
                             # Image
                             # Image Logic (Handle Kits)
-                            # Image Logic (Handle Kits)
-                            # Start with product's own images
-                            display_thumbs = []
-                            if product.thumb_path:
-                                display_thumbs.append(product.thumb_path)
+                            display_thumbs = product_service.get_product_images(conn, product.id)
                             
-                            # ALways check for Kit Components to append (now PREPEND) their images
-                            kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(product.id,))
-                            if not kit_children.empty:
-                                c_ids = ",".join(map(str, kit_children['child_product_id'].tolist()))
-                                c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
-                                comp_imgs = []
-                                for _, ci_row in c_imgs_df.iterrows():
-                                    ci_list = eval(ci_row['image_paths']) if ci_row['image_paths'] else []
-                                    if ci_list: comp_imgs.extend(ci_list)
-                                
-                                # Prepend components (Prioritize dynamic)
-                                display_thumbs = comp_imgs + display_thumbs
-                            
-                            # Limit to distinct images (simple dedup by path string)
-                            seen = set()
-                            unique_thumbs = []
-                            for x in display_thumbs:
-                                if x not in seen:
-                                    unique_thumbs.append(x)
-                                    seen.add(x)
-                            
-                            display_thumbs = unique_thumbs[:3] # Show max 3 mixed images
-
                             if display_thumbs:
-                                # Cannot nest columns > 2 levels (CatalogCol -> GridCol -> ImageCol is too deep)
-                                # Passing list to st.image renders them (stacked vertically usually, but ensures visibility)
-                                st.image(display_thumbs, use_container_width=True)
+                                st.image(display_thumbs[:3], use_container_width=True)
                             else:
                                 st.markdown("🖼️ *Sem Foto*")
                             
                             # Stock Logic (Handle Kits)
                             display_stock = product.stock_quantity
-                            is_kit = False
+                            is_kit, kit_stock = product_service.get_kit_stock_status(conn, product.id)
                             
-                            # Check Kit Stock
-                            kit_stock_df = pd.read_sql("""
-                                SELECT pk.quantity, p.stock_quantity as child_stock 
-                                FROM product_kits pk
-                                JOIN products p ON pk.child_product_id = p.id
-                                WHERE pk.parent_product_id = ?
-                            """, conn, params=(product.id,))
-                            
-                            if not kit_stock_df.empty:
-                                is_kit = True
-                                kit_stock_df['max'] = kit_stock_df['child_stock'] // kit_stock_df['quantity']
-                                display_stock = int(kit_stock_df['max'].min())
-                                if display_stock < 0: display_stock = 0
+                            if is_kit:
+                                display_stock = kit_stock
                                 
                             st.markdown(f"**{product.name}**")
                             stock_txt = f"📦 Kit: {display_stock}" if is_kit else f"Est: {product.stock_quantity}"
@@ -289,17 +236,12 @@ with col_cart:
             real_stock = sel_row['stock_quantity']
             
             # Check Kit Stock (Quick Query)
-            ks_df = pd.read_sql("""
-                SELECT pk.quantity, p.stock_quantity as child_stock 
-                FROM product_kits pk
-                JOIN products p ON pk.child_product_id = p.id
-                WHERE pk.parent_product_id = ?
-            """, conn, params=(sel_row['id'],))
+            # Check Kit Stock (Quick Query)
+            is_kit, kit_stock = product_service.get_kit_stock_status(conn, sel_row['id'])
             
-            if not ks_df.empty:
-                ks_df['max'] = ks_df['child_stock'] // ks_df['quantity']
-                real_stock = int(ks_df['max'].min())
-                if real_stock < 0: real_stock = 0
+            if is_kit:
+                st.info(f"🧩 Produto Tipo Kit. Estoque Máximo: {kit_stock}")
+                real_stock = kit_stock
 
             if st.button("➕ Adicionar ao Carrinho", type="primary", use_container_width=True):
                 # Validar estoque (Apenas aviso, permitir encomenda)
@@ -547,33 +489,36 @@ with col_cart:
                                         total_sell = (unit_price * q_sell) - (unit_disc * q_sell)
                                         disc_sell = unit_disc * q_sell
                                         
-                                        cursor.execute("""
-                                            INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id)
-                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                        """, (date_order, int(it['product_id']), q_sell, total_sell, "Finalizada", final_client_id, disc_sell, pay_method_choice, notes_order, salesperson_choice, trans_uuid))
+                                        # Create Sale (Service)
+                                        sale_id = order_service.create_sale(cursor, {
+                                            "date": date_order,
+                                            "product_id": int(it['product_id']),
+                                            "quantity": q_sell,
+                                            "total_price": total_sell,
+                                            "status": "Finalizada",
+                                            "client_id": final_client_id,
+                                            "discount": disc_sell,
+                                            "payment_method": pay_method_choice,
+                                            "notes": notes_order,
+                                            "salesperson": salesperson_choice,
+                                            "order_id": trans_uuid
+                                        })
                                         
                                         # Audit
-                                        audit.log_action(conn, 'CREATE', 'sales', cursor.lastrowid, None, {'audit_msg': 'Partial Sale'}, commit=False)
+                                        audit.log_action(conn, 'CREATE', 'sales', sale_id, None, {'audit_msg': 'Partial Sale'}, commit=False)
                                         sales_created.append(f"{q_sell}x {it['product_name']}")
                                         
                                         # Deduct Stock (Logic duplicated from before)
-                                        # Deduct Stock (Logic duplicated from before)
-                                        p_id = int(it['product_id'])
-                                        kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(p_id,))
-                                        if not kit_comps.empty:
-                                            st.toast(f"ℹ️ Item ID {p_id} identificado como KIT. Baixando componentes...", icon="🧩")
-                                            for _, kc in kit_comps.iterrows():
-                                                qtd_deduct = q_sell * kc['quantity']
-                                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (int(qtd_deduct), int(kc['child_product_id'])))
-                                                st.toast(f" - Baixado {qtd_deduct} de Componente ID {kc['child_product_id']}", icon="📉")
-                                        else:
-                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (q_sell, p_id))
-                                            if cursor.rowcount == 0:
-                                                st.error(f"FALHA AO ATUALIZAR ESTOQUE DO PRODUTO ID {p_id}")
-                                            else:
-                                                # Debugging Stock Update
-                                                new_stock = cursor.execute("SELECT stock_quantity FROM products WHERE id=?", (p_id,)).fetchone()[0]
-                                                st.toast(f"LOG: Baixando {q_sell} de ID {p_id}. Linhas: {cursor.rowcount}. Estoque Novo (Transaction): {new_stock}", icon="📉")
+                                        # Deduct Stock (Service)
+                                        logs = product_service.deduct_stock(cursor, p_id, q_sell)
+                                        for log in logs:
+                                            st.toast(log, icon="📉")
+                                        
+                                        # Verify (Optional, kept for safety during transition)
+                                        try:
+                                            new_stock = cursor.execute("SELECT stock_quantity FROM products WHERE id=?", (p_id,)).fetchone()[0]
+                                            st.toast(f"LOG: Estoque Novo: {new_stock}", icon="📉")
+                                        except: pass
 
                                     # 1.2 Process Order Portion
                                     if q_order > 0:
@@ -593,29 +538,43 @@ with col_cart:
                                      if deposit_val > 0:
                                          final_notes += f"\n\nSinal no valor de R$ {deposit_val:.2f}, o restante do pagamento será realizado na entrega da encomenda."
 
-                                     cursor.execute("""
-                                        INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes, deposit_amount)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                                     """, (final_client_id, date.today(), d_comm, "Pendente", 0, final_notes, deposit_val))
-                                     new_ord_id = cursor.lastrowid
+                                     new_ord_id = order_service.create_commission_order(cursor, {
+                                         'client_id': final_client_id,
+                                         'date_created': date.today(),
+                                         'date_due': d_comm,
+                                         'status': "Pendente",
+                                         'total_price': 0, # Will be updated
+                                         'notes': final_notes,
+                                         'deposit_amount': deposit_val
+                                     })
                                      
-                                     total_ord_val = 0
+                                     # Prepare items for service
+                                     items_for_service = []
                                      for oi in order_items:
-                                         val = oi['qty'] * oi['price']
-                                         total_ord_val += val
-                                         cursor.execute("""
-                                            INSERT INTO commission_items (order_id, product_id, quantity, quantity_from_stock, unit_price)
-                                            VALUES (?, ?, ?, ?, ?)
-                                         """, (new_ord_id, int(oi['id']), oi['qty'], 0, oi['price']))
+                                         items_for_service.append({
+                                             'product_id': int(oi['id']),
+                                             'qty': oi['qty'],
+                                             'qty_from_stock': 0,
+                                             'unit_price': oi['price']
+                                         })
                                      
-                                     cursor.execute("UPDATE commission_orders SET total_price = ? WHERE id = ?", (total_ord_val, new_ord_id))
+                                     order_service.add_commission_items(cursor, new_ord_id, items_for_service)
                                      
                                      # Insert Deposit as Sale Record
                                      if deposit_val > 0:
-                                         cursor.execute("""
-                                             INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id)
-                                             VALUES (?, NULL, 1, ?, 'Finalizada', ?, 0, ?, ?, ?, ?)
-                                         """, (date.today(), deposit_val, final_client_id, pay_method_choice, f"Sinal de Encomenda #{new_ord_id}", salesperson_choice,  f"ENC-{new_ord_id}")) # Using ENC ID for reference logic? Or keeping trans_uuid? Let's use standard ENC ref.
+                                         order_service.create_sale(cursor, {
+                                              "date": date.today(),
+                                              "product_id": None,
+                                              "quantity": 1,
+                                              "total_price": deposit_val,
+                                              "status": "Finalizada",
+                                              "client_id": final_client_id,
+                                              "discount": 0,
+                                              "payment_method": pay_method_choice,
+                                              "notes": f"Sinal de Encomenda #{new_ord_id}",
+                                              "salesperson": salesperson_choice,
+                                              "order_id": f"ENC-{new_ord_id}"
+                                          })
 
                                      st.toast(f"Encomenda #{new_ord_id} gerada automaticamente!", icon="📦")
                                  
@@ -696,46 +655,52 @@ with col_cart:
                                  final_notes_B += f"\n\nSinal no valor de R$ {deposit_val:.2f}, o restante do pagamento será realizado na entrega da encomenda."
 
                              # Create Order Header
-                             cursor.execute("""
-                                INSERT INTO commission_orders (client_id, date_created, date_due, status, total_price, notes, deposit_amount)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                             """, (final_client_id, date.today(), d_comm, "Pendente", 0, final_notes_B, deposit_val))
-                             new_ord_id = cursor.lastrowid
+                             new_ord_id = order_service.create_commission_order(cursor, {
+                                 'client_id': final_client_id,
+                                 'date_created': date.today(),
+                                 'date_due': d_comm,
+                                 'status': "Pendente",
+                                 'total_price': 0, # Will be updated
+                                 'notes': final_notes_B,
+                                 'deposit_amount': deposit_val
+                             })
                              
-                             total_ord_val = 0
-                             
+                             items_for_service = []
                              for ca in cart_analysis:
                                 it = ca['item']
                                 q_full = it['qty']
                                 q_res = ca['can_sell'] if r_stock_chk else 0
                                 
-                                val = q_full * it['base_price']
-                                total_ord_val += val
-                                
-                                cursor.execute("""
-                                    INSERT INTO commission_items (order_id, product_id, quantity, quantity_from_stock, unit_price)
-                                    VALUES (?, ?, ?, ?, ?)
-                                """, (new_ord_id, int(it['product_id']), q_full, q_res, it['base_price']))
+                                items_for_service.append({
+                                    'product_id': int(it['product_id']),
+                                    'qty': q_full,
+                                    'qty_from_stock': q_res,
+                                    'unit_price': it['base_price']
+                                })
                                 
                                 # IF RESERVING, DEDUCT STOCK
                                 if q_res > 0:
-                                     # Kit Logic Deduct
-                                    p_id = int(it['product_id'])
-                                    kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(p_id,))
-                                    if not kit_comps.empty:
-                                        for _, kc in kit_comps.iterrows():
-                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (int(q_sell * kc['quantity']), int(kc['child_product_id'])))
-                                    else:
-                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (q_res, p_id))
+                                    logs = product_service.deduct_stock(cursor, int(it['product_id']), q_res)
+                                    for log in logs: st.toast(log, icon="📉")
 
-                             cursor.execute("UPDATE commission_orders SET total_price = ? WHERE id = ?", (total_ord_val, new_ord_id))
+                             order_service.add_commission_items(cursor, new_ord_id, items_for_service)
                              
                              # Insert Deposit as Sale Record
+                             # Insert Deposit as Sale Record
                              if deposit_val > 0:
-                                 cursor.execute("""
-                                     INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id)
-                                     VALUES (?, NULL, 1, ?, 'Finalizada', ?, 0, ?, ?, ?, ?)
-                                 """, (date.today(), deposit_val, final_client_id, pay_method_choice, f"Sinal de Encomenda #{new_ord_id}", salesperson_choice, f"ENC-{new_ord_id}"))
+                                  order_service.create_sale(cursor, {
+                                      "date": date.today(),
+                                      "product_id": None,
+                                      "quantity": 1,
+                                      "total_price": deposit_val,
+                                      "status": "Finalizada",
+                                      "client_id": final_client_id,
+                                      "discount": 0,
+                                      "payment_method": pay_method_choice,
+                                      "notes": f"Sinal de Encomenda #{new_ord_id}",
+                                      "salesperson": salesperson_choice,
+                                      "order_id": f"ENC-{new_ord_id}"
+                                  })
 
                              conn.commit()
                              
@@ -768,7 +733,15 @@ st.divider()
 
 # Secure History
 with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
-    if admin_utils.check_password():
+    curr_user = auth.get_current_user()
+    
+    # Session state for override
+    if "hist_auth_override" not in st.session_state:
+        st.session_state.hist_auth_override = False
+        
+    authorized = (curr_user and curr_user['role'] == 'admin') or st.session_state.hist_auth_override
+
+    if authorized:
         st.subheader("Gerenciar Vendas")
         
         # Filters
@@ -1088,5 +1061,17 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
             
             else:
                 st.info("Nenhuma venda encontrada com estes filtros.")
+
+    else:
+        st.warning("🔒 Acesso Restrito. Necessário autorização de Administrador.")
+        
+        pwd_auth = st.text_input("Senha de Administrador", type="password", key="hist_auth_pwd")
+        if pwd_auth:
+            if auth.verify_admin_authorization(conn, pwd_auth):
+                st.session_state.hist_auth_override = True
+                st.success("Acesso Autorizado!")
+                st.rerun()
+            else:
+                st.error("Senha incorreta.")
 
 conn.close()

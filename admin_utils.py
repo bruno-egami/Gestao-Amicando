@@ -3,52 +3,9 @@ import streamlit as st
 import time
 
 def check_password():
-    """Returns `True` if the user had the correct password."""
-
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == "admin":
-            st.session_state["password_correct"] = True
-            st.session_state["last_active"] = time.time() # Init timer
-            del st.session_state["password"]  # don't store password
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        # First run, show input for password.
-        st.text_input(
-            "Senha de Administrador", type="password", on_change=password_entered, key="password"
-        )
-        return False
-        
-    elif not st.session_state["password_correct"]:
-        # Password not correct, show input + error.
-        st.text_input(
-            "Senha de Administrador", type="password", on_change=password_entered, key="password"
-        )
-        st.error("Senha incorreta")
-        return False
-        
-    else:
-        # Password is correct, check timeout
-        if "last_active" in st.session_state:
-            if (time.time() - st.session_state["last_active"]) > 300: # 5 minutes = 300s
-                # Timed out
-                del st.session_state["password_correct"]
-                del st.session_state["last_active"]
-                st.error("Sessão expirada por inatividade (5 min). Faça login novamente.")
-                st.text_input(
-                    "Senha de Administrador", type="password", on_change=password_entered, key="password"
-                )
-                return False
-            else:
-                # Active -> Reset timer
-                st.session_state["last_active"] = time.time()
-                return True
-        else:
-            # Fallback if variable missing
-            st.session_state["last_active"] = time.time()
-            return True
+    # DEPRECATED: Use auth.require_role instead
+    st.error("Function check_password is deprecated and insecure. Use auth.py.")
+    return False
 
 def render_sidebar_logo():
     """Renders the logo in the sidebar if available."""
@@ -72,7 +29,11 @@ def save_image(uploaded_file, folder):
     if uploaded_file:
         if not os.path.exists(folder):
             os.makedirs(folder)
-        file_path = os.path.join(folder, uploaded_file.name)
+        # Security: Unique filename
+        import uuid
+        ext = os.path.splitext(uploaded_file.name)[1]
+        unique_name = f"{uuid.uuid4().hex}{ext}"
+        file_path = os.path.join(folder, unique_name)
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
         return file_path

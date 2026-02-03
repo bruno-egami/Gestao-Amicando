@@ -116,7 +116,10 @@ with tab1:
                     c1, c2, c3, c4, c5 = st.columns([1, 2, 1, 0.5, 0.5])
                     
                     # Image
-                    imgs = eval(row['image_paths']) if row['image_paths'] else []
+                    import ast
+                    try:
+                        imgs = ast.literal_eval(row['image_paths']) if row['image_paths'] else []
+                    except: imgs = []
                     
                     # Logic: Always fetch component images for Kits to ensure freshness
                     kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
@@ -125,7 +128,10 @@ with tab1:
                         c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
                         comp_imgs = []
                         for _, ci_row in c_imgs_df.iterrows():
-                            ci_list = eval(ci_row['image_paths']) if ci_row['image_paths'] else []
+                            try:
+                                import ast
+                                ci_list = ast.literal_eval(ci_row['image_paths']) if ci_row['image_paths'] else []
+                            except: ci_list = []
                             if ci_list:
                                 comp_imgs.extend(ci_list)
                         
@@ -372,8 +378,9 @@ with tab1:
                             INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
                             VALUES (?, ?, ?, ?, ?, 0, 0)
                         """, (new_name, new_desc, new_cat, new_markup, "[]"))
-                        conn.commit()
                         new_id = cursor.lastrowid
+                        audit.log_action(conn, 'CREATE', 'products', new_id, None, {'name': new_name}, commit=False)
+                        conn.commit()
                         
                         st.success(f"Produto '{new_name}' criado!")
                         st.session_state.editing_product_id = new_id # Switch to Edit Mode
@@ -518,7 +525,14 @@ with tab1:
                                 VALUES (?, ?, ?, ?, ?, ?, ?)
                             """, (dt.now().isoformat(), selected_prod_id, new_name, diff, user_id, username, "Ajuste Manual"))
 
+                    if not is_kit_edit:
+                         if new_stock != (int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0):
+                            pass # History log already handles this differently above
+
                     cursor.execute("UPDATE products SET name=?, category=?, description=?, stock_quantity=? WHERE id=?", (new_name, new_cat, new_desc, new_stock, selected_prod_id))
+                    audit.log_action(conn, 'UPDATE', 'products', selected_prod_id, 
+                        {'name': curr_prod['name'], 'stock': curr_prod['stock_quantity']},
+                        {'name': new_name, 'stock': new_stock}, commit=False)
                     conn.commit()
                     st.success("Detalhes atualizados!")
                     # Just update local var to avoid full rerun jump if possible, but rerun easiest to sync UI title
@@ -610,7 +624,10 @@ with tab1:
         with tab_images:
             st.caption("Gerencie as fotos do produto.")
             # Reuse logic from expanding section
-            curr_imgs = eval(curr_prod['image_paths']) if curr_prod['image_paths'] else []
+            try:
+                import ast
+                curr_imgs = ast.literal_eval(curr_prod['image_paths']) if curr_prod['image_paths'] else []
+            except: curr_imgs = []
             
             if curr_imgs:
                 cols = st.columns(4)
@@ -652,7 +669,10 @@ with tab1:
                 comp_prods = pd.read_sql(f"SELECT name, image_paths FROM products WHERE id IN ({id_list})", conn)
                 
                 for _, cp in comp_prods.iterrows():
-                    cp_imgs = eval(cp['image_paths']) if cp['image_paths'] else []
+                    try:
+                        import ast
+                        cp_imgs = ast.literal_eval(cp['image_paths']) if cp['image_paths'] else []
+                    except: cp_imgs = []
                     if cp_imgs:
                         st.caption(f"De: **{cp['name']}**")
                         c_imgs = st.columns(6)
@@ -752,6 +772,7 @@ with tab1:
                 cursor.execute("DELETE FROM product_recipes WHERE product_id=?", (selected_prod_id,))
                 cursor.execute("DELETE FROM product_kits WHERE parent_product_id=?", (selected_prod_id,))
                 cursor.execute("DELETE FROM products WHERE id=?", (selected_prod_id,))
+                audit.log_action(conn, 'DELETE', 'products', selected_prod_id, {'name': curr_prod['name']}, commit=False)
                 conn.commit()
                 st.success("Produto excluído.")
                 st.session_state.editing_product_id = None

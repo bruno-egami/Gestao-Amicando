@@ -5,6 +5,7 @@ Handles user login, password hashing, session management, and role-based access 
 import streamlit as st
 import bcrypt
 import time
+import pandas as pd
 from datetime import datetime
 
 # Role definitions
@@ -17,7 +18,6 @@ ROLES = {
 # Page access control - which roles can access which pages
 PAGE_ACCESS = {
     'Dashboard': ['admin', 'vendedor', 'visualizador'],
-    'Insumos': ['admin', 'vendedor'],
     'Insumos': ['admin', 'vendedor'],
     'Financeiro': ['admin'],
     'Queimas': ['admin'],
@@ -115,6 +115,31 @@ def login(conn, username: str, password: str) -> dict | None:
     except Exception as e:
         st.error(f"Erro de login: {e}")
         return None
+
+def verify_admin_authorization(conn, password: str) -> bool:
+    """
+    Verify if a given password belongs to an active admin user.
+    Useful for overriding restricted areas.
+    """
+    try:
+        # Check against specific 'admin' user or ANY admin? 
+        # Requirement usually implies the 'admin' superuser or any admin. 
+        # Let's check against the specific 'admin' user first for simplicity, 
+        # or iterate all admins? 'admin' user is guaranteed by create_default_admin.
+        # Let's use the 'admin' username for the override.
+        
+        user_df = pd.read_sql(
+            "SELECT password_hash FROM users WHERE username='admin' AND active=1", 
+            conn
+        )
+        
+        if user_df.empty:
+            return False
+            
+        return verify_password(password, user_df.iloc[0]['password_hash'])
+    except Exception as e:
+        print(f"Auth Check Error: {e}")
+        return False
 
 def get_current_user() -> dict | None:
     """Get the currently logged-in user from session state."""

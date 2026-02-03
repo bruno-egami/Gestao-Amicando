@@ -32,6 +32,7 @@ def delete_quote(quote_id):
         cursor = conn.cursor()
         cursor.execute("DELETE FROM quote_items WHERE quote_id=?", (quote_id,))
         cursor.execute("DELETE FROM quotes WHERE id=?", (quote_id,))
+        audit.log_action(conn, 'DELETE', 'quotes', quote_id, commit=False)
         conn.commit()
         return True
     except Exception as e:
@@ -143,6 +144,7 @@ with st.expander("➕ Novo Orçamento", expanded=False):
                         VALUES (?, ?, ?, 'Pendente', 0, ?, ?, ?)
                     """, (client_id, date.today().isoformat(), valid_date, nq_notes, nq_delivery, nq_payment))
                     conn.commit()
+                    audit.log_action(conn, 'CREATE', 'quotes', cursor.lastrowid, None, {'client_id': client_id, 'notes': nq_notes}, commit=True)
                     st.success("✅ Orçamento criado! Adicione produtos abaixo.")
                     st.rerun()
                 except Exception as e:
@@ -204,7 +206,8 @@ else:
     # Helper to get image path safely (return LIST)
     def get_img_paths(p_str):
         try:
-             l = eval(p_str)
+             import ast
+             l = ast.literal_eval(p_str)
              return l if l and isinstance(l, list) else []
         except: return []
 
@@ -269,7 +272,8 @@ else:
                     with ci1:
                         if item['image_paths']:
                             try:
-                                imgs = eval(item['image_paths'])
+                                import ast
+                                imgs = ast.literal_eval(item['image_paths'])
                                 if imgs and os.path.exists(imgs[0]):
                                     st.image(imgs[0], width=50)
                                 else:
@@ -437,7 +441,8 @@ else:
                                                 thumb = None
                                                 if product.image_paths:
                                                     try:
-                                                        paths = eval(product.image_paths)
+                                                        import ast
+                                                        paths = ast.literal_eval(product.image_paths)
                                                         if paths and os.path.exists(paths[0]):
                                                             thumb = paths[0]
                                                     except: pass
@@ -647,6 +652,7 @@ else:
                     if st.button("❌ Recusar", key=f"reject_{quote['id']}"):
                         cursor = conn.cursor()
                         cursor.execute("UPDATE quotes SET status='Recusado' WHERE id=?", (quote['id'],))
+                        audit.log_action(conn, 'UPDATE', 'quotes', quote['id'], {'status': quote['status']}, {'status': 'Recusado'}, commit=False)
                         conn.commit()
                         st.warning("Orçamento marcado como recusado.")
                         st.rerun()

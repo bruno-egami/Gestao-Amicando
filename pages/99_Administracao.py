@@ -515,7 +515,6 @@ with tab_export:
         elif export_type == "Produtos":
             # Match Import Schema: ["Nome", "Preço Base", "Estoque", "Categoria", "Peso (g)"]
             query = """
-            query = """
                 SELECT 
                     p.id as ID_INTERNO,
                     p.name as "Nome", 
@@ -544,7 +543,8 @@ with tab_export:
                 
                 if not kits.empty:
                     # Format: KIT: Item1: Qtd; Item2: Qtd
-                    items = [f"{k['name']}: {k['quantity']}" for _, k in kits.iterrows()]
+                    # Sanitize name to avoid breaking the ';' delimiter
+                    items = [f"{k['name'].replace(';', ',')}: {k['quantity']}" for _, k in kits.iterrows()]
                     comp_str = "KIT: " + "; ".join(items)
                 else:
                     # 2. Check Recipe
@@ -557,7 +557,7 @@ with tab_export:
                     
                     if not recipes.empty:
                         # Format: RECIPE: Mat1: Qtd; Mat2: Qtd
-                        items = [f"{r['name']}: {r['quantity']}" for _, r in recipes.iterrows()]
+                        items = [f"{r['name'].replace(';', ',')}: {r['quantity']}" for _, r in recipes.iterrows()]
                         comp_str = "RECIPE: " + "; ".join(items)
                 
                 comp_list.append(comp_str)
