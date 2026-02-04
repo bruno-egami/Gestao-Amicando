@@ -142,7 +142,26 @@ else:
         created_dt = pd.to_datetime(order['date_created']) if order['date_created'] else datetime.now()
         fmt_id = f"ENC-{created_dt.strftime('%y%m%d')}-{order['id']}"
         
-        with st.expander(f"📦 {fmt_id} - {order['client']} (Prazo: {pd.to_datetime(order['date_due']).strftime('%d/%m/%Y')}) - {order['status']}"):
+        # Status Color Logic
+        today = date.today()
+        due_date = pd.to_datetime(order['date_due']).date()
+        is_overdue = due_date < today and order['status'] not in ['Entregue', 'Concluída']
+        
+        status_color = "grey"
+        if order['status'] == 'Concluída':
+            status_color = "green"
+        elif order['status'] == 'Em Produção':
+            status_color = "blue"
+        elif order['status'] == 'Pendente':
+            status_color = "orange"
+            
+        # Overwrite if overdue
+        if is_overdue:
+            status_color = "red"
+            
+        status_text = f":{status_color}[{order['status']}]"
+        
+        with st.expander(f"📦 {fmt_id} - {order['client']} (Prazo: {due_date.strftime('%d/%m/%Y')}) - {status_text}"):
             
             # Fetch Items
             # Fetch Items
@@ -547,8 +566,25 @@ else:
                                             """, (date.today().isoformat(), rd['mid'], deducted_qty, f"Produção Encomenda #{fmt_id}"))
                                         
                                         # Update Item
+                                        # LOGIC CHANGE: Check if order is fully complete
+                                        # 1. Update this item
                                         cursor.execute("UPDATE commission_items SET quantity_produced = quantity_produced + ? WHERE id=?", (amount, item['id']))
-                                        cursor.execute("UPDATE commission_orders SET status='Em Produção' WHERE id=?", (order['id'],))
+                                        
+                                        # 2. Check pending items (excluding reserved stock from requirement if handled elsewhere, but here logic is target = qty - from_stock)
+                                        # Query pending items for THIS order
+                                        cursor.execute("""
+                                            SELECT COUNT(*) FROM commission_items 
+                                            WHERE order_id=? AND quantity_produced < (quantity - quantity_from_stock)
+                                        """, (order['id'],))
+                                        pending_count = cursor.fetchone()[0]
+                                        
+                                        new_status = 'Concluída' if pending_count == 0 else 'Em Produção'
+                                        
+                                        cursor.execute("UPDATE commission_orders SET status=? WHERE id=?", (new_status, order['id']))
+                                        # Log status change if it changed
+                                        if old_order_status != new_status:
+                                            audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], 
+                                                {'status': old_order_status}, {'status': new_status})
                                         
                                         # Log production history
                                         from datetime import datetime as dt
@@ -575,11 +611,7 @@ else:
                                         })
                                         audit.log_action(conn, 'UPDATE', 'commission_items', item.get('id'), 
                                             {'quantity_produced': item.get('quantity_produced')}, {'quantity_produced': item.get('quantity_produced', 0) + amount})
-                                        if old_order_status != 'Em Produção':
-                                            audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], 
-                                                {'status': old_order_status}, {'status': 'Em Produção'})
-                                        
-                                        success = True
+                                    
                                     except Exception as e:
                                         conn.rollback()
                                         st.error(f"Erro: {e}")
@@ -644,8 +676,18 @@ else:
 
             st.divider()
             
-            # Delivery Action
+            # Delivery / Completion Actions
             if all_complete and order['status'] != 'Entregue':
+                # Option to mark as "Ready" (Concluído) without delivering yet
+                if order['status'] != 'Concluída':
+                    if st.button("🏁 Marcar como Pronto", key=f"ready_{order['id']}", help="Marcar produção como finalizada e aguardando retirada"):
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE commission_orders SET status='Concluída' WHERE id=?", (order['id'],))
+                        audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], {'status': order['status']}, {'status': 'Concluída'})
+                        conn.commit()
+                        st.success("Status atualizado para Concluído!")
+                        st.rerun()
+
                 if st.button("📦 Realizar Entrega", key=f"dlv_{order['id']}"):
                     # 1. Re-inject ALL items to stock momentarily
                     success = False
