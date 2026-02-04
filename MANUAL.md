@@ -228,11 +228,18 @@ Gerencia matérias-primas (argilas, esmaltes, etc.).
 Gerencia itens para venda.
 
 ### 6.1 Cadastrar
-
 1. Clique em **"➕ Novo Produto"**
-2. Preencha: nome, categoria, preço, estoque
+2. Preencha: nome, categoria, preço base, estoque
 3. Adicione foto (opcional)
 4. Salve
+
+### 6.1a Variações (Esmaltes/Cores)
+Após cadastrar o produto:
+1. Localize o produto na lista
+2. Clique em **"🎨 Variações"**
+3. Adicione o nome da variação (ex: "Esmalte Azul") 
+4. Defina o acréscimo de preço (se houver) e o estoque específico daquela variação
+5. Salve. Agora esta opção aparecerá nas vendas e encomendas!
 
 ### 6.2 Kits
 
@@ -320,26 +327,26 @@ Registra uso dos fornos.
 
 ---
 
-## 10. Vendas
+## 10. Vendas e Orçamentos
 
-Funciona como Ponto de Venda.
+Funciona como Ponto de Venda e Gerenciador de Cotações.
 
 ### 10.1 Realizar Venda
-
 1. Clique em **"🛒 Nova Venda"**
-2. Selecione produtos e quantidades
-3. Escolha cliente (opcional)
+2. Selecione produtos (e variações, se houver) e quantidades
+3. Escolha o cliente
 4. Selecione forma de pagamento
-5. Aplique desconto se necessário
-6. Finalize
+5. Clique em **"✅ Finalizar Venda"**
 
-### 10.2 Recibo
-
-Após a venda, você pode gerar recibo em PDF.
+### 10.2 Criar Orçamento
+1. Adicione os itens no carrinho normalmente
+2. Em vez de finalizar, clique em **"📄 Criar Orçamento"**
+3. Preencha a validade, prazo e observações
+4. O orçamento ficará salvo na aba **"Orçamentos Salvos"**
+5. Você pode gerar PDF, Aprovar (vira encomenda) ou Recusar/Excluir
 
 ### 10.3 Histórico
-
-Consulte vendas anteriores com filtros por período, cliente ou produto.
+Consulte vendas e orçamentos anteriores com filtros por período, cliente ou produto.
 
 ---
 
@@ -358,17 +365,20 @@ Pedidos de produtos sob demanda.
 
 ### 11.2 Status
 
-| Status | Significado |
-|--------|-------------|
-| Pendente | Aguardando produção |
-| Em Produção | Fabricando |
-| Concluída | Pronto |
-| Entregue | Cliente recebeu |
+| Status | Cor | Significado |
+|--------|-----|-------------|
+| :orange[Pendente] | Laranja | Aguardando início da produção |
+| :blue[Em Produção] | Azul | Itens sendo fabricados |
+| :green[Concluída] | Verde | Tudo pronto, aguardando retirada |
+| :red[Atrasado] | Vermelho | Prazo vencido e não entregue |
+| :grey[Entregue] | Cinza | Pedido entregue ao cliente |
 
-### 11.3 Finalizar
+### 11.3 Finalizar/Produzir
 
-1. Altere para "Concluída" quando pronto
-2. Altere para "Entregue" quando cliente retirar
+1. Acompanhe a produção item a item clicando em "Lançar Produção"
+2. **Automação**: Quando o último item for produzido, o status muda automaticamente para **"Concluída"**
+3. **Manual**: Se precisar, use o botão **"🏁 Marcar como Pronto"**
+4. Quando o cliente retirar, clique em **"📦 Realizar Entrega"** para finalizar e baixar do estoque temporário se necessário.
 
 ---
 

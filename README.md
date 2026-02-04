@@ -12,6 +12,7 @@ Sistema completo de gestão para ateliês de cerâmica artesanal, desenvolvido e
 
 ### 📦 Gestão de Produtos
 - Cadastro de produtos com preço, categoria e estoque
+- **Variações de Produtos** (ex: diferentes esmaltes/cores com ajuste de preço)
 - Sistema de **Kits** (produtos compostos por outros produtos)
 - Receitas de produtos vinculando matérias-primas
 - Controle automático de estoque
@@ -24,11 +25,13 @@ Sistema completo de gestão para ateliês de cerâmica artesanal, desenvolvido e
 
 ### 💰 Vendas e Encomendas
 - **Venda Direta**: Produtos em estoque vendidos imediatamente
+- **Orçamentos**: Criação, aprovação e conversão automática em encomenda
 - **Encomendas**: Produtos sob demanda com:
   - Prazo de entrega personalizável (padrão: 30 dias)
   - Sinal/depósito antecipado
-  - Acompanhamento de produção
-- Geração de **recibos em PDF**
+  - Acompanhamento de produção (Status com cores e alertas)
+  - Automação de status "Concluída"
+- Geração de **recibos e orçamentos em PDF**
 - Histórico completo de vendas
 
 ### 📊 Gestão Financeira
@@ -133,15 +136,15 @@ Gestao-Amicando/
 ├── reports.py            # Geração de PDFs
 ├── admin_utils.py        # Utilitários administrativos
 ├── pages/
-│   ├── 1_Insumos.py      # Gestão de matérias-primas
-│   ├── 2_Produtos.py     # Cadastro de produtos
-│   ├── 3_Financeiro.py   # Despesas e relatórios
-│   ├── 4_Queimas.py      # Registro de queimas
-│   ├── 5_Clientes.py     # Gestão de clientes
-│   ├── 6_Vendas.py       # PDV e histórico
-│   ├── 9_Encomendas.py   # Gestão de encomendas
-│   ├── 10_Relatorios.py  # Central de Relatórios (16 tipos)
-│   └── 99_Administracao.py # Painel administrativo
+├── 1_Insumos.py      # Gestão de matérias-primas
+├── 2_Produtos.py     # Cadastro de produtos (Variações e Kits)
+├── 3_Financeiro.py   # Despesas e relatórios
+├── 4_Queimas.py      # Registro de queimas
+├── 5_Clientes.py     # Gestão de clientes
+├── 6_Vendas.py       # PDV, Orçamentos e Histórico
+├── 9_Encomendas.py   # Gestão de encomendas e produção
+├── 10_Relatorios.py  # Central de Relatórios (16 tipos)
+└── 99_Administracao.py # Painel administrativo
 ├── assets/               # Imagens e uploads
 ├── data/                 # Banco de dados SQLite
 └── requirements.txt      # Dependências Python
