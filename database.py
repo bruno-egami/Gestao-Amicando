@@ -582,6 +582,26 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_supplier ON expenses(supplier_id)")
     
+    # Production WIP (Work In Progress/Kanban)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS production_wip (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
+            variant_id INTEGER, 
+            order_id INTEGER,
+            order_item_id INTEGER,
+            stage TEXT CHECK( stage IN ('Modelagem', 'Secagem', 'Biscoito', 'Esmaltação', 'Queima de Alta') ),
+            quantity INTEGER NOT NULL,
+            start_date TEXT, -- Data agendada ou real de início
+            materials_deducted BOOLEAN DEFAULT 0, -- Controle se a massa/argila já foi baixada
+            stage_history TEXT, -- Histórico de datas por etapa (JSON)
+            notes TEXT,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (order_id) REFERENCES commission_orders(id),
+            FOREIGN KEY (order_item_id) REFERENCES commission_items(id)
+        )
+    ''')
+    
     # Commission Orders indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON commission_orders(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_date_due ON commission_orders(date_due)")

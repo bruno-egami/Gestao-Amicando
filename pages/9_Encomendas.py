@@ -26,17 +26,24 @@ st.title("📦 Gestão de Encomendas")
 cursor = conn.cursor()
 
 # --- FILTERS & MANAGEMENT ---
+# --- Dialogs ---
+@st.dialog("Entrega Realizada")
+def show_delivery_success(pdf_data, pdf_name):
+    st.balloons()
+    st.success("✅ Entrega realizada e registrada com sucesso!")
+    st.download_button("📄 BAIXAR RECIBO (FINAL)", data=pdf_data, file_name=pdf_name, mime="application/pdf", type="primary")
+
 if 'delivered_pdf' in st.session_state:
     d_pdf = st.session_state['delivered_pdf']
     d_name = st.session_state.get('delivered_name', 'recibo.pdf')
-    st.balloons()
-    with st.container():
-        st.success("✅ Entrega realizada e registrada com sucesso!")
-        st.download_button("📄 BAIXAR RECIBO (FINAL)", data=d_pdf, file_name=d_name, mime="application/pdf", type="primary")
-        if st.button("Fechar aviso"):
-            del st.session_state['delivered_pdf']
-            st.rerun()
-    st.divider()
+    
+    # Show Dialog
+    show_delivery_success(d_pdf, d_name)
+    
+    # Clear state immediately so it doesn't persist on reload/nav
+    del st.session_state['delivered_pdf']
+    if 'delivered_name' in st.session_state:
+        del st.session_state['delivered_name']
 
 st.subheader("Gerenciar Pedidos")
     
@@ -89,7 +96,7 @@ kf1, kf2, kf3 = st.columns([1.5, 1.5, 2])
 with kf1:
     # Status Filter
     all_statuses = ["Pendente", "Em Produção", "Concluída", "Entregue"]
-    sel_status = st.multiselect("Status", all_statuses, default=["Pendente", "Em Produção"])
+    sel_status = st.multiselect("Status", all_statuses, default=["Pendente", "Em Produção", "Concluída"])
 
 with kf2:
     # Client Filter
@@ -142,6 +149,9 @@ else:
         created_dt = pd.to_datetime(order['date_created']) if order['date_created'] else datetime.now()
         fmt_id = f"ENC-{created_dt.strftime('%y%m%d')}-{order['id']}"
         
+        # Determine if expanded
+        is_expanded = (st.session_state.get('expanded_order_id') == order['id'])
+        
         # Status Color Logic
         today = date.today()
         due_date = pd.to_datetime(order['date_due']).date()
@@ -161,7 +171,7 @@ else:
             
         status_text = f":{status_color}[{order['status']}]"
         
-        with st.expander(f"📦 {fmt_id} - {order['client']} (Prazo: {due_date.strftime('%d/%m/%Y')}) - {status_text}"):
+        with st.expander(f"📦 {fmt_id} - {order['client']} (Prazo: {due_date.strftime('%d/%m/%Y')}) - {status_text}", expanded=is_expanded):
             
             # Fetch Items
             # Fetch Items
@@ -510,115 +520,159 @@ else:
                 
                 with ci2:
                     produced = item['quantity_produced']
+                    # WIP Qty
+                    wip_res = pd.read_sql("SELECT SUM(quantity) as qty FROM production_wip WHERE order_item_id=?", conn, params=(item['id'],))
+                    wip_qty = wip_res.iloc[0]['qty'] if not wip_res.empty and pd.notna(wip_res.iloc[0]['qty']) else 0
+                    
+                    total_acc = produced + wip_qty
+                    remaining = max(0, target_prod - total_acc)
                     
                     # Progress
                     if target_prod > 0:
-                        pct = min(1.0, produced / target_prod)
-                        st.progress(pct, text=f"{produced}/{target_prod} Produzidos")
+                        pct = min(1.0, total_acc / target_prod)
+                        st.progress(pct, text=f"{produced} Pronto | {wip_qty} Fluxo | {remaining} Falta")
                         
-                        if produced < target_prod:
+                        if remaining > 0:
                             all_complete = False
-                            # Production Input
-                            with st.popover("Lançar Produção"):
-                                amount = st.number_input("Qtd", min_value=1, max_value=(target_prod - produced), key=f"prod_in_{item['id']}")
-                                if st.button("Confirmar", key=f"conf_{item['id']}"):
-                                    # Deduct materials query...
-                                    # Deduct materials query (Handle Kits Recursively)
-                                    # 1. Get Direct Recipe
-                                    recipes_to_deduct = []
-                                    
-                                    # Check direct recipe
-                                    direct_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(item['product_id'],))
-                                    for _, r in direct_recipe.iterrows():
-                                        recipes_to_deduct.append({'mid': r['material_id'], 'qty_per_unit': r['quantity']})
+                            all_complete = False
+                            # Production Options (Quick vs WIP)
+                            b_quick, b_wip = st.columns(2)
+                            
+                            with b_quick:
+                                with st.popover("⚡ Registrar Produção", use_container_width=True):
+                                    st.caption("Baixa estoque e finaliza imediatamente")
+                                    amount = st.number_input("Qtd", min_value=1, max_value=remaining, key=f"prod_in_{item['id']}")
+                                    if st.button("Confirmar", key=f"conf_{item['id']}", type="primary"):
+                                        # Deduct materials query...
+                                        # Deduct materials query (Handle Kits Recursively)
+                                        # 1. Get Direct Recipe
+                                        recipes_to_deduct = []
                                         
-                                    # Check Kit Children Recipes
-                                    kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(item['product_id'],))
-                                    for _, kc in kit_comps.iterrows():
-                                        # For each child, get its recipe
-                                        child_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(int(kc['child_product_id']),))
-                                        for _, cr in child_recipe.iterrows():
-                                            # Total Qty = Child Qty in Kit * Ingredient Qty in Child
-                                            recipes_to_deduct.append({'mid': cr['material_id'], 'qty_per_unit': cr['quantity'] * kc['quantity']})
+                                        # Check direct recipe
+                                        direct_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(item['product_id'],))
+                                        for _, r in direct_recipe.iterrows():
+                                            recipes_to_deduct.append({'mid': r['material_id'], 'qty_per_unit': r['quantity']})
+                                            
+                                        # Check Kit Children Recipes
+                                        kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(item['product_id'],))
+                                        for _, kc in kit_comps.iterrows():
+                                            # For each child, get its recipe
+                                            child_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(int(kc['child_product_id']),))
+                                            for _, cr in child_recipe.iterrows():
+                                                # Total Qty = Child Qty in Kit * Ingredient Qty in Child
+                                                recipes_to_deduct.append({'mid': cr['material_id'], 'qty_per_unit': cr['quantity'] * kc['quantity']})
 
-                                    # Check Variant Recipe (Material)
-                                    if item.get('variant_id') and item['variant_id'] > 0:
-                                        var_info = pd.read_sql("SELECT material_id, material_quantity FROM product_variants WHERE id=?", conn, params=(item['variant_id'],))
-                                        if not var_info.empty:
-                                            vi = var_info.iloc[0]
-                                            if vi['material_id'] and vi['material_quantity'] > 0:
-                                                 recipes_to_deduct.append({'mid': vi['material_id'], 'qty_per_unit': vi['material_quantity']})
+                                        # Check Variant Recipe (Material)
+                                        if item.get('variant_id') and item['variant_id'] > 0:
+                                            var_info = pd.read_sql("SELECT material_id, material_quantity FROM product_variants WHERE id=?", conn, params=(item['variant_id'],))
+                                            if not var_info.empty:
+                                                vi = var_info.iloc[0]
+                                                if vi['material_id'] and vi['material_quantity'] > 0:
+                                                     recipes_to_deduct.append({'mid': vi['material_id'], 'qty_per_unit': vi['material_quantity']})
 
-                                    success = False
-                                    old_order_status = order['status']
-                                    cursor.execute("BEGIN TRANSACTION")
-                                    try:
-                                        # Update Materials
-                                        for rd in recipes_to_deduct:
-                                            deducted_qty = rd['qty_per_unit'] * amount
-                                            cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", 
-                                                          (deducted_qty, rd['mid']))
-                                             
-                                            # Log Transaction
+                                        success = False
+                                        old_order_status = order['status']
+                                        cursor.execute("BEGIN TRANSACTION")
+                                        try:
+                                            # Update Materials
+                                            for rd in recipes_to_deduct:
+                                                deducted_qty = rd['qty_per_unit'] * amount
+                                                cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", 
+                                                              (deducted_qty, rd['mid']))
+                                                 
+                                                # Log Transaction
+                                                cursor.execute("""
+                                                    INSERT INTO inventory_transactions (date, material_id, quantity, type, notes)
+                                                    VALUES (?, ?, ?, 'production', ?)
+                                                """, (date.today().isoformat(), rd['mid'], deducted_qty, f"Produção Rápida Encomenda #{fmt_id}"))
+                                            
+                                            # Update Item
+                                            # LOGIC CHANGE: Check if order is fully complete
+                                            # 1. Update this item
+                                            cursor.execute("UPDATE commission_items SET quantity_produced = quantity_produced + ? WHERE id=?", (amount, item['id']))
+                                            
+                                            # 2. Check pending items (excluding reserved stock from requirement if handled elsewhere, but here logic is target = qty - from_stock)
+                                            # Query pending items for THIS order
                                             cursor.execute("""
-                                                INSERT INTO inventory_transactions (date, material_id, quantity, type, notes)
-                                                VALUES (?, ?, ?, 'production', ?)
-                                            """, (date.today().isoformat(), rd['mid'], deducted_qty, f"Produção Encomenda #{fmt_id}"))
+                                                SELECT COUNT(*) FROM commission_items 
+                                                WHERE order_id=? AND quantity_produced < (quantity - quantity_from_stock)
+                                            """, (order['id'],))
+                                            pending_count = cursor.fetchone()[0]
+                                            
+                                            new_status = 'Concluída' if pending_count == 0 else 'Em Produção'
+                                            
+                                            cursor.execute("UPDATE commission_orders SET status=? WHERE id=?", (new_status, order['id']))
+                                            # Log status change if it changed
+                                            if old_order_status != new_status:
+                                                audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], 
+                                                    {'status': old_order_status}, {'status': new_status})
+                                            
+                                            # Log production history
+                                            from datetime import datetime as dt
+                                            user_id, username = None, 'system'
+                                            if 'current_user' in st.session_state and st.session_state.current_user:
+                                                user_id = st.session_state.current_user.get('id')
+                                                username = st.session_state.current_user.get('username', 'unknown')
+                                            
+                                            # Get product name
+                                            prod_name_row = pd.read_sql("SELECT name FROM products WHERE id=?", conn, params=(item['product_id'],))
+                                            prod_name = prod_name_row.iloc[0]['name'] if not prod_name_row.empty else 'Produto'
+                                            
+                                            cursor.execute("""
+                                                INSERT INTO production_history (timestamp, product_id, product_name, quantity, order_id, user_id, username)
+                                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                            """, (dt.now().isoformat(), item['product_id'], prod_name, amount, order['id'], user_id, username))
+                                            new_hist_id = cursor.lastrowid
+                                            
+                                            conn.commit()
+                                            
+                                            # Audit Log
+                                            audit.log_action(conn, 'CREATE', 'production_history', new_hist_id, None, {
+                                                'product_id': item.get('product_id'), 'product_name': prod_name, 'quantity': amount, 'order_id': order.get('id')
+                                            })
+                                            audit.log_action(conn, 'UPDATE', 'commission_items', item.get('id'), 
+                                                {'quantity_produced': item.get('quantity_produced')}, {'quantity_produced': item.get('quantity_produced', 0) + amount})
                                         
-                                        # Update Item
-                                        # LOGIC CHANGE: Check if order is fully complete
-                                        # 1. Update this item
-                                        cursor.execute("UPDATE commission_items SET quantity_produced = quantity_produced + ? WHERE id=?", (amount, item['id']))
+                                        except Exception as e:
+                                            conn.rollback()
+                                            st.error(f"Erro: {e}")
                                         
-                                        # 2. Check pending items (excluding reserved stock from requirement if handled elsewhere, but here logic is target = qty - from_stock)
-                                        # Query pending items for THIS order
-                                        cursor.execute("""
-                                            SELECT COUNT(*) FROM commission_items 
-                                            WHERE order_id=? AND quantity_produced < (quantity - quantity_from_stock)
-                                        """, (order['id'],))
-                                        pending_count = cursor.fetchone()[0]
-                                        
-                                        new_status = 'Concluída' if pending_count == 0 else 'Em Produção'
-                                        
-                                        cursor.execute("UPDATE commission_orders SET status=? WHERE id=?", (new_status, order['id']))
-                                        # Log status change if it changed
-                                        if old_order_status != new_status:
-                                            audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], 
-                                                {'status': old_order_status}, {'status': new_status})
-                                        
-                                        # Log production history
-                                        from datetime import datetime as dt
-                                        user_id, username = None, 'system'
-                                        if 'current_user' in st.session_state and st.session_state.current_user:
-                                            user_id = st.session_state.current_user.get('id')
-                                            username = st.session_state.current_user.get('username', 'unknown')
-                                        
-                                        # Get product name
-                                        prod_name_row = pd.read_sql("SELECT name FROM products WHERE id=?", conn, params=(item['product_id'],))
-                                        prod_name = prod_name_row.iloc[0]['name'] if not prod_name_row.empty else 'Produto'
-                                        
-                                        cursor.execute("""
-                                            INSERT INTO production_history (timestamp, product_id, product_name, quantity, order_id, user_id, username)
-                                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                                        """, (dt.now().isoformat(), item['product_id'], prod_name, amount, order['id'], user_id, username))
-                                        new_hist_id = cursor.lastrowid
-                                        
-                                        conn.commit()
-                                        
-                                        # Audit Log
-                                        audit.log_action(conn, 'CREATE', 'production_history', new_hist_id, None, {
-                                            'product_id': item.get('product_id'), 'product_name': prod_name, 'quantity': amount, 'order_id': order.get('id')
-                                        })
-                                        audit.log_action(conn, 'UPDATE', 'commission_items', item.get('id'), 
-                                            {'quantity_produced': item.get('quantity_produced')}, {'quantity_produced': item.get('quantity_produced', 0) + amount})
+                                        if success:
+                                            st.session_state['expanded_order_id'] = order['id']
+                                            st.success("Produção lançada!")
+                                            st.rerun()
+
+                            with b_wip:
+                                with st.popover("⏳ Iniciar Produção", use_container_width=True):
+                                    st.caption("Envia para Kanban (Modelagem)")
+                                    wip_amount = st.number_input("Qtd", min_value=1, max_value=remaining, value=remaining, key=f"wip_in_{item['id']}")
+                                    wip_date = st.date_input("Data Início", value=date.today(), key=f"wip_date_{item['id']}")
                                     
-                                    except Exception as e:
-                                        conn.rollback()
-                                        st.error(f"Erro: {e}")
-                                    
-                                    if success:
-                                        st.success("Produção lançada!")
-                                        st.rerun()
+                                    if st.button("Iniciar", key=f"wip_go_{item['id']}", type="primary"):
+                                        success = False
+                                        cursor.execute("BEGIN TRANSACTION")
+                                        try:
+                                            # Insert into WIP (materials_deducted = 0)
+                                            cursor.execute("""
+                                                INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, notes)
+                                                VALUES (?, ?, ?, ?, 'Modelagem', ?, ?, 0, ?)
+                                            """, (item['product_id'], item['variant_id'], order['id'], item['id'], wip_amount, wip_date.isoformat(), item.get('notes')))
+                                            
+                                            # Update Order Status to "Em Produção" if not already
+                                            if order['status'] == 'Pendente':
+                                                cursor.execute("UPDATE commission_orders SET status='Em Produção' WHERE id=?", (order['id'],))
+                                                audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], {'status': 'Pendente'}, {'status': 'Em Produção'})
+                                            
+                                            conn.commit()
+                                            success = True
+                                        except Exception as e:
+                                            conn.rollback()
+                                            st.error(f"Erro: {e}")
+                                            
+                                        if success:
+                                            st.session_state['expanded_order_id'] = order['id']
+                                            st.success("Enviado para Fluxo de Produção!")
+                                            st.rerun()
                     else:
                         st.success("✅ Produção Concluída (ou Totalmente Reservado)")
 
@@ -672,6 +726,7 @@ else:
                             st.error(f"Erro ao excluir item: {e}")
                         
                         if success:
+                            st.session_state['expanded_order_id'] = order['id']
                             st.rerun()
 
             st.divider()
@@ -685,6 +740,7 @@ else:
                         cursor.execute("UPDATE commission_orders SET status='Concluída' WHERE id=?", (order['id'],))
                         audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], {'status': order['status']}, {'status': 'Concluída'})
                         conn.commit()
+                        st.session_state['expanded_order_id'] = order['id']
                         st.success("Status atualizado para Concluído!")
                         st.rerun()
 
@@ -813,6 +869,7 @@ else:
                         # Set Session State to show Download Button after rerun
                         st.session_state['delivered_pdf'] = pdf_bytes
                         st.session_state['delivered_name'] = f"Recibo_Final_{formatted_id}.pdf"
+                        st.session_state['expanded_order_id'] = order['id']
                         
                         st.rerun()
 
