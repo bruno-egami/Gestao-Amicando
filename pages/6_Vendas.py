@@ -130,6 +130,78 @@ if 'cart' not in st.session_state:
 if 'selected_product_id' not in st.session_state:
     st.session_state['selected_product_id'] = None
 
+# --- DIALOG DEFINITION ---
+@st.dialog("Criar Orçamento")
+def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_choice_val, n_name, n_phone, c_dict):
+     st.write(f"Cliente: {client_display_name}")
+     
+     qd_valid = st.number_input("Validade (dias)", value=30, min_value=1)
+     qd_deliv = st.text_input("Prazo Entrega", value="45 dias após confirmação")
+     qd_pay = st.text_input("Condições Pagamento", value="50% entrada + saldo na entrega")
+     qd_note = st.text_area("Observações", value=initial_notes)
+     
+     if st.button("Confirmar Criação", type="primary"):
+         try:
+             conn = database.get_connection() # Re-acquire inside thread/dialog context safe? Yes.
+             cursor = conn.cursor()
+             
+             # Create Client if needed
+             final_cid = None
+             if cli_choice_val == "++ Cadastrar Novo ++":
+                  cursor.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", (n_name, n_phone))
+                  conn.commit()
+                  final_cid = cursor.lastrowid
+             else:
+                  # Handle bytes id issue if c_dict has bytes?
+                  # The dict comes from helper which usually resolves?
+                  # Let's assume passed c_dict values are usable.
+                  final_cid = c_dict[cli_choice_val]
+             
+             if isinstance(final_cid, bytes): final_cid = int.from_bytes(final_cid, "little")
+
+             # Create Quote
+             valid_until = (date.today() + pd.Timedelta(days=qd_valid)).isoformat()
+             
+             # Ensure connection is fresh?
+             # cursor.execute might fail if connection closed?
+             # We got new connection above.
+             
+             cursor.execute("""
+                INSERT INTO quotes (client_id, date_created, date_valid_until, status, total_price, notes, delivery_terms, payment_terms)
+                VALUES (?, ?, ?, 'Pendente', 0, ?, ?, ?)
+             """, (final_cid, date.today().isoformat(), valid_until, qd_note, qd_deliv, qd_pay))
+             
+             quote_id = cursor.lastrowid
+             if isinstance(quote_id, bytes): quote_id = int.from_bytes(quote_id, "little")
+             
+             # Insert Items
+             running_total = 0.0
+             for item in cart_items:
+                 note_txt = ""
+                 if item.get('variant_name'):
+                     note_txt = f"Variação: {item['variant_name']}"
+                     
+                 p_id = int(item['product_id'])
+                 qty = int(item['qty'])
+                 price = float(item['base_price'])
+                 
+                 cursor.execute("INSERT INTO quote_items (quote_id, product_id, quantity, unit_price, item_notes) VALUES (?, ?, ?, ?, ?)", 
+                                (quote_id, p_id, qty, price, note_txt))
+                 
+                 running_total += (qty * price)
+
+             # Update Total
+             cursor.execute("UPDATE quotes SET total_price=? WHERE id=?", (running_total, quote_id))
+             conn.commit()
+             # conn.close() # Keep connection open or let verify handle it? safely remove to avoid closing shared conn
+             
+             st.session_state['cart'] = []
+             st.success(f"✅ Orçamento #{quote_id} criado com sucesso!")
+             st.rerun()
+
+         except Exception as e:
+             st.error(f"Erro ao salvar orçamento: {e}")
+
 # --- Tabs Structure ---
 tab_pos, tab_quotes = st.tabs(["🛒 Nova Venda / Cotação", "📄 Orçamentos Salvos"])
 
@@ -327,7 +399,8 @@ with col_cart:
                     "base_price": base_price_effective, # Store effective price
                     "discount": item_disc,
                     "total": item_final,
-                    "variant_id": selected_variant['id'] if selected_variant else None
+                    "variant_id": selected_variant['id'] if selected_variant else None,
+                    "variant_name": selected_variant['name'] if selected_variant else None
                 }
                 st.session_state['cart'].append(cart_item)
                 st.session_state['selected_product_id'] = None # Deselect
@@ -500,7 +573,7 @@ with col_cart:
                     d_comm = c_dates1.date_input("Prazo para Encomenda (se houver)", value=datetime.now() + pd.Timedelta(days=30), format="DD/MM/YYYY")
                     deposit_val = c_dates2.number_input("Valor Sinal/Adiantamento (R$)", min_value=0.0, step=10.0, value=float(round(default_dep, 2)))
                     
-                    col_act1, col_act2 = st.columns(2)
+                    col_act1, col_act2, col_act3 = st.columns(3)
                     
                     # OPTION A: STANDARD / MIXED
                     # If shortage: "Vender parcial + Encomendar resto"
@@ -655,18 +728,15 @@ with col_cart:
                                               "salesperson": salesperson_choice,
                                               "order_id": f"ENC-{new_ord_id}"
                                           })
-
-                                     st.toast(f"Encomenda #{new_ord_id} gerada automaticamente!", icon="📦")
+                                     conn.commit()
+                                    
+                                     # Format ID for Toast
+                                     fmt_oid_toast = f"ENC-{datetime.now().strftime('%y%m%d')}-{new_ord_id}"
+                                     st.toast(f"✅ Venda Finalizada! Encomenda {fmt_oid_toast} gerada automaticamente!", icon="📦")
                                  
                                  if 'new_ord_id' not in locals(): # Option A flow
                                      conn.commit()
-                                     
-                                     # FORCE VERIFY
-                                     check_stock = conn.execute("SELECT stock_quantity FROM products WHERE id=?", (p_id,)).fetchone()[0]
-                                     if check_stock != new_stock:
-                                         st.error(f"CRITICAL ERROR: Transaction Rolled Back? Expected {new_stock}, Got {check_stock}")
-                                     else:
-                                         st.toast(f"✅ Transaction Persisted. Stock in DB: {check_stock}", icon="💾")
+                                     st.toast(f"✅ Venda Finalizada com Sucesso!", icon="💰")
                                  else:
                                      # Option B flow handles its own commit
                                      pass
@@ -686,11 +756,16 @@ with col_cart:
                                  st.session_state['cart'] = []
                                  st.rerun()
 
+
                              except Exception as e:
                                  st.error(f"❌ ERRO GRAVE DE TRANSAÇÃO: {e}")
                                  st.exception(e)
+                    
+                    # --- QUOTE BUTTON (New) ---
+                    if col_act3.button("📄 Salvar como Orçamento", type="secondary", use_container_width=True):
+                         quote_creation_dialog(new_cli_name if cli_choice == '++ Cadastrar Novo ++' else cli_choice, notes_order, st.session_state['cart'], cli_choice, new_cli_name, new_cli_phone, client_dict)
 
-                    lbl_b = "🚨 Encomendar Tudo (Entrega Única)" 
+                    lbl_b = "Finalizar Encomenda" 
                     # Add checkbox for reservation if they WANT to use stock?
                     # User requested: "podendo ser feita uma encomenda de todo o pedido (pra não ficar com peças em lotes diferentes)"
                     # Implies Reservation = 0 (Produce all new). But maybe allow toggle.
@@ -747,21 +822,21 @@ with col_cart:
                              
                              items_for_service = []
                              for ca in cart_analysis:
-                                it = ca['item']
-                                q_full = it['qty']
+                                item = ca['item']
+                                q_full = item['qty']
                                 q_res = ca['can_sell'] if r_stock_chk else 0
                                 
                                 items_for_service.append({
-                                    'product_id': int(it['product_id']),
+                                    'product_id': int(item['product_id']),
                                     'qty': q_full,
                                     'qty_from_stock': q_res,
-                                    'unit_price': it['base_price'],
-                                    'variant_id': it.get('variant_id')
+                                    'unit_price': item['base_price'],
+                                    'variant_id': item.get('variant_id')
                                 })
                                 
                                 # IF RESERVING, DEDUCT STOCK
                                 if q_res > 0:
-                                    logs = product_service.deduct_stock(cursor, int(it['product_id']), q_res, variant_id=it.get('variant_id'))
+                                    logs = product_service.deduct_stock(cursor, int(item['product_id']), q_res, variant_id=item.get('variant_id'))
                                     for log in logs: st.toast(log, icon="📉")
 
                              order_service.add_commission_items(cursor, new_ord_id, items_for_service)
@@ -795,7 +870,7 @@ with col_cart:
                                 "deposit": deposit_val,
                                 "date_due": d_comm.strftime("%d/%m/%Y") if d_comm else None,
                                 "items": st.session_state['cart'], 
-                                "total": total_ord_val,
+                                "total": cart_total, # Should calculate based on items ordered? Yes cart total logic applies
                                 "time": datetime.now().strftime("%H:%M:%S")
                              }
                              st.session_state['cart'] = []
@@ -803,6 +878,8 @@ with col_cart:
                     
     else:
         st.info("Seu carrinho está vazio.")
+
+# Function quote_creation_dialog moved to top
 
 # --- Receipt Section (Order Level) ---
 
@@ -1162,8 +1239,11 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
             else:
                 st.error("Senha incorreta.")
 
-conn.close()
-    
+
+# ==============================================================================
+# TAB 2: QUOTES MANAGEMENT
+# ==============================================================================
+with tab_quotes:
     # --- HELPER FUNCTIONS (Local) ---
     def delete_quote(quote_id):
         try:
@@ -1220,7 +1300,7 @@ conn.close()
                q.status, q.total_price, q.discount, q.notes, q.client_id,
                q.delivery_terms, q.payment_terms
         FROM quotes q
-        JOIN clients c ON q.client_id = c.id
+        LEFT JOIN clients c ON q.client_id = c.id
         ORDER BY q.date_created DESC
     """, conn)
 
@@ -1292,7 +1372,7 @@ conn.close()
                         "date_created": q_dt.strftime('%d/%m/%Y'),
                         "date_valid_until": valid_until.strftime('%d/%m/%Y'),
                         "items": [{
-                            "name": r['name'], "qty": r['quantity'], "price": r['unit_price'], "notes": r['item_notes'] or ""
+                            "id": r['product_id'], "name": r['name'], "qty": r['quantity'], "price": r['unit_price'], "notes": r['item_notes'] or ""
                         } for _, r in items.iterrows()],
                         "total": quote['total_price'],
                         "discount": quote['discount'],
@@ -1322,7 +1402,9 @@ conn.close()
                                 # Update Quote
                                 cursor.execute("UPDATE quotes SET status='Aprovado', converted_order_id=? WHERE id=?", (new_oid, quote['id']))
                                 conn.commit()
-                                st.success("Aprovado!")
+                                
+                                fmt_oid = f"ENC-{datetime.now().strftime('%y%m%d')}-{new_oid}"
+                                st.success(f"✅ Aprovado! Encomenda {fmt_oid} gerada.")
                                 st.rerun()
 
                     # Reject
@@ -1336,3 +1418,5 @@ conn.close()
                     if ca4.button("🗑️", key=f"qdel_{quote['id']}"):
                          delete_quote(quote['id'])
                          st.rerun()
+
+conn.close()

@@ -406,7 +406,7 @@ else:
                         "notes": order['notes'],
                         "items": [
                             {
-                                "name": r['name'], 
+                                "name": f"{r['name']} ({r['variant_name']})" if r['variant_name'] else r['name'], 
                                 "qty": r['quantity'], 
                                 "price": r['unit_price'],
                                 "notes": r['notes'],

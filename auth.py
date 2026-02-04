@@ -38,7 +38,6 @@ NAV_MENU = {
     'admin': [
         ("Dashboard", "📊", "Dashboard.py"),
         ("Vendas", "🛒", "pages/6_Vendas.py"),
-        ("Orçamentos", "📝", "pages/12_Orcamentos.py"),
         ("Encomendas", "📦", "pages/9_Encomendas.py"),
         ("Aulas & Alunos", "🎓", "pages/13_Gestao_Aulas.py"),
         ("Queimas", "🔥", "pages/4_Queimas.py"),
@@ -53,7 +52,6 @@ NAV_MENU = {
     'vendedor': [
         ("Dashboard", "📊", "Dashboard.py"),
         ("Vendas", "🛒", "pages/6_Vendas.py"),
-        ("Orçamentos", "📝", "pages/12_Orcamentos.py"),
         ("Encomendas", "📦", "pages/9_Encomendas.py"),
         ("Aulas & Alunos", "🎓", "pages/13_Gestao_Aulas.py"),
         ("Produtos", "🏺", "pages/5_Produtos.py"),
