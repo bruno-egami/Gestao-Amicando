@@ -7,6 +7,7 @@ import database  # Use centralized DB connection
 import admin_utils
 import auth
 import audit
+from services import product_service
 
 st.set_page_config(page_title="Produtos", page_icon="🏺", layout="wide")
 admin_utils.render_sidebar_logo()
@@ -191,10 +192,38 @@ with tab1:
                             breakdown_str = " | ".join(items)
 
                         st.write(f"**{row['name']}**")
-                        stock_label = f"📦 Kit: {display_stock} (Calc)" if is_kit else f"Est: {row['stock_quantity']}"
+                        
+                        # Variant Logic - Fetch and Show
+                        vars_df = product_service.get_product_variants(conn, row['id'])
+                        has_variants = not vars_df.empty
+                        
+                        stock_label = f"📦 Kit: {display_stock} (Calc)" if is_kit else f"Est. Base: {row['stock_quantity']}"
                         st.caption(f"ID: {row['id']} | {row['category']} | {stock_label}")
+                        
                         if breakdown_str:
                             st.caption(f"🔎 {breakdown_str}")
+                            
+                        # Show Variants Stock
+                        if has_variants:
+                            st.markdown("<div style='margin-top: 5px; margin-bottom: 5px; font-size: 0.8em; color: #aaa;'>Variações & Estoque:</div>", unsafe_allow_html=True)
+                            badges = ""
+                            for _, vr in vars_df.iterrows():
+                                s_qty = vr['stock_quantity']
+                                s_color = "#66ff66" if s_qty > 0 else "#ff6666" # Light Green / Light Red for Dark Mode
+                                badges += f"""
+                                <div style="
+                                    display: flex; 
+                                    justify-content: space-between; 
+                                    background-color: rgba(255,255,255,0.08); 
+                                    padding: 2px 8px; 
+                                    border-radius: 4px; 
+                                    margin-bottom: 2px;
+                                    align-items: center;">
+                                    <span style="color: #e0e0e0;">{vr['variant_name']}</span>
+                                    <span style="font-weight: bold; color: {s_color}; font-family: monospace;">{s_qty}</span>
+                                </div>
+                                """
+                            st.markdown(badges, unsafe_allow_html=True)
                     
                     # Price
                     with c3:
@@ -205,16 +234,24 @@ with tab1:
                     with c4:
                         with st.popover("🔨", help="Registrar Produção"):
                             st.markdown(f"**Produzir: {row['name']}**")
-                            qty_make = st.number_input("Qtd", min_value=1, value=1, key=f"make_qty_{row['id']}")
                             
-                            # Validation: cannot produce more than dynamic stock if kit?
-                            # Actually production of kit consumes components, so as long as we have components...
-                            # But wait, 'Produce' button on Kit usually means 'Assemble'.
-                            # If we assemble, we consume stock. That logic is fine.
+                            # Variant Selection for Production
+                            prod_target = "Produto Base (Padrão)"
+                            target_variant_id = None
+                            
+                            if has_variants:
+                                v_opts = {f"{v['variant_name']} (Est: {v['stock_quantity']})": v['id'] for _, v in vars_df.iterrows()}
+                                v_keys = ["Produto Base (Padrão)"] + list(v_opts.keys())
+                                sel_v_label = st.selectbox("Variação", v_keys)
+                                if sel_v_label != "Produto Base (Padrão)":
+                                    prod_target = sel_v_label
+                                    target_variant_id = v_opts[sel_v_label]
+                            
+                            qty_make = st.number_input("Qtd", min_value=1, value=1, key=f"make_qty_{row['id']}")
                             
                             if st.button("Confirmar", key=f"btn_make_{row['id']}", type="primary"):
                                 try:
-                                    # Fetch Recipe
+                                    # Fetch Recipe (Base)
                                     recipe = pd.read_sql(f"""
                                         SELECT m.id, m.name, m.stock_level, (pr.quantity * {qty_make}) as needed, m.unit, m.type
                                         FROM product_recipes pr
@@ -222,16 +259,43 @@ with tab1:
                                         WHERE pr.product_id = {row['id']}
                                     """, conn)
                                     
+                                    # Variation specific material?
+                                    extra_mat_needed = []
+                                    if target_variant_id:
+                                        # Get variant info specific
+                                        # Optimization: We have vars_df but need to be sure.
+                                        var_info = vars_df[vars_df['id'] == target_variant_id].iloc[0]
+                                        if var_info['material_id'] and var_info['material_quantity'] > 0:
+                                             # Fetch that material current stock
+                                             try:
+                                                 vm = pd.read_sql("SELECT id, name, stock_level, unit, type FROM materials WHERE id=?", conn, params=(var_info['material_id'],)).iloc[0]
+                                                 needed_vm = var_info['material_quantity'] * qty_make
+                                                 
+                                                 # Add to recipe dataframe or handle separately?
+                                                 # Let's add to a separate list to check check logic
+                                                 extra_mat_needed.append({
+                                                     'id': vm['id'], 'name': vm['name'], 'stock_level': vm['stock_level'], 
+                                                     'needed': needed_vm, 'unit': vm['unit'], 'type': vm['type']
+                                                 })
+                                             except: pass # Material not found?
+
                                     # Check Stock (Physical only)
+                                    # Base Recipe
                                     is_burning = (recipe['unit'] == 'fornada') | (recipe['name'].str.startswith('Queima')) | (recipe['type'] == 'Queima')
                                     is_labor = (recipe['type'] == 'Mão de Obra') | (recipe['unit'] == 'hora (mão de obra)')
                                     is_physical = ~(is_burning | is_labor)
                                     
                                     insufficient = recipe[is_physical & (recipe['stock_level'] < recipe['needed'])]
                                     
-                                    if not insufficient.empty:
-                                        st.error("Estoque insuficiente!")
-                                        st.dataframe(insufficient[['name', 'stock_level', 'needed']])
+                                    # Check Extra Materials
+                                    missing_extras = []
+                                    for em in extra_mat_needed:
+                                        # Skip labor/firing checks for extra (usually glaze which is physical)
+                                        if em['stock_level'] < em['needed']:
+                                            missing_extras.append(em['name'])
+                                    
+                                    if not insufficient.empty or missing_extras:
+                                        st.error(f"Estoque insuficiente! {', '.join(insufficient['name'].tolist() + missing_extras)}")
                                     else:
                                         # Execute Production
                                         from datetime import datetime as dt
@@ -240,109 +304,82 @@ with tab1:
                                             user_id = int(st.session_state.current_user.get('id'))
                                             username = st.session_state.current_user.get('username', 'unknown')
                                             
-                                    # LOGIC: Check if it's a KIT (has entries in product_kits)
-                                    kits = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
-                                    
-                                    if not kits.empty:
-                                        # === IT IS A KIT ===
-                                        # Check sufficiency of Child Products
-                                        can_make_kit = True
-                                        miss_msg = []
+                                        # LOGIC: Check if it's a KIT (has entries in product_kits)
+                                        # Note: Kits usually don't have variants in this model yet. If they do, logic is complex.
+                                        # We proceed with Kit logic if it's a kit, ignoring variants for now unless user selected one?
+                                        # User request implies specific variation production.
                                         
-                                        for _, kit_item in kits.iterrows():
-                                            needed_total = kit_item['quantity'] * qty_make
-                                            # Check stock of child
-                                            child_stock = pd.read_sql("SELECT stock_quantity, name FROM products WHERE id=?", conn, params=(kit_item['child_product_id'],)).iloc[0]
-                                            
-                                            if child_stock['stock_quantity'] < needed_total:
-                                                can_make_kit = False
-                                                miss_msg.append(f"{child_stock['name']}: Precisa {needed_total}, Tem {child_stock['stock_quantity']}")
+                                        kits = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
                                         
-                                        if not can_make_kit:
-                                            st.error(f"Estoque insuficiente de componentes: {', '.join(miss_msg)}")
-                                        else:
-                                            # Deduct Child Products
+                                        if not kits.empty:
+                                            # ... Existing Kit Logic (Assumed no variants for kits for now) ...
+                                            # Same as before
+                                            can_make_kit = True
+                                            miss_msg = []
                                             for _, kit_item in kits.iterrows():
-                                                 needed_total = kit_item['quantity'] * qty_make
-                                                 child_id = kit_item['child_product_id']
-                                                 
-                                                 cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (needed_total, child_id))
-                                                 # Log Usage? Optional, maybe internal transfer log.
+                                                needed_total = kit_item['quantity'] * qty_make
+                                                child_stock = pd.read_sql("SELECT stock_quantity, name FROM products WHERE id=?", conn, params=(kit_item['child_product_id'],)).iloc[0]
+                                                if child_stock['stock_quantity'] < needed_total:
+                                                    can_make_kit = False
+                                                    miss_msg.append(f"{child_stock['name']}: Precisa {needed_total}, Tem {child_stock['stock_quantity']}")
                                             
-                                            # Add Kit Stock
-                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, row['id']))
-                                            
-                                            # Log Production
-                                            cursor.execute("INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                                           (dt.now().isoformat(), row['id'], row['name'], qty_make, user_id, username, 'Produção de Kit'))
-                                            
-                                            audit.log_action(conn, 'CREATE', 'production_history', cursor.lastrowid, None, {'product_id': row['id'], 'quantity': qty_make, 'type': 'KIT'})
-                                            conn.commit()
-                                            st.toast(f"Kit Montado: {qty_make}x {row['name']}!", icon="📦")
-                                            st.rerun()
-
-                                    else:
-                                        # === REGULAR PRODUCTION (Raw Materials) ===
-                                        # 1. Fetch Recipe
-                                        recipe = pd.read_sql("""
-                                            SELECT m.id, m.name, m.stock_level, pr.quantity as needed_per_unit, m.unit, m.type
-                                            FROM product_recipes pr
-                                            JOIN materials m ON pr.material_id = m.id
-                                            WHERE pr.product_id = ?
-                                        """, conn, params=(row['id'],))
-                                        
-                                        if recipe.empty:
-                                            st.warning("Produto sem receita cadastrada! Apenas o estoque do produto será ajustado.")
-                                            # Just Update Stock
-                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, row['id']))
-                                            cursor.execute("INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                                           (dt.now().isoformat(), row['id'], row['name'], qty_make, user_id, username, 'Produção Sem Receita'))
-                                            conn.commit()
-                                            st.rerun()
-                                        else:
-                                            # Calculate total needed
-                                            recipe['needed'] = recipe['needed_per_unit'] * qty_make
-                                            
-                                            # Check sufficient stock (Skip Labor & Firing)
-                                            # Labor items: type='Mão de Obra' OR unit='hora (mão de obra)'
-                                            # Firing items: type='Queima' OR unit='fornada' OR name starts with 'Queima'
-                                            # We create a mask for physical items
-                                            is_burning = (recipe['unit'] == 'fornada') | (recipe['name'].str.startswith('Queima')) | (recipe['type'] == 'Queima')
-                                            is_labor = (recipe['type'] == 'Mão de Obra') | (recipe['unit'] == 'hora (mão de obra)')
-
-                                            is_physical = ~(is_burning | is_labor)
-
-                                            insufficient = recipe[is_physical & (recipe['stock_level'] < recipe['needed'])]
-                                            
-                                            if not insufficient.empty:
-                                                st.error(f"Falta insumo: {', '.join(insufficient['name'].tolist())}")
+                                            if not can_make_kit:
+                                                st.error(f"Estoque insuficiente de componentes: {', '.join(miss_msg)}")
                                             else:
-                                                # Deduct Stock
-                                                for _, mat in recipe.iterrows():
-                                                    if not ((mat['unit'] == 'fornada') or (str(mat['name']).startswith('Queima')) or (mat['type'] == 'Queima') or (mat['type'] == 'Mão de Obra') or (mat['unit'] == 'hora (mão de obra)')):
-                                                         # Explicit Type Casting
-                                                         needed_py = float(mat['needed'])
-                                                         mat_id_py = int(mat['id'])
-                                                         
-                                                         cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (needed_py, mat_id_py))
-                                                         # Log Consumption
-                                                         cursor.execute("""
-                                                            INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id)
-                                                            VALUES (?, ?, ?, ?, ?, ?)
-                                                        """, (mat_id_py, dt.now().isoformat(), 'SAIDA', needed_py, f"Prod: {qty_make}x {row['name']}", user_id))
-                                                         st.toast(f"Baixado {needed_py} de {mat['name']}")
-                                                    else:
-                                                         st.toast(f"Ignorado (Não-físico): {mat['name']}")
+                                                # Deduct
+                                                for _, kit_item in kits.iterrows():
+                                                     needed_total = kit_item['quantity'] * qty_make
+                                                     cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (needed_total, kit_item['child_product_id']))
                                                 
-                                                # Update Product Stock
-                                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, row['id']))
+                                                # Add Stock
+                                                if target_variant_id:
+                                                    cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, int(target_variant_id)))
+                                                else:
+                                                    cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, row['id']))
+                                                
+                                                # Log
                                                 cursor.execute("INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                                               (dt.now().isoformat(), row['id'], row['name'], qty_make, user_id, username, 'Produção Rápida'))
-                                                
-                                                audit.log_action(conn, 'CREATE', 'production_history', cursor.lastrowid, None, {'product_id': row['id'], 'quantity': qty_make})
+                                                               (dt.now().isoformat(), row['id'], f"{row['name']} ({prod_target})", qty_make, user_id, username, 'Produção de Kit (Variação)' if target_variant_id else 'Produção de Kit'))
                                                 conn.commit()
-                                                st.toast(f"Produzido: {qty_make}x {row['name']}!", icon="✅")
+                                                st.toast(f"Kit Montado: {qty_make}x {row['name']}!", icon="📦")
                                                 st.rerun()
+
+                                        else:
+                                            # === REGULAR PRODUCTION ===
+                                            
+                                            # 1. Deduct Base Recipe
+                                            if recipe.empty and not extra_mat_needed:
+                                                st.warning("Sem receita. Ajustando apenas estoque.")
+                                            
+                                            # Deduct Base
+                                            for _, mat in recipe.iterrows():
+                                                if not ((mat['unit'] == 'fornada') or (str(mat['name']).startswith('Queima')) or (mat['type'] == 'Queima') or (mat['type'] == 'Mão de Obra') or (mat['unit'] == 'hora (mão de obra)')):
+                                                     needed_py = float(mat['needed'])
+                                                     cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (needed_py, int(mat['id'])))
+                                                     # Log
+                                                     cursor.execute("INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)", 
+                                                                    (int(mat['id']), dt.now().isoformat(), 'SAIDA', needed_py, f"Prod: {qty_make}x {row['name']}", user_id))
+
+                                            # Deduct Extras (Variant specific)
+                                            for em in extra_mat_needed:
+                                                needed_py = float(em['needed'])
+                                                cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (needed_py, int(em['id'])))
+                                                cursor.execute("INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)", 
+                                                               (int(em['id']), dt.now().isoformat(), 'SAIDA', needed_py, f"Prod Var: {qty_make}x {row['name']}", user_id))
+
+                                            # Update Stock (Target)
+                                            if target_variant_id:
+                                                cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, int(target_variant_id)))
+                                            else:
+                                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, row['id']))
+                                                
+                                            cursor.execute("INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                                           (dt.now().isoformat(), row['id'], f"{row['name']} ({prod_target})", qty_make, user_id, username, 'Produção Geral'))
+                                            
+                                            audit.log_action(conn, 'CREATE', 'production_history', cursor.lastrowid, None, {'product_id': row['id'], 'quantity': qty_make, 'variant_id': target_variant_id})
+                                            conn.commit()
+                                            st.toast(f"Produzido: {qty_make}x {row['name']} ({prod_target})!", icon="✅")
+                                            st.rerun()
  
                                 except Exception as e:
                                     st.error(f"Erro: {e}")
@@ -539,7 +576,7 @@ with tab1:
                     st.rerun()
 
         # TABS INTERFACE
-        tab_recipe, tab_comp, tab_pricing, tab_images = st.tabs(["📜 Receita", "📦 Composição (Kit)", "💰 Precificação", "📷 Imagens"])
+        tab_recipe, tab_variants, tab_comp, tab_pricing, tab_images = st.tabs(["📜 Receita", "🎨 Variações", "📦 Composição (Kit)", "💰 Precificação", "📷 Imagens"])
 
         # --- TAB 1: RECEITA (INSUMOS) ---
         with tab_recipe:
@@ -579,6 +616,136 @@ with tab1:
                         st.rerun()
             else:
                 st.info("Nenhuma receita definida.")
+
+        # --- TAB VARIANTS: VARIAÇÕES ---
+        with tab_variants:
+            st.caption("Gerencie variações deste produto (Ex: Cores, Acabamentos/Esmaltes). O estoque pode ser controlado por variação.")
+            
+            # Form to Add Variant (Dynamic - No st.form to allow calc)
+            st.markdown("##### ➕ Nova Variação")
+            
+            # Container for inputs
+            vc_add = st.container(border=True)
+            with vc_add:
+                v_c1, v_c2, v_c3 = st.columns([3, 2, 2])
+                # Name input moved down to be dynamic
+                
+                # Material Link (Optional) - Glazes
+                materials_df = pd.read_sql("SELECT id, name, unit, price_per_unit FROM materials WHERE type != 'Mão de Obra' ORDER BY name", conn)
+                mat_opts = {f"{row['name']} ({row['unit']})": row['id'] for _, row in materials_df.iterrows()}
+                v_mat_keys = [""] + list(mat_opts.keys())
+                
+                # Helper to find key by ID if needed, but here we pick by label
+                v_mat = v_c2.selectbox("Esmalte Vinculado (Opcional)", v_mat_keys)
+                
+                # Material Quantity
+                v_mat_qty = v_c2.number_input("Qtd Material (Ex: Esmalte)", min_value=0.0, step=0.001, format="%.3f", help="Quantidade de material consumida por unidade desta variação")
+                
+                # Dynamic Price & Name Calculation
+                suggested_adder = 0.0
+                curr_markup = curr_prod['markup'] if curr_prod['markup'] else 2.0
+                mat_cost_preview = 0.0
+                mat_unit_price = 0.0
+                suggested_name = ""
+                
+                if v_mat:
+                    try:
+                        sel_mat_id = mat_opts[v_mat]
+                        # Find price in df
+                        m_row = materials_df[materials_df['id'] == sel_mat_id].iloc[0]
+                        mat_unit_price = m_row['price_per_unit']
+                        suggested_name = m_row['name']
+                        
+                        if v_mat_qty > 0:
+                            mat_cost_preview = mat_unit_price * v_mat_qty
+                            suggested_adder = mat_cost_preview * curr_markup
+                    except Exception:
+                        pass
+                
+                # Name Input (Auto-fill if empty and suggested avail)
+                # We use key trick or session state? Simple value approach:
+                # If we want it to update when v_mat changes, we need to handle it.
+                # Simplest: Just use the suggested name if user input is empty. But 'text_input' holds state.
+                # Let's rely on user overriding it, but default value set to sugg if provided.
+                # Actually, standard Streamlit text_input `value` is only used on first render or if key changes.
+                # We can key it to the material selection to force refresh, but that clears user input if they change material?
+                # "gostaria também que o nome da variação fosse pré preenchido"
+                # Let's try keying name to mat_id roughly or just leave standard.
+                # A good compromise: Show suggestion in placeholder or help?
+                # User asked for pre-filled.
+                
+                # Force update name if material changes?
+                if "last_v_mat" not in st.session_state: st.session_state.last_v_mat = None
+                
+                default_v_name = ""
+                if v_mat != st.session_state.last_v_mat:
+                    default_v_name = suggested_name
+                    st.session_state.last_v_mat = v_mat
+                    # Reset name input?? We can't easily reset a widget value without rerunning/key hack.
+                    # We will use a dynamic key for name input based on material? No, that breaks UI flow.
+                    # We will simply not pre-fill dynamically aggressively to avoid overriding.
+                    # But wait, user SAID "pre-filled".
+                    # Let's set value only if it matches checks.
+                    
+                # We will use a key that updates when material changes to "reset" the name field to the new material?
+                # That might be annoying if they typed something.
+                # Let's just use `value` and hope for best or stick to manual?
+                # Let's change the key of text_input effectively resetting it when material changes.
+                
+                v_name = v_c1.text_input("Nome da Variação (Ex: Azul Reativo)", value=suggested_name if v_mat else "", key=f"vn_{v_mat if v_mat else 'none'}")
+                
+                if mat_unit_price > 0:
+                     v_c2.caption(f"💲 Custo Unitário: R$ {mat_unit_price:.2f}/{getattr(m_row, 'unit', 'un') if 'm_row' in locals() else 'un'}")
+
+                if mat_cost_preview > 0:
+                    v_c2.caption(f"💰 Custo Est.: R$ {mat_cost_preview:.2f} (Markup {curr_markup}x -> R$ {suggested_adder:.2f})")
+
+                v_stock = v_c3.number_input("Estoque Inicial", min_value=0, step=1)
+                
+                # Price Input - Default to suggestion if available and distinct
+                v_price = v_c3.number_input("Add. Preço (R$)", min_value=0.0, step=0.01, value=float(suggested_adder), help="Valor a somar ao preço base. Sugestão = Custo Material x Markup")
+                
+                if st.button("Salvar Variação", type="primary"):
+                    if v_name:
+                        mat_id = mat_opts[v_mat] if v_mat else None
+                        success = product_service.create_variant(conn, selected_prod_id, v_name, v_stock, v_price, mat_id, v_mat_qty)
+                        if success:
+                            st.success("Variação adicionada!")
+                            st.rerun()
+                        else:
+                            st.error("Erro ao adicionar variação.")
+                    else:
+                        st.warning("Nome obrigatório.")
+
+            # List Variants
+            variants_df = product_service.get_product_variants(conn, selected_prod_id)
+            if not variants_df.empty:
+                st.write("📋 Variações Cadastradas:")
+                
+                # Custom Table display
+                for _, var_row in variants_df.iterrows():
+                    with st.container(border=True):
+                        vc1, vc2, vc3, vc4, vc5 = st.columns([3, 2, 2, 2, 1])
+                        vc1.write(f"**{var_row['variant_name']}**")
+                        if var_row['material_name']:
+                            qty_display = f" ({var_row['material_quantity']:.3f})" if var_row.get('material_quantity') else ""
+                            vc1.caption(f"🎨 {var_row['material_name']}{qty_display}")
+                        
+                        # Update Stock
+                        new_v_stock = vc2.number_input(f"Estoque", value=int(var_row['stock_quantity']), key=f"v_stk_{var_row['id']}")
+                        if new_v_stock != int(var_row['stock_quantity']):
+                             product_service.update_variant_stock(conn, var_row['id'], new_v_stock)
+                             st.rerun()
+                             
+                        # Display Price
+                        vc3.write(f"+ R$ {var_row['price_adder']:.2f}")
+                        
+                        # Delete
+                        if vc5.button("🗑️", key=f"del_var_{var_row['id']}"):
+                            product_service.delete_variant(conn, var_row['id'])
+                            st.rerun()
+            else:
+                st.info("Nenhuma variação cadastrada.")
 
         # --- TAB 2: COMPOSIÇÃO (KITS) ---
         with tab_comp:
@@ -740,17 +907,16 @@ with tab1:
             # Suggested
             suggested = total_cost * new_markup
             col_sug.metric("Preço Sugerido", f"R$ {suggested:.2f}")
-            
-            # Helper to apply suggestion
+
+            # Helper to apply suggestion (Top)
             if col_sug.button("⬇️ Usar Sugerido", help="Preenche o Preço Final com o valor sugerido"):
                 st.session_state[f"final_price_{selected_prod_id}"] = float(suggested)
                 st.rerun()
 
-            # Final Price Input
+            # Final Price Input (Top)
             curr_price = float(curr_prod['base_price']) if (curr_prod['base_price'] is not None and curr_prod['base_price'] != '') else 0.0
             
             # Logic: Default to DB value. If 0, default to Suggested.
-            # If manually updated via button above, session_state will handle the value via key.
             default_val = curr_price if curr_price > 0.01 else suggested
             
             # Use 'key' to allow programmatic setting
@@ -759,12 +925,131 @@ with tab1:
             
             new_price = col_final.number_input("Preço Final (Venda)", step=1.0, key=f"final_price_{selected_prod_id}")
             
-            # Update Button
-            if st.button("💾 Salvar Preço Definido", type="primary", use_container_width=True):
+            # Save Button (Top)
+            if col_final.button("💾 Salvar", type="primary", use_container_width=True, help="Salvar Preço Base e Markup"):
                 cursor.execute("UPDATE products SET markup = ?, base_price = ? WHERE id = ?", (new_markup, new_price, selected_prod_id))
                 conn.commit()
-                st.success("Preço e Markup salvos com sucesso!")
+                st.success("Preço Base Salvo!")
                 st.rerun()
+            
+            # 2. Variation Cost Analysis (NEW)
+            st.divider()
+            st.markdown("#### 📊 Análise de Custos por Variação")
+            
+            # Fetch variants
+            vars_analysis = product_service.get_product_variants(conn, selected_prod_id)
+            
+            if not vars_analysis.empty:
+                analysis_data = []
+                for _, v_row in vars_analysis.iterrows():
+                    # Calculate Extra Cost
+                    extra_cost = 0.0
+                    mat_info = ""
+                    
+                    if v_row['material_id'] and v_row['material_quantity']:
+                        # Fetch material price
+                        try:
+                            # Optimization: Could cache materials price, but single query per row is acceptable for small scale
+                            mat_p = pd.read_sql("SELECT price_per_unit, unit FROM materials WHERE id=?", conn, params=(v_row['material_id'],)).iloc[0]
+                            extra_cost = v_row['material_quantity'] * mat_p['price_per_unit']
+                            mat_info = f"{v_row['material_name']} ({v_row['material_quantity']} {mat_p['unit']})"
+                        except:
+                            pass
+                            
+                    total_var_cost = total_cost + extra_cost
+                    
+                    # Ideal Price (Cost * Markup)
+                    curr_markup = curr_prod['markup'] if curr_prod['markup'] else 2.0
+                    ideal_price = total_var_cost * curr_markup
+                    
+                    # Current Price (Base Price + Adder)
+                    base_p = float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0
+                    current_final_price = base_p + v_row['price_adder']
+                    
+                    diff = current_final_price - ideal_price
+                    
+                    analysis_data.append({
+                        "id": v_row['id'], # For updates
+                        "Variação": v_row['variant_name'],
+                        "Custo Extra": extra_cost,
+                        "Custo Total": total_var_cost,
+                        "Preço Ideal (Markup)": ideal_price,
+                        "Preço Atual": current_final_price,
+                        "Diferença": diff
+                    })
+                
+                df_analysis = pd.DataFrame(analysis_data)
+                
+                st.dataframe(
+                    df_analysis,
+                    column_config={
+                        "id": None, # Hide ID
+                        "Variação": st.column_config.TextColumn(disabled=True),
+                        "Custo Extra": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+                        "Custo Total": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+                        "Preço Ideal (Markup)": st.column_config.NumberColumn(format="R$ %.2f", disabled=True, help="Custo Total x Markup do Produto"),
+                        "Preço Atual": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+                        "Diferença": st.column_config.NumberColumn(format="R$ %.2f", disabled=True)
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                st.divider()
+                st.markdown("#### 🛠️ Personalizar Preço por Variação")
+                
+                # Select Variant to Edit
+                var_opts = {r['variant_name']: r for _, r in vars_analysis.iterrows()}
+                sel_var_name = st.selectbox("Selecione a Variação", list(var_opts.keys()))
+                
+                if sel_var_name:
+                    sel_var = var_opts[sel_var_name]
+                    
+                    # Calculate Metrics
+                    v_mat_price = 0.0
+                    if sel_var['material_id']:
+                         try:
+                             mp = pd.read_sql("SELECT price_per_unit FROM materials WHERE id=?", conn, params=(sel_var['material_id'],)).iloc[0]['price_per_unit']
+                             v_mat_price = mp * sel_var['material_quantity']
+                         except: pass
+                    
+                    v_total_cost = total_cost + v_mat_price
+                    v_curr_price = (float(curr_prod['base_price']) if curr_prod['base_price'] else 0) + sel_var['price_adder']
+                    
+                    # Layout similar to Base Cost
+                    svc1, svc2, svc3, svc4 = st.columns(4)
+                    
+                    svc1.metric("Custo Total (Base + Var)", f"R$ {v_total_cost:.2f}")
+                    
+                    # Infer current markup logic
+                    v_current_markup = v_curr_price / v_total_cost if v_total_cost > 0 else 0
+                    
+                    # Markup Input
+                    v_new_markup = svc2.number_input("Markup Variação", value=float(v_current_markup) if v_current_markup > 0 else float(curr_markup), step=0.1, key=f"vm_{sel_var['id']}")
+                    
+                    # Suggested
+                    v_suggested = v_total_cost * v_new_markup
+                    svc3.metric("Preço Sugerido", f"R$ {v_suggested:.2f}")
+                    
+                    # Final Price Input
+                    v_final_price = svc4.number_input("Preço Final (Venda)", value=float(v_curr_price), step=1.0, key=f"vp_{sel_var['id']}")
+                    
+                    # Helper button for suggested
+                    if svc3.button("⬇️ Usar Sugerido", key=f"vus_{sel_var['id']}"):
+                         pass
+
+                    # Save Button moved to col 4
+                    if svc4.button("💾 Salvar", key=f"vsave_{sel_var['id']}", type="primary", use_container_width=True):
+                         # Calculate new Adder
+                         base_p = float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0
+                         new_adder = v_final_price - base_p
+                         if new_adder < 0: new_adder = 0
+                         
+                         product_service.update_variant_price(conn, sel_var['id'], new_adder)
+                         st.success(f"Preço de '{sel_var_name}' atualizado!")
+                         st.rerun()
+            else:
+                st.info("Nenhuma variação para analisar.")
 
         st.markdown("---")
         with st.expander("🚫 Zona de Perigo"):

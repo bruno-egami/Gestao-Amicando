@@ -454,6 +454,25 @@ else:
                                                 
                                                 # Info
                                             st.markdown(f"**{product.name}**")
+                                            
+                                            # Variant Logic (Visual Badges)
+                                            try:
+                                                v_df = pd.read_sql("SELECT variant_name, stock_quantity FROM product_variants WHERE product_id=?", conn, params=(product.id,))
+                                                if not v_df.empty:
+                                                     st.markdown("<div style='margin-top: 4px; font-size: 0.75em; color: #aaa;'>Variações:</div>", unsafe_allow_html=True)
+                                                     bgs = ""
+                                                     for _, vr in v_df.iterrows():
+                                                         sq = vr['stock_quantity']
+                                                         sc = "#66ff66" if sq > 0 else "#ff6666"
+                                                         bgs += f"""
+                                                            <div style="display:flex; justify-content:space-between; background:rgba(255,255,255,0.08); padding:1px 4px; border-radius:3px; margin:1px 0; font-size:0.75em;">
+                                                                <span style="color:#ddd;">{vr['variant_name']}</span>
+                                                                <span style="color:{sc}; font-weight:bold;">{sq}</span>
+                                                            </div>
+                                                         """
+                                                     st.markdown(bgs, unsafe_allow_html=True)
+                                            except: pass
+
                                             st.caption(f"R$ {product.base_price:.2f}")
                                             
                                             # Inputs

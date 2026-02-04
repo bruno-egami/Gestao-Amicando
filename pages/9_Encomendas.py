@@ -43,7 +43,8 @@ st.subheader("Gerenciar Pedidos")
 # Logic to Delete Order (and restore stock)
 def delete_order(oid):
     # 1. Get reserved items to restore
-    items = pd.read_sql("SELECT product_id, quantity_from_stock FROM commission_items WHERE order_id=?", conn, params=(oid,))
+    # Updated to include variant_id
+    items = pd.read_sql("SELECT product_id, quantity_from_stock, variant_id FROM commission_items WHERE order_id=?", conn, params=(oid,))
     
     # Helper for binary
     def clean_bin(val):
@@ -53,7 +54,7 @@ def delete_order(oid):
 
     items['quantity_from_stock'] = items['quantity_from_stock'].apply(clean_bin)
     items['product_id'] = items['product_id'].apply(clean_bin)
-
+    
     # Get order data for audit
     order_data = pd.read_sql("SELECT client_id, total_price, status FROM commission_orders WHERE id=?", conn, params=(oid,))
     old_data = order_data.iloc[0].to_dict() if not order_data.empty else {}
@@ -63,8 +64,12 @@ def delete_order(oid):
         for _, it in items.iterrows():
             qty_rest = int(it['quantity_from_stock'])
             if qty_rest > 0:
-                cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                             (qty_rest, int(it['product_id'])))
+                if pd.notna(it['variant_id']) and it['variant_id'] > 0:
+                     cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                                  (qty_rest, int(it['variant_id'])))
+                else:
+                     cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                                  (qty_rest, int(it['product_id'])))
         
         cursor.execute("DELETE FROM commission_items WHERE order_id=?", (oid,))
         cursor.execute("DELETE FROM commission_orders WHERE id=?", (oid,))
@@ -142,9 +147,11 @@ else:
             # Fetch Items
             # Fetch Items
             items = pd.read_sql("""
-                SELECT ci.id, p.name, ci.quantity, ci.quantity_from_stock, ci.quantity_produced, ci.product_id, ci.unit_price, ci.notes, p.image_paths
+                SELECT ci.id, p.name, ci.quantity, ci.quantity_from_stock, ci.quantity_produced, ci.product_id, ci.unit_price, ci.notes, p.image_paths,
+                       ci.variant_id, pv.variant_name
                 FROM commission_items ci
                 LEFT JOIN products p ON ci.product_id = p.id
+                LEFT JOIN product_variants pv ON ci.variant_id = pv.id
                 WHERE ci.order_id = ?
             """, conn, params=(order['id'],))
             
@@ -269,35 +276,61 @@ else:
                             prod_opts = []
                         
                         sel_new_prod = st.selectbox("Produto", prod_opts)
+                        
+                        # Variant Selector Logic
+                        sel_variant_id = None
+                        price_mod = 0.0
+                        
+                        if sel_new_prod:
+                            p_name_core = sel_new_prod.split(' (')[0]
+                            p_row_sel = prods_df[prods_df['name'] == p_name_core].iloc[0]
+                            vars_df = pd.read_sql("SELECT id, variant_name, price_adder, stock_quantity FROM product_variants WHERE product_id=?", conn, params=(p_row_sel['id'],))
+                            
+                            if not vars_df.empty:
+                                v_opts = {f"{r['variant_name']} (+{r['price_adder']})": r['id'] for _, r in vars_df.iterrows()}
+                                sel_v_txt = st.selectbox("Variação (Esmalte)", [""] + list(v_opts.keys()))
+                                if sel_v_txt:
+                                    sel_variant_id = v_opts[sel_v_txt]
+                                    v_infos = vars_df[vars_df['id'] == sel_variant_id].iloc[0]
+                                    price_mod = float(v_infos['price_adder'])
+                                    st.caption(f"Estoque Variação: {v_infos['stock_quantity']}")
+                        
                         new_qty = st.number_input("Quantidade", min_value=1, value=1)
                         use_stock_new = st.checkbox("Reservar do Estoque?")
                         
                         if st.form_submit_button("Adicionar"):
                             # Find prod id
                             p_row = prods_df[prods_df['name'] == sel_new_prod.split(' (')[0]].iloc[0]
+                            
+                            # Check stock source (Variant vs Product)
                             stock_av = p_row['stock_quantity']
+                            if sel_variant_id:
+                                stock_av = pd.read_sql("SELECT stock_quantity FROM product_variants WHERE id=?", conn, params=(sel_variant_id,)).iloc[0]['stock_quantity']
                             
                             qty_res_new = min(stock_av, new_qty) if use_stock_new else 0
-                            price = p_row['base_price']
+                            price = p_row['base_price'] + price_mod
                             
                             success = False
                             cursor.execute("BEGIN TRANSACTION")
                             try:
                                 # Insert Item
                                 cursor.execute("""
-                                    INSERT INTO commission_items (order_id, product_id, quantity, quantity_from_stock, quantity_produced, unit_price)
-                                    VALUES (?, ?, ?, ?, 0, ?)
-                                """, (order['id'], int(p_row['id']), new_qty, int(qty_res_new), float(price)))
+                                    INSERT INTO commission_items (order_id, product_id, quantity, quantity_from_stock, quantity_produced, unit_price, variant_id)
+                                    VALUES (?, ?, ?, ?, 0, ?, ?)
+                                """, (order['id'], int(p_row['id']), new_qty, int(qty_res_new), float(price), int(sel_variant_id) if sel_variant_id else None))
                                 
                                 # Reserve Stock (Handle Kits)
                                 if qty_res_new > 0:
-                                    kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(int(p_row['id']),))
-                                    if not kit_comps.empty:
-                                        for _, kc in kit_comps.iterrows():
-                                            deduct_res = qty_res_new * kc['quantity']
-                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_res), int(kc['child_product_id'])))
+                                    if sel_variant_id:
+                                         cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(sel_variant_id)))
                                     else:
-                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(p_row['id'])))
+                                        kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(int(p_row['id']),))
+                                        if not kit_comps.empty:
+                                            for _, kc in kit_comps.iterrows():
+                                                deduct_res = qty_res_new * kc['quantity']
+                                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_res), int(kc['child_product_id'])))
+                                        else:
+                                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(p_row['id'])))
                                 
                                 # Update Order Total
                                 cursor.execute("UPDATE commission_orders SET total_price = total_price + ? WHERE id=?", (price * new_qty, order['id']))
@@ -412,6 +445,9 @@ else:
                 with ci1:
                     # Display Product Name and Edit Popover
                     st.markdown(f"📦 **{item['name']}**")
+                    if pd.notna(item['variant_name']):
+                         st.caption(f"🎨 {item['variant_name']}")
+                    
                     if item['notes']:
                         st.caption(f"📝 {item['notes']}")
                     
@@ -485,6 +521,14 @@ else:
                                         for _, cr in child_recipe.iterrows():
                                             # Total Qty = Child Qty in Kit * Ingredient Qty in Child
                                             recipes_to_deduct.append({'mid': cr['material_id'], 'qty_per_unit': cr['quantity'] * kc['quantity']})
+
+                                    # Check Variant Recipe (Material)
+                                    if item.get('variant_id') and item['variant_id'] > 0:
+                                        var_info = pd.read_sql("SELECT material_id, material_quantity FROM product_variants WHERE id=?", conn, params=(item['variant_id'],))
+                                        if not var_info.empty:
+                                            vi = var_info.iloc[0]
+                                            if vi['material_id'] and vi['material_quantity'] > 0:
+                                                 recipes_to_deduct.append({'mid': vi['material_id'], 'qty_per_unit': vi['material_quantity']})
 
                                     success = False
                                     old_order_status = order['status']

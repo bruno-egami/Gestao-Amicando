@@ -300,6 +300,24 @@ def init_db():
     try:
         cursor.execute("ALTER TABLE students ADD COLUMN class_id INTEGER")
     except sqlite3.OperationalError: pass
+    
+    # 9. Product Variants (Migration)
+    try:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS product_variants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER,
+                variant_name TEXT,
+                stock_quantity INTEGER DEFAULT 0,
+                price_adder REAL DEFAULT 0.0,
+                material_id INTEGER,
+                FOREIGN KEY (product_id) REFERENCES products(id),
+                FOREIGN KEY (material_id) REFERENCES materials(id)
+            )
+        ''')
+        # Check if indices exist, if not create them (Migration safe)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_variants_product ON product_variants(product_id)")
+    except Exception: pass
 
 
 
@@ -488,6 +506,20 @@ def init_db():
         )
     ''')
 
+    # Product Variants (Esmaltes/Acabamentos)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS product_variants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            variant_name TEXT,
+            stock_quantity INTEGER DEFAULT 0,
+            price_adder REAL DEFAULT 0.0,
+            material_id INTEGER,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        )
+    ''')
+
     # --- CLASS MANAGEMENT TABLES (Phase 4) ---
     # Students
     cursor.execute('''
@@ -570,6 +602,9 @@ def init_db():
     # Audit log indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_log(table_name)")
+
+    # Product Variants indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_variants_product ON product_variants(product_id)")
     
     conn.commit()
 

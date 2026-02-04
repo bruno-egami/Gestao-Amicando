@@ -130,8 +130,15 @@ if 'cart' not in st.session_state:
 if 'selected_product_id' not in st.session_state:
     st.session_state['selected_product_id'] = None
 
-# --- Layout: 2 Columns (Catalog vs Cart/Checkout) ---
-col_catalog, col_cart = st.columns([1, 1], gap="large")
+# --- Tabs Structure ---
+tab_pos, tab_quotes = st.tabs(["🛒 Nova Venda / Cotação", "📄 Orçamentos Salvos"])
+
+# ==============================================================================
+# TAB 1: POS (Catalog + Cart)
+# ==============================================================================
+with tab_pos:
+    # --- Layout: 2 Columns (Catalog vs Cart/Checkout) ---
+    col_catalog, col_cart = st.columns([1.1, 0.9], gap="large")
 
 # ==========================
 # LEFT COL: CATALOG
@@ -191,9 +198,33 @@ with col_catalog:
                             
                             if is_kit:
                                 display_stock = kit_stock
-                                
                             st.markdown(f"**{product.name}**")
-                            stock_txt = f"📦 Kit: {display_stock}" if is_kit else f"Est: {product.stock_quantity}"
+                            
+                            # Variant Logic (Visual Badges)
+                            vars_df = product_service.get_product_variants(conn, product.id)
+                            if not vars_df.empty:
+                                st.markdown("<div style='margin-top: 5px; margin-bottom: 5px; font-size: 0.8em; color: #aaa;'>Variações:</div>", unsafe_allow_html=True)
+                                badges = ""
+                                for _, vr in vars_df.iterrows():
+                                    s_qty = vr['stock_quantity']
+                                    s_color = "#66ff66" if s_qty > 0 else "#ff6666"
+                                    badges += f"""
+                                    <div style="
+                                        display: flex; 
+                                        justify-content: space-between; 
+                                        background-color: rgba(255,255,255,0.08); 
+                                        padding: 2px 6px; 
+                                        border-radius: 4px; 
+                                        margin-bottom: 2px;
+                                        align-items: center;
+                                        font-size: 0.8em;">
+                                        <span style="color: #e0e0e0;">{vr['variant_name']}</span>
+                                        <span style="font-weight: bold; color: {s_color}; font-family: monospace;">{s_qty}</span>
+                                    </div>
+                                    """
+                                st.markdown(badges, unsafe_allow_html=True)
+
+                            stock_txt = f"📦 Kit: {display_stock}" if is_kit else f"Est. Base: {product.stock_quantity}"
                             st.caption(f"ID: {product.id} | {stock_txt}")
                             st.markdown(f"**R$ {product.base_price:.2f}**")
                             
@@ -219,29 +250,64 @@ with col_cart:
         with st.container(border=True):
             st.markdown(f"### Adicionar: {sel_row['name']}")
             
+            # --- Variant Selection ---
+            variants_df = product_service.get_product_variants(conn, sel_row['id'])
+            selected_variant = None
+            price_adder = 0.0
+            
+            if not variants_df.empty:
+                st.info("🎨 Selecione o Acabamento")
+                var_opts = {f"{r['variant_name']} (+R$ {r['price_adder']:.2f})": r['id'] for _, r in variants_df.iterrows()}
+                # Default empty to force choice? Or first? User requirement: "exibir um segundo st.selectbox"
+                var_choice = st.selectbox("Variação (Esmalte)", list(var_opts.keys()))
+                
+                if var_choice:
+                    v_id = var_opts[var_choice]
+                    v_row = variants_df[variants_df['id'] == v_id].iloc[0]
+                    selected_variant = {
+                        "id": int(v_id),
+                        "name": v_row['variant_name'],
+                        "stock": int(v_row['stock_quantity']),
+                        "price_adder": float(v_row['price_adder'])
+                    }
+                    price_adder = selected_variant['price_adder']
+                    
+                    st.caption(f"Estoque da Variação: {selected_variant['stock']}")
+            
+            # --- Qty & Disc ---
             c_qty, c_disc = st.columns(2)
             item_qty = c_qty.number_input("Qtd", min_value=1, step=1, value=1, key="item_qty")
             item_disc = c_disc.number_input("Desconto (Item)", min_value=0.0, step=0.1, value=0.0, key="item_disc")
             
             # Calc Preview
-            base_total = sel_row['base_price'] * item_qty
+            base_price_effective = sel_row['base_price'] + price_adder
+            base_total = base_price_effective * item_qty
             item_final = max(0.0, base_total - item_disc)
             
+            st.write(f"Preço Unit.: **R$ {base_price_effective:.2f}**")
             st.write(f"Total Item: **R$ {item_final:.2f}**")
             
-            # Check cart for this product
-            in_cart = sum(i['qty'] for i in st.session_state['cart'] if i['product_id'] == sel_row['id'])
+            # Check cart for this product/variant
+            # Logic: Need to distinguish variants in cart
+            in_cart = 0
+            for i in st.session_state['cart']:
+                # Same Product AND Same Variant (or both None)
+                p_match = (i['product_id'] == sel_row['id'])
+                v_match = (i.get('variant_id') == (selected_variant['id'] if selected_variant else None))
+                if p_match and v_match:
+                    in_cart += i['qty']
             
-            # Helper to get Real Stock (Kit aware)
-            real_stock = sel_row['stock_quantity']
-            
-            # Check Kit Stock (Quick Query)
-            # Check Kit Stock (Quick Query)
-            is_kit, kit_stock = product_service.get_kit_stock_status(conn, sel_row['id'])
-            
-            if is_kit:
-                st.info(f"🧩 Produto Tipo Kit. Estoque Máximo: {kit_stock}")
-                real_stock = kit_stock
+            # Helper to get Real Stock (Kit aware OR Variant aware)
+            if selected_variant:
+                real_stock = selected_variant['stock']
+            else:
+                real_stock = sel_row['stock_quantity']
+                
+                # Check Kit Stock (Quick Query) - Only if NOT variant
+                is_kit, kit_stock = product_service.get_kit_stock_status(conn, sel_row['id'])
+                if is_kit:
+                    st.info(f"🧩 Produto Tipo Kit. Estoque Máximo: {kit_stock}")
+                    real_stock = kit_stock
 
             if st.button("➕ Adicionar ao Carrinho", type="primary", use_container_width=True):
                 # Validar estoque (Apenas aviso, permitir encomenda)
@@ -249,14 +315,19 @@ with col_cart:
                     st.warning(f"⚠️ Pedido ({in_cart + item_qty}) excede estoque ({real_stock}). O excedente entrará como Encomenda.")
                 
                 # Add to Cart (Always allowed)
+                product_display_name = sel_row['name']
+                if selected_variant:
+                    product_display_name += f" ({selected_variant['name']})"
+
                 cart_item = {
                     "product_id": sel_row['id'],
-                    "product_name": sel_row['name'],
+                    "product_name": product_display_name,
                     "thumb": sel_row['thumb_path'],
                     "qty": item_qty,
-                    "base_price": sel_row['base_price'],
+                    "base_price": base_price_effective, # Store effective price
                     "discount": item_disc,
-                    "total": item_final
+                    "total": item_final,
+                    "variant_id": selected_variant['id'] if selected_variant else None
                 }
                 st.session_state['cart'].append(cart_item)
                 st.session_state['selected_product_id'] = None # Deselect
@@ -375,7 +446,13 @@ with col_cart:
                     
                     p_stock_row = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn, params=(p_id_check,))
                     
-                    if not k_check.empty:
+                    variant_id = item.get('variant_id') # New
+
+                    if variant_id:
+                        # Check Variant Stock
+                        v_row = pd.read_sql("SELECT stock_quantity FROM product_variants WHERE id=?", conn, params=(variant_id,)).iloc[0]
+                        r_stock = v_row['stock_quantity']
+                    elif not k_check.empty:
                         k_check['max'] = k_check['child_stock'] // k_check['quantity']
                         r_stock = int(k_check['max'].min())
                         if r_stock < 0: r_stock = 0
@@ -432,7 +509,8 @@ with col_cart:
                     type_a = "secondary" if has_shortage else "primary"
                     
                     if col_act1.button(lbl_a, type=type_a, use_container_width=True):
-                        # RESOLVE CLIENT
+                        # RESOLVE CLIENT VALIDATION
+                        final_client_id = None
                         final_client_id = None
                         final_client_name = None
                         
@@ -501,7 +579,8 @@ with col_cart:
                                             "payment_method": pay_method_choice,
                                             "notes": notes_order,
                                             "salesperson": salesperson_choice,
-                                            "order_id": trans_uuid
+                                            "order_id": trans_uuid,
+                                            "variant_id": it.get('variant_id')
                                         })
                                         
                                         # Audit
@@ -510,7 +589,7 @@ with col_cart:
                                         
                                         # Deduct Stock (Logic duplicated from before)
                                         # Deduct Stock (Service)
-                                        logs = product_service.deduct_stock(cursor, p_id, q_sell)
+                                        logs = product_service.deduct_stock(cursor, p_id_check, q_sell, variant_id=it.get('variant_id'))
                                         for log in logs:
                                             st.toast(log, icon="📉")
                                         
@@ -555,7 +634,8 @@ with col_cart:
                                              'product_id': int(oi['id']),
                                              'qty': oi['qty'],
                                              'qty_from_stock': 0,
-                                             'unit_price': oi['price']
+                                             'unit_price': oi['price'],
+                                             'variant_id': it.get('variant_id')
                                          })
                                      
                                      order_service.add_commission_items(cursor, new_ord_id, items_for_service)
@@ -675,12 +755,13 @@ with col_cart:
                                     'product_id': int(it['product_id']),
                                     'qty': q_full,
                                     'qty_from_stock': q_res,
-                                    'unit_price': it['base_price']
+                                    'unit_price': it['base_price'],
+                                    'variant_id': it.get('variant_id')
                                 })
                                 
                                 # IF RESERVING, DEDUCT STOCK
                                 if q_res > 0:
-                                    logs = product_service.deduct_stock(cursor, int(it['product_id']), q_res)
+                                    logs = product_service.deduct_stock(cursor, int(it['product_id']), q_res, variant_id=it.get('variant_id'))
                                     for log in logs: st.toast(log, icon="📉")
 
                              order_service.add_commission_items(cursor, new_ord_id, items_for_service)
@@ -758,10 +839,12 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
             # Query Construction (Sales)
             query = """
                 SELECT s.id, s.order_id, s.date, c.name as cliente, p.name as produto, s.quantity, s.total_price, 
-                       s.salesperson, s.payment_method, s.discount, s.notes, s.product_id
+                       s.salesperson, s.payment_method, s.discount, s.notes, s.product_id,
+                       pv.variant_name
                 FROM sales s
                 LEFT JOIN clients c ON s.client_id = c.id
                 LEFT JOIN products p ON s.product_id = p.id
+                LEFT JOIN product_variants pv ON s.variant_id = pv.id
                 WHERE 1=1
             """
             params = []
@@ -783,6 +866,11 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
             query += " ORDER BY s.date DESC, s.id DESC"
             
             sales_view = pd.read_sql(query, conn, params=params)
+            
+            if not sales_view.empty:
+                 # Clean variant name
+                 sales_view['variant_name'] = sales_view['variant_name'].fillna('')
+                 sales_view['produto'] = sales_view.apply(lambda x: f"{x['produto']} ({x['variant_name']})" if x['variant_name'] else x['produto'], axis=1)
 
         with tab_encomendas:
             # Query Construction (Orders)
@@ -1075,3 +1163,176 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                 st.error("Senha incorreta.")
 
 conn.close()
+    
+    # --- HELPER FUNCTIONS (Local) ---
+    def delete_quote(quote_id):
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM quote_items WHERE quote_id=?", (quote_id,))
+            cursor.execute("DELETE FROM quotes WHERE id=?", (quote_id,))
+            audit.log_action(conn, 'DELETE', 'quotes', quote_id, commit=False)
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            st.error(f"Erro ao excluir orçamento: {e}")
+            return False
+
+    def calculate_quote_total(quote_id):
+        cursor = conn.cursor()
+        result = cursor.execute(
+            "SELECT SUM(quantity * unit_price) FROM quote_items WHERE quote_id=?", 
+            (quote_id,)
+        ).fetchone()
+        total = result[0] if result[0] else 0
+        discount = cursor.execute("SELECT discount FROM quotes WHERE id=?", (quote_id,)).fetchone()[0] or 0
+        final_total = total - discount
+        cursor.execute("UPDATE quotes SET total_price=? WHERE id=?", (final_total, quote_id))
+        conn.commit()
+        return final_total
+
+    def update_quote_item(item_id, quote_id, key_prefix):
+        try:
+            new_val = st.session_state[f"{key_prefix}_{item_id}"]
+            cursor = conn.cursor()
+            if key_prefix == "q": cursor.execute("UPDATE quote_items SET quantity=? WHERE id=?", (new_val, item_id))
+            elif key_prefix == "n": cursor.execute("UPDATE quote_items SET item_notes=? WHERE id=?", (new_val, item_id))
+            elif key_prefix == "p": cursor.execute("UPDATE quote_items SET unit_price=? WHERE id=?", (new_val, item_id))
+            conn.commit()
+            calculate_quote_total(quote_id)
+            st.session_state['expanded_quote'] = quote_id
+        except Exception as e: print(f"Error updating item: {e}")
+
+    # --- FILTERS ---
+    q_f1, q_f2, q_f3 = st.columns(3)
+    with q_f1:
+        sel_q_status = st.multiselect("Status", ["Pendente", "Aprovado", "Recusado", "Expirado"], default=["Pendente"])
+    with q_f2:
+        q_clients_df = pd.read_sql("SELECT id, name FROM clients ORDER BY name", conn)
+        q_client_list = ["Todos"] + q_clients_df['name'].tolist()
+        sel_q_client = st.selectbox("Cliente (Filtro)", q_client_list)
+    with q_f3:
+        sel_q_start = st.date_input("De", value=None, format="DD/MM/YYYY", key="q_date_filter")
+
+    # --- FETCH QUOTES ---
+    quotes_df = pd.read_sql("""
+        SELECT q.id, c.name as client, q.date_created, q.date_valid_until, 
+               q.status, q.total_price, q.discount, q.notes, q.client_id,
+               q.delivery_terms, q.payment_terms
+        FROM quotes q
+        JOIN clients c ON q.client_id = c.id
+        ORDER BY q.date_created DESC
+    """, conn)
+
+    if not quotes_df.empty:
+        if sel_q_status: quotes_df = quotes_df[quotes_df['status'].isin(sel_q_status)]
+        if sel_q_client != "Todos": quotes_df = quotes_df[quotes_df['client'] == sel_q_client]
+        if sel_q_start: quotes_df = quotes_df[pd.to_datetime(quotes_df['date_created']).dt.date >= sel_q_start]
+    
+    if quotes_df.empty:
+        st.info("Nenhum orçamento encontrado.")
+    else:
+        for _, quote in quotes_df.iterrows():
+            status_colors = {"Pendente": "🟡", "Aprovado": "🟢", "Recusado": "🔴", "Expirado": "⚪"}
+            status_icon = status_colors.get(quote['status'], "⚪")
+            
+            valid_until = pd.to_datetime(quote['date_valid_until']).date()
+            is_expired = valid_until < date.today() and quote['status'] == 'Pendente'
+            
+            is_exp = (st.session_state.get('expanded_quote') == quote['id'])
+            q_dt = pd.to_datetime(quote['date_created'])
+            fmt_id = f"ORC-{q_dt.strftime('%y%m%d')}-{quote['id']}"
+            
+            with st.expander(f"{status_icon} {fmt_id} - {quote['client']} | R$ {quote['total_price']:.2f}", expanded=is_exp):
+                c_info1, c_info2, c_info3 = st.columns(3)
+                c_info1.write(f"📅 **Criado:** {q_dt.strftime('%d/%m/%Y')}")
+                if is_expired: c_info2.write(f"⏰ **Validade:** :red[EXPIRADO]")
+                else: c_info2.write(f"⏰ **Validade:** {valid_until.strftime('%d/%m/%Y')}")
+                c_info3.metric("Total", f"R$ {quote['total_price']:.2f}")
+                
+                if quote['notes']: st.caption(f"📝 {quote['notes']}")
+                st.caption(f"🚚 Ent: {quote['delivery_terms']} | 💲 Pag: {quote['payment_terms']}")
+                st.divider()
+                
+                # Fetch Items
+                items = pd.read_sql("""
+                    SELECT qi.id, qi.product_id, p.name, p.image_paths, qi.quantity, qi.unit_price, qi.item_notes
+                    FROM quote_items qi
+                    LEFT JOIN products p ON qi.product_id = p.id
+                    WHERE qi.quote_id = ?
+                """, conn, params=(quote['id'],))
+                
+                # Item Display
+                for _, item in items.iterrows():
+                    ci1, ci2, ci3, ci4, ci5 = st.columns([0.5, 2, 1, 1, 1])
+                    with ci1: st.write("📦") # Placeholder image
+                    with ci2:
+                        st.write(f"**{item['name']}**")
+                        # Show Visual Badges for Variants (if needed, simplified here)
+                        if 'Variação:' in (item['item_notes'] or ""):
+                            st.caption(f"🎨 {item['item_notes']}")
+                        elif item['item_notes']:
+                            st.caption(f"📝 {item['item_notes']}")
+                            
+                    with ci3: st.write(f"Qtd: {item['quantity']}")
+                    with ci4: st.write(f"R$ {item['unit_price']:.2f}")
+                    with ci5: st.write(f"**R$ {item['quantity'] * item['unit_price']:.2f}**")
+                
+                st.divider()
+                
+                # Actions
+                ca1, ca2, ca3, ca4 = st.columns(4)
+                
+                # PDF
+                with ca1:
+                    fname = f"{fmt_id}.pdf"
+                    pdf_data = reports.generate_quote_pdf({
+                        "id": fmt_id, 
+                        "client_name": quote['client'],
+                        "date_created": q_dt.strftime('%d/%m/%Y'),
+                        "date_valid_until": valid_until.strftime('%d/%m/%Y'),
+                        "items": [{
+                            "name": r['name'], "qty": r['quantity'], "price": r['unit_price'], "notes": r['item_notes'] or ""
+                        } for _, r in items.iterrows()],
+                        "total": quote['total_price'],
+                        "discount": quote['discount'],
+                        "notes": quote['notes'], "delivery": quote['delivery_terms'], "payment": quote['payment_terms']
+                    })
+                    st.download_button("📄 PDF", data=pdf_data, file_name=fname, mime="application/pdf", key=f"qpdf_{quote['id']}")
+                
+                if quote['status'] == 'Pendente':
+                    # Approve
+                    with ca2:
+                        with st.popover("✅ Aprovar"):
+                            st.write("Confirmar aprovação? Uma encomenda será gerada.")
+                            dep_val = st.number_input("Sinal (R$)", min_value=0.0, key=f"qdep_{quote['id']}")
+                            if st.button("Confirmar", key=f"qconf_{quote['id']}", type="primary"):
+                                # Conversion Logic
+                                cursor = conn.cursor()
+                                cursor.execute("INSERT INTO commission_orders (client_id, total_price, date_created, date_due, status, notes, deposit_amount) VALUES (?, ?, ?, ?, 'Pendente', ?, ?)", 
+                                               (quote['client_id'], quote['total_price'], datetime.now().isoformat(), (date.today()+timedelta(days=30)).isoformat(), f"Via Orçamento {fmt_id}", dep_val))
+                                new_oid = cursor.lastrowid
+                                if isinstance(new_oid, bytes): new_oid = int.from_bytes(new_oid, "little")
+                                
+                                # Move Items
+                                for _, it in items.iterrows():
+                                    cursor.execute("INSERT INTO commission_items (order_id, product_id, quantity, unit_price, notes) VALUES (?, ?, ?, ?, ?)",
+                                                   (new_oid, it['product_id'], it['quantity'], it['unit_price'], it['item_notes']))
+                                
+                                # Update Quote
+                                cursor.execute("UPDATE quotes SET status='Aprovado', converted_order_id=? WHERE id=?", (new_oid, quote['id']))
+                                conn.commit()
+                                st.success("Aprovado!")
+                                st.rerun()
+
+                    # Reject
+                    if ca3.button("❌ Recusar", key=f"qrej_{quote['id']}"):
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE quotes SET status='Recusado' WHERE id=?", (quote['id'],))
+                        conn.commit()
+                        st.rerun()
+                        
+                    # Delete
+                    if ca4.button("🗑️", key=f"qdel_{quote['id']}"):
+                         delete_quote(quote['id'])
+                         st.rerun()

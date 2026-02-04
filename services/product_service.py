@@ -125,12 +125,24 @@ def get_product_images(conn, product_id):
             
     return unique_imgs
 
-def deduct_stock(cursor, product_id, quantity, check_kits=True):
+def deduct_stock(cursor, product_id, quantity, check_kits=True, variant_id=None):
     """
-    Deducts stock from a product. If it's a kit, deducts from components.
+    Deducts stock from a product. If variant_id is provided, deducts from variant.
+    If it's a kit (and no variant_id), deducts from components.
     Returns a list of log messages.
     """
     logs = []
+    
+    if variant_id:
+        # Variant Deduction (Direct)
+        cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id = ?", (quantity, int(variant_id)))
+        if cursor.rowcount > 0:
+             # logs.append(f" - Deducted {quantity} from Variant ID {variant_id}")
+             pass
+        else:
+             logs.append(f"⚠️ FAILED to update stock for Variant ID {variant_id}")
+        return logs
+
     if check_kits:
         # Check if Kit
         # Note: We need a connection for read_sql usually, or we use cursor.execute
@@ -161,3 +173,60 @@ def deduct_stock(cursor, product_id, quantity, check_kits=True):
             pass
             
     return logs
+
+def create_variant(conn, product_id, name, stock, price_adder, material_id=None, material_quantity=0.0):
+    """Creates a new variant for a product."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO product_variants (product_id, variant_name, stock_quantity, price_adder, material_id, material_quantity)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (int(product_id), name, int(stock), float(price_adder), material_id if material_id else None, float(material_quantity)))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error creating variant: {e}")
+        return False
+
+def get_product_variants(conn, product_id):
+    """Returns a DataFrame of variants for a given product."""
+    query = """
+        SELECT pv.*, m.name as material_name 
+        FROM product_variants pv
+        LEFT JOIN materials m ON pv.material_id = m.id
+        WHERE pv.product_id = ?
+    """
+    return pd.read_sql(query, conn, params=(int(product_id),))
+
+def update_variant_stock(conn, variant_id, new_quantity):
+    """Updates the stock quantity of a variant."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE product_variants SET stock_quantity = ? WHERE id = ?", (int(new_quantity), int(variant_id)))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error updating variant stock: {e}")
+        return False
+
+def delete_variant(conn, variant_id):
+    """Deletes a variant."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM product_variants WHERE id = ?", (int(variant_id),))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error deleting variant: {e}")
+        return False
+
+def update_variant_price(conn, variant_id, new_adder):
+    """Updates the price adder of a variant."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE product_variants SET price_adder = ? WHERE id = ?", (float(new_adder), int(variant_id)))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error updating variant price: {e}")
+        return False
