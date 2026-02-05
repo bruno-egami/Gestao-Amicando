@@ -5,6 +5,7 @@ from datetime import date
 import admin_utils
 import auth
 import utils.ui_components as ui_components
+import utils.backup_utils as backup_utils
 
 # Page config
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
@@ -21,14 +22,17 @@ def startup_db():
     database.init_db()
 
 startup_db()
+
+# Run automatic backup check (utility handles frequency logic)
+with database.db_session() as conn_bkp:
+    backup_utils.run_backup_if_needed(conn_bkp)
+
 def get_db_connection():
     return database.get_connection()
 
-startup_db()
-conn = get_db_connection()
-
 # Ensure default admin exists
-auth.create_default_admin(conn)
+with database.db_session() as conn_init:
+    auth.create_default_admin(conn_init)
 
 # --- AUTHENTICATION ---
 if not auth.require_login(conn):

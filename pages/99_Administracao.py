@@ -9,6 +9,7 @@ import os
 import io
 import time
 from datetime import datetime
+import utils.backup_utils as backup_utils
 
 
 st.set_page_config(page_title="Administração", page_icon="⚙️", layout="wide")
@@ -972,15 +973,71 @@ with tab_db:
                 st.download_button(
                     "💾 Baixar Banco de Dados (.db)",
                     f,
-                    file_name=f"backup_{datetime.now().strftime('%Y%m%d_%H%M')}.db",
+                    file_name=f"backup_manual_{datetime.now().strftime('%Y%m%d_%H%M')}.db",
                     mime="application/octet-stream",
                     use_container_width=True,
                     type="primary"
                 )
         else:
             admin_utils.show_feedback_dialog("Arquivo de banco de dados não encontrado.", level="error")
+        
+        st.divider()
+        st.subheader("⚙️ Backup Automático")
+        bkp_settings = backup_utils.get_backup_settings(conn)
+        
+        freq_opts = ["Manual", "Diário", "Semanal", "Mensal"]
+        curr_freq = bkp_settings['frequency']
+        freq_idx = freq_opts.index(curr_freq) if curr_freq in freq_opts else 1
+        
+        new_freq = st.selectbox("Frequência de Backup", freq_opts, index=freq_idx, help="O backup será verificado sempre que o Dashboard for carregado.")
+        
+        if new_freq != curr_freq:
+            backup_utils.save_backup_settings(conn, new_freq)
+            st.success(f"Frequência alterada para: {new_freq}")
             
+        last_run_dt = datetime.fromisoformat(bkp_settings['last_run']).strftime('%d/%m/%Y %H:%M')
+        st.caption(f"📅 Último backup automático: {last_run_dt}")
+        
+        if st.button("🚀 Executar Backup Agora", use_container_width=True):
+            if backup_utils.perform_backup(conn):
+                admin_utils.show_feedback_dialog("Backup realizado com sucesso!", level="success")
+                st.rerun()
+            else:
+                admin_utils.show_feedback_dialog("Erro ao realizar backup.", level="error")
+
     with col_rst:
+        st.subheader("📋 Backups Recentes (Local)")
+        backups = backup_utils.list_backups()
+        
+        if not backups:
+            st.info("Nenhum backup local encontrado em `data/backups/`")
+        else:
+            for b_file in backups:
+                with st.container(border=True):
+                    bc1, bc2, bc3 = st.columns([3, 1, 1])
+                    with bc1:
+                        st.write(f"📄 {b_file}")
+                        # Get size
+                        b_path = os.path.join(backup_utils.BACKUP_FOLDER, b_file)
+                        b_size = os.path.getsize(b_path) / (1024*1024)
+                        st.caption(f"Tamanho: {b_size:.2f} MB")
+                    
+                    with bc2:
+                        with open(b_path, "rb") as bf:
+                            st.download_button("⬇️", bf, file_name=b_file, key=f"dl_{b_file}", help="Baixar")
+                    
+                    with bc3:
+                        if st.button("🗑️", key=f"del_{b_file}", help="Excluir backup local"):
+                            def do_del_bkp(fname=b_file):
+                                if backup_utils.delete_backup(fname):
+                                    st.rerun()
+                            
+                            admin_utils.show_confirmation_dialog(
+                                f"Deseja excluir permanentemente o arquivo de backup {b_file}?",
+                                on_confirm=do_del_bkp
+                            )
+
+        st.divider()
         st.subheader("⬆️ Restaurar (Upload)")
         st.write("Faça upload de um arquivo `.db` para restaurar o sistema.")
         

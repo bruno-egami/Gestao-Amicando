@@ -84,10 +84,21 @@ def run_migrations(conn):
         cursor.execute("ALTER TABLE student_consumptions ADD COLUMN material_id INTEGER")
     except sqlite3.OperationalError: pass
 
-    # 12. Tuitions: Add 'created_at' for debit tracking
     try:
         cursor.execute("ALTER TABLE tuitions ADD COLUMN created_at TEXT")
     except sqlite3.OperationalError: pass
+
+    # 13. Settings Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    
+    # Initialize default settings
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_frequency', 'Diário')")
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('last_backup_timestamp', '2000-01-01T00:00:00')")
 
     conn.commit()
 
@@ -115,6 +126,16 @@ def init_db():
             name TEXT NOT NULL UNIQUE
         )
     ''')
+
+    # Settings
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_frequency', 'Diário')")
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('last_backup_timestamp', '2000-01-01T00:00:00')")
 
     # Suppliers
     cursor.execute('''
