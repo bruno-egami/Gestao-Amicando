@@ -653,10 +653,14 @@ else:
                                         cursor.execute("BEGIN TRANSACTION")
                                         try:
                                             # Insert into WIP (materials_deducted = 0)
+                                            import json
+                                            history = {"Iniciado": datetime.now().strftime("%d/%m %H:%M"), "Modelagem": datetime.now().strftime("%d/%m %H:%M")}
+                                            history_json = json.dumps(history)
+
                                             cursor.execute("""
-                                                INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, notes)
-                                                VALUES (?, ?, ?, ?, 'Modelagem', ?, ?, 0, ?)
-                                            """, (item['product_id'], item['variant_id'], order['id'], item['id'], wip_amount, wip_date.isoformat(), item.get('notes')))
+                                                INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
+                                                VALUES (?, ?, ?, ?, 'Modelagem', ?, ?, 0, ?, ?)
+                                            """, (item['product_id'], item['variant_id'], order['id'], item['id'], wip_amount, wip_date.isoformat(), history_json, item.get('notes')))
                                             
                                             # Update Order Status to "Em Produção" if not already
                                             if order['status'] == 'Pendente':
