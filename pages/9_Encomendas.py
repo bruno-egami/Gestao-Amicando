@@ -360,47 +360,49 @@ else:
                                     stock_av = pd.read_sql("SELECT stock_quantity FROM product_variants WHERE id=?", conn_check, params=(sel_variant_id,)).iloc[0]['stock_quantity']
                             
                             qty_res_new = min(stock_av, new_qty) if use_stock_new else 0
-                            price = p_row['base_price'] + price_mod
                             
-                            success = False
-                            conn_write = database.get_connection()
-                            cursor_write = conn_write.cursor()
-                            try:
-                                cursor_write.execute("BEGIN TRANSACTION")
-                                # Insert Item
-                                cursor_write.execute("""
-                                    INSERT INTO commission_items (order_id, product_id, quantity, quantity_from_stock, quantity_produced, unit_price, variant_id)
-                                    VALUES (?, ?, ?, ?, 0, ?, ?)
-                                """, (order['id'], int(p_row['id']), new_qty, int(qty_res_new), float(price), int(sel_variant_id) if sel_variant_id else None))
+                            # BLOCK logic if user wants to reserve but balance is insufficient
+                            if use_stock_new and new_qty > stock_av:
+                                admin_utils.show_feedback_dialog(f"Estoque insuficiente para reserva! (Necessário: {new_qty}, Disponível: {int(stock_av)})", level="error")
+                            else:
+                                price = p_row['base_price'] + price_mod
                                 
-                                # Reserve Stock (Handle Kits)
-                                if qty_res_new > 0:
-                                    if sel_variant_id:
-                                         cursor_write.execute("UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(sel_variant_id)))
-                                    else:
-                                        kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn_write, params=(int(p_row['id']),))
-                                        if not kit_comps.empty:
-                                            for _, kc in kit_comps.iterrows():
-                                                deduct_res = qty_res_new * kc['quantity']
-                                                cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_res), int(kc['child_product_id'])))
+                                conn_write = database.get_connection()
+                                cursor_write = conn_write.cursor()
+                                try:
+                                    cursor_write.execute("BEGIN TRANSACTION")
+                                    # Insert Item
+                                    cursor_write.execute("""
+                                        INSERT INTO commission_items (order_id, product_id, quantity, quantity_from_stock, quantity_produced, unit_price, variant_id)
+                                        VALUES (?, ?, ?, ?, 0, ?, ?)
+                                    """, (order['id'], int(p_row['id']), new_qty, int(qty_res_new), float(price), int(sel_variant_id) if sel_variant_id else None))
+                                    
+                                    # Reserve Stock (Handle Kits)
+                                    if qty_res_new > 0:
+                                        if sel_variant_id:
+                                             cursor_write.execute("UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(sel_variant_id)))
                                         else:
-                                            cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(p_row['id'])))
-                                
-                                # Update Order Total
-                                cursor_write.execute("UPDATE commission_orders SET total_price = total_price + ? WHERE id=?", (price * new_qty, order['id']))
-                                
-                                conn_write.commit()
-                                success = True
-                            except Exception as e:
-                                conn_write.rollback()
-                                admin_utils.show_feedback_dialog(f"Erro ao adicionar item: {e}", level="error")
-                            finally:
-                                cursor_write.close()
-                                conn_write.close()
-                            
-                            if success:
-                                admin_utils.show_feedback_dialog("Item adicionado!", level="success")
-                                st.rerun()
+                                            kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn_write, params=(int(p_row['id']),))
+                                            if not kit_comps.empty:
+                                                for _, kc in kit_comps.iterrows():
+                                                    deduct_res = qty_res_new * kc['quantity']
+                                                    cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_res), int(kc['child_product_id'])))
+                                            else:
+                                                cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(p_row['id'])))
+                                    
+                                    # Update Order Total
+                                    cursor_write.execute("UPDATE commission_orders SET total_price = total_price + ? WHERE id=?", (price * new_qty, order['id']))
+                                    
+                                    success = True
+                                    conn_write.commit()
+                                    admin_utils.show_feedback_dialog("Item adicionado!", level="success")
+                                    st.rerun()
+                                except Exception as e:
+                                    conn_write.rollback()
+                                    admin_utils.show_feedback_dialog(f"Erro ao adicionar item: {e}", level="error")
+                                finally:
+                                    cursor_write.close()
+                                    conn_write.close()
             # Edit Order Button
             with c_act2:
                 with st.popover("✏️ Editar"):

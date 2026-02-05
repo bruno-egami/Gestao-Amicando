@@ -6,6 +6,7 @@ import time
 import database
 import auth
 import audit
+import admin_utils
 from datetime import datetime
 
 st.set_page_config(page_title="Insumos", page_icon="🧱", layout="wide")
@@ -283,7 +284,7 @@ with tab_cat:
                 with st.form("trans_form"):
                     col_t1, col_t2, col_t3, col_t4 = st.columns(4)
                     t_type = col_t1.selectbox("Tipo", ["ENTRADA (Compra/Add)", "SAIDA (Consumo/Baixa)"])
-                    t_qtd = col_t2.number_input("Quantidade", min_value=0.01, step=0.1)
+                    t_qtd = col_t2.number_input("Quantidade", min_value=0.0, step=0.1, value=None)
                     t_date = col_t3.date_input("Data", value=datetime.now())
                     t_obs = st.text_input("Observação", placeholder="Ex: NF 123, Uso na queima X...")
                     
@@ -295,34 +296,50 @@ with tab_cat:
                         col_t4.write("") # Spacer or info
 
                     if st.form_submit_button("💾 Registrar Movimento", type="primary"):
-                        # Logic
-                        current_stock = target_data.get('stock_level', 0.0)
-                        new_rec_stock = current_stock
-                        
-                        clean_type = t_type.split(" ")[0] # ENTRADA, SAIDA
-                        
-                        if clean_type == "ENTRADA":
-                            new_rec_stock += t_qtd
-                        elif clean_type == "SAIDA":
-                            new_rec_stock -= t_qtd
+                        if t_qtd is None or t_qtd <= 0:
+                            st.error("Informe uma quantidade válida.")
+                        else:
+                            # Logic
+                            current_stock = target_data.get('stock_level', 0.0)
+                            new_rec_stock = current_stock
+                            
+                            clean_type = t_type.split(" ")[0] # ENTRADA, SAIDA
+                            
+                            curr_price = float(target_data.get('price_per_unit', 0.0))
+                            new_calc_price = curr_price
+                            
+                            if clean_type == "ENTRADA":
+                                new_rec_stock += t_qtd
+                                # Weighted Average Price Calculation
+                                if t_cost > 0:
+                                    pur_price = float(t_cost / t_qtd)
+                                    if current_stock > 0:
+                                        new_calc_price = ((current_stock * curr_price) + t_cost) / (current_stock + t_qtd)
+                                    else:
+                                        new_calc_price = pur_price
+                            elif clean_type == "SAIDA":
+                                new_rec_stock -= t_qtd
 
-                        current_u = auth.get_current_user()
-                        u_id = int(current_u['id']) if current_u else 1
-                        
-                        # Explicit casting
-                        mat_id_py = int(target_data['id'])
-                        t_qtd_py = float(t_qtd)
-                        new_rec_stock_py = float(new_rec_stock)
-                        
-                        cursor.execute("""
-                            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (mat_id_py, t_date.isoformat(), clean_type, t_qtd_py, float(t_cost), t_obs, u_id))
-                        
-                        # Update Material Stock
-                        cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_rec_stock_py, mat_id_py))
-                        conn.commit()
-                        admin_utils.show_feedback_dialog("Movimentação registrada!", level="success")
+                            current_u = auth.get_current_user()
+                            u_id = int(current_u['id']) if current_u else 1
+                            
+                            # Explicit casting
+                            mat_id_py = int(target_data['id'])
+                            t_qtd_py = float(t_qtd)
+                            new_rec_stock_py = float(new_rec_stock)
+                            
+                            cursor.execute("""
+                                INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (mat_id_py, t_date.isoformat(), clean_type, t_qtd_py, float(t_cost), t_obs, u_id))
+                            
+                            # Update Material Stock & Price
+                            cursor.execute("UPDATE materials SET stock_level = ?, price_per_unit = ? WHERE id = ?", (new_rec_stock_py, float(new_calc_price), mat_id_py))
+                            conn.commit()
+                            
+                            # Persistent feedback
+                            details = f"Qtd: {t_qtd} {target_data['unit']}\n\nNovo Preço Médio: R$ {new_calc_price:.2f}\n\nNovo Saldo: {new_rec_stock:.2f}"
+                            admin_utils.show_feedback_dialog("Movimentação registrada!", level="success", sub_message=details)
 
                 st.divider()
                 st.subheader("Extrato de Movimentações")
@@ -353,7 +370,7 @@ with tab_cat:
             for i, row in df_materials.iterrows():
                 with st.container(border=True):
                     # Layout: Image | Info | Price/Sup | Action
-                    c_img, c_info, c_price, c_act = st.columns([1, 4, 3, 1.5])
+                    c_img, c_info, c_price, c_act1, c_act2 = st.columns([1, 4, 3, 1, 1])
                     
                     # Image
                     with c_img:
@@ -364,7 +381,7 @@ with tab_cat:
                     
                     # Info
                     with c_info:
-                        st.markdown(f"**{row['name']}**")
+                        st.markdown(f"**{row['name']}** `#{row['id']}`")
                         cat_lbl = row['category_name'] if row['category_name'] else "Geral"
                         st.caption(f"{cat_lbl} | {row['type']}")
                         
@@ -382,9 +399,65 @@ with tab_cat:
                          sup_lbl = row['supplier_name'] if row['supplier_name'] else "Sem Fornecedor"
                          st.caption(f"Fornecedor: {sup_lbl}")
                     
-                    # Edit Button (Right aligned)
-                    with c_act:
-                        if st.button("✏️ Editar", key=f"edit_{row['id']}", use_container_width=True):
+                    # Quick Entry Button (Popover)
+                    with c_act1:
+                        with st.popover("➕ Entrada"):
+                            st.markdown(f"**Registrar Entrada: {row['name']}**")
+                            q_qty = st.number_input("Qtd", min_value=0.0, step=0.1, value=None, key=f"q_qty_{row['id']}")
+                            q_price = st.number_input("Preço da Nova Compra (R$/un)", min_value=0.0, value=None, placeholder=f"{row['price_per_unit']:.2f}", step=0.01, key=f"q_price_{row['id']}", help="O preço médio ponderado do estoque será recalculado. Se deixar vazio, usará o preço atual.")
+                            q_date = st.date_input("Data", value=datetime.now(), key=f"q_date_{row['id']}")
+                            q_obs = st.text_input("Obs", placeholder="Ex: NF 123", key=f"q_obs_{row['id']}")
+                            
+                            if st.button("Confirmar Entrada", key=f"q_btn_{row['id']}", type="primary"):
+                                if q_qty is None or q_qty <= 0:
+                                    st.error("Informe uma quantidade válida.")
+                                else:
+                                    try:
+                                        cursor_entry = conn.cursor()
+                                        curr_stock = float(row['stock_level'])
+                                        curr_price = float(row['price_per_unit'])
+                                        
+                                        # Use provided price or fallback to current
+                                        purchase_price = float(q_price) if q_price is not None else curr_price
+                                        
+                                        # Weighted Average Logic
+                                        if curr_stock > 0:
+                                            new_avg_price = ((curr_stock * curr_price) + (q_qty * purchase_price)) / (curr_stock + q_qty)
+                                        else:
+                                            new_avg_price = purchase_price
+                                        
+                                        new_stock_entry = curr_stock + q_qty
+                                        current_u = auth.get_current_user()
+                                        u_id_entry = int(current_u['id']) if current_u else 1
+                                        
+                                        # 1. Log Transaction
+                                        cursor_entry.execute("""
+                                            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
+                                            VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?)
+                                        """, (int(row['id']), q_date.isoformat(), float(q_qty), float(purchase_price * q_qty), q_obs, u_id_entry))
+                                        
+                                        # 2. Update Material (Stock and Price)
+                                        cursor_entry.execute("""
+                                            UPDATE materials 
+                                            SET stock_level = ?, price_per_unit = ? 
+                                            WHERE id = ?
+                                        """, (float(new_stock_entry), float(new_avg_price), int(row['id'])))
+                                        
+                                        conn.commit()
+                                        
+                                        # Persistent feedback
+                                        details = f"Qtd Adicionada: {q_qty} {row['unit']}\n\nNovo Preço Médio: R$ {new_avg_price:.2f}/{row['unit']}\n\nNovo Saldo: {new_stock_entry:.2f} {row['unit']}"
+                                        admin_utils.show_feedback_dialog(
+                                            f"Entrada de {row['name']} registrada!", 
+                                            level="success",
+                                            sub_message=details
+                                        )
+                                    except Exception as e:
+                                        st.error(f"Erro: {e}")
+
+                    # Edit Button
+                    with c_act2:
+                        if st.button("✏️", key=f"edit_{row['id']}", use_container_width=True, help="Editar cadastro completo"):
                             st.session_state.insumo_edit_id = row['id']
                             st.rerun()
 

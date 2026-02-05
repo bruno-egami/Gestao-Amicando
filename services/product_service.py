@@ -174,6 +174,50 @@ def deduct_stock(cursor, product_id, quantity, check_kits=True, variant_id=None)
             
     return logs
 
+def check_recipe_availability(cursor, product_id, quantity, filter_type=None, exclude_ids=None):
+    """
+    Checks if all required materials for a product (and its kit components) are available in stock.
+    Returns (True, []) if all available, or (False, [missing_items_list]) if not.
+    """
+    recipes_needed = []
+    
+    def collect_recipes(pid, mul):
+        query = "SELECT m.id, m.name, r.quantity as qty_per_unit, m.stock_level FROM product_recipes r JOIN materials m ON r.material_id = m.id WHERE r.product_id=?"
+        cursor.execute(query, (int(pid),))
+        for mid, mname, qty_unit, s_level in cursor.fetchall():
+            recipes_needed.append({
+                'id': mid,
+                'name': mname,
+                'needed': qty_unit * mul * quantity,
+                'available': s_level
+            })
+            
+        cursor.execute("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", (int(pid),))
+        for child_id, child_qty in cursor.fetchall():
+            collect_recipes(child_id, mul * child_qty)
+            
+    collect_recipes(product_id, 1.0)
+    
+    missing = []
+    for r in recipes_needed:
+        is_clay = any(keyword in r['name'].lower() for keyword in ['massa', 'argila'])
+        
+        apply_check = False
+        if filter_type == 'clay' and is_clay:
+            apply_check = True
+        elif filter_type == 'others' and not is_clay:
+            if not exclude_ids or r['id'] not in exclude_ids:
+                apply_check = True
+        elif filter_type is None:
+            apply_check = True
+            
+        if apply_check and r['needed'] > r['available']:
+            missing.append(f"{r['name']} (Necessário: {r['needed']:.3f}, Disponível: {r['available']:.3f})")
+            
+    if missing:
+        return False, missing
+    return True, []
+
 def deduct_production_materials_central(cursor, product_id, quantity, filter_type=None, exclude_ids=None, note_suffix=""):
     """
     Deducts raw materials from stock based on product recipe (recursive for kits).
@@ -182,7 +226,12 @@ def deduct_production_materials_central(cursor, product_id, quantity, filter_typ
     """
     from datetime import date
     
-    # 1. Collect all recipes (Recursive for Kits)
+    # 1. Validation Logic
+    available, missing = check_recipe_availability(cursor, product_id, quantity, filter_type, exclude_ids)
+    if not available:
+        raise ValueError(f"Estoque insuficiente para os seguintes insumos: {', '.join(missing)}")
+
+    # 2. Collect all recipes (Recursive for Kits)
     recipes_to_deduct = []
     
     def collect_recipes(pid, mul):

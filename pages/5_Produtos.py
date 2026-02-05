@@ -204,7 +204,25 @@ with tab1:
                         st.caption(f"ID: {row['id']} | {row['category']} | {stock_label}")
                         
                         if breakdown_str:
-                            st.caption(f"🔎 {breakdown_str}")
+                            st.caption(f"🔎 Kit: {breakdown_str}")
+                            
+                        # --- NEW: Product Recipe Summary ---
+                        recipe_df = pd.read_sql("""
+                            SELECT m.name, pr.quantity, m.unit
+                            FROM product_recipes pr
+                            JOIN materials m ON pr.material_id = m.id
+                            WHERE pr.product_id = ?
+                            ORDER BY pr.id ASC
+                        """, conn, params=(row['id'],))
+                        
+                        if not recipe_df.empty:
+                            mats = []
+                            for _, mr in recipe_df.iterrows():
+                                # Format quantity: if it's a small float, show 3 decimals, else 1
+                                q_fmt = f"{mr['quantity']:.3f}" if mr['quantity'] < 1 else f"{mr['quantity']:.1f}"
+                                mats.append(f"{mr['name']}: {q_fmt}{mr['unit']}")
+                            recipe_str = " | ".join(mats)
+                            st.caption(f"📜 Formulação: {recipe_str}")
                             
                         # Show Variants Stock
                         if has_variants:

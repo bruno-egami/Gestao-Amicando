@@ -3,6 +3,7 @@ import pandas as pd
 import database
 import auth
 import services.production_service as production_service
+import admin_utils
 from datetime import date, datetime
 import json
 
@@ -26,13 +27,50 @@ tab_kanban, tab_new, tab_hist, tab_analysis = st.tabs(["Kanban", "Nova Produçã
 
 # --- TAB 1: KANBAN ---
 with tab_kanban:
-    # Kanban Columns (Updated with Waiting Queue)
     stages = ["Fila de Espera", "Modelagem", "Secagem", "Biscoito", "Esmaltação", "Queima de Alta"]
+    
+    # Load ALL items once for global filtering
+    all_items = production_service.get_wip_items(conn)
+    
+    # --- FILTERS SECTION ---
+    with st.expander("🔍 Filtros e Busca", expanded=False):
+        f_col1, f_col2, f_col3 = st.columns([2, 2, 3])
+        
+        with f_col1:
+            clients_in_wip = sorted([c for c in all_items['client_name'].dropna().unique()])
+            has_stock_items = all_items['client_name'].isna().any()
+            client_opts = (["Estoque / Loja"] if has_stock_items else []) + clients_in_wip
+            sel_clients = st.multiselect("Filtrar por Cliente", options=client_opts)
+            
+        with f_col2:
+            cats_in_wip = sorted([k for k in all_items['product_category'].dropna().unique()])
+            sel_cats_kanban = st.multiselect("Filtrar por Categoria", options=cats_in_wip)
+            
+        with f_col3:
+            search_query = st.text_input("Buscar Produto", placeholder="Nome do produto...")
+
+    # Apply Filters
+    filtered_items = all_items.copy()
+    if sel_clients:
+        # If "Estoque / Loja" is selected, we include rows where client_name is NA
+        include_stock = "Estoque / Loja" in sel_clients
+        actual_clients = [c for c in sel_clients if c != "Estoque / Loja"]
+        
+        if include_stock:
+            filtered_items = filtered_items[filtered_items['client_name'].isin(actual_clients) | filtered_items['client_name'].isna()]
+        else:
+            filtered_items = filtered_items[filtered_items['client_name'].isin(actual_clients)]
+    if sel_cats_kanban:
+        filtered_items = filtered_items[filtered_items['product_category'].isin(sel_cats_kanban)]
+    if search_query:
+        filtered_items = filtered_items[filtered_items['product_name'].str.contains(search_query, case=False, na=False)]
+
     cols = st.columns(len(stages))
     
     for i, stage in enumerate(stages):
         with cols[i]:
-            items = production_service.get_wip_items(conn, stage)
+            # Get items for this stage from the filtered list
+            items = filtered_items[filtered_items['stage'] == stage]
             
             st.subheader(stage)
             st.caption(f"{len(items)} lotes")
@@ -40,7 +78,18 @@ with tab_kanban:
             for _, item in items.iterrows():
                 with st.container(border=True):
                     # Card Header
-                    st.markdown(f"**{item['product_name']}**")
+                    title_prefix = ""
+                    days_msg = ""
+                    # Delayed Indicator (started > 7 days ago)
+                    try:
+                        started_dt = pd.to_datetime(item['start_date']).date()
+                        days_in = (date.today() - started_dt).days
+                        if days_in > 7:
+                            title_prefix = "⚠️ "
+                            days_msg = f" (:red[{days_in} dias])"
+                    except: pass
+
+                    st.markdown(f"**{title_prefix}{item['product_name']}**{days_msg}")
                     st.markdown(f"📦 {item['quantity']} un")
                     
                     # Context Badge (Order vs Stock)
@@ -144,7 +193,7 @@ with tab_kanban:
                                     cursor_write.execute("BEGIN TRANSACTION")
                                     production_service.move_stage(cursor_write, conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze)
                                     conn_write.commit()
-                                    st.success("Movimentação concluída!")
+                                    st.toast(f"Movido para {next_s}!", icon="✅")
                                     st.rerun()
                                 except Exception as e:
                                     conn_write.rollback()
@@ -168,8 +217,7 @@ with tab_kanban:
                                     cursor_write.execute("BEGIN TRANSACTION")
                                     production_service.finalize_production(cursor_write, item, qty, inc_stock)
                                     conn_write.commit()
-                                    st.success("Finalizado!")
-                                    st.rerun()
+                                    admin_utils.show_feedback_dialog(f"Produção de {item['product_name']} finalizada!", level="success")
                                 except Exception as e:
                                     conn_write.rollback()
                                     st.error(f"Erro: {e}")
@@ -193,7 +241,7 @@ with tab_kanban:
                                     conn_write.commit()
                                     if replenished:
                                         st.info(f"🔄 Um novo card de {qty_loss} peças foi criado em **Fila de Espera** para repor a quebra da encomenda.")
-                                    admin_utils.show_feedback_dialog(f"Registrado: {qty_loss} peças perdidas.", level="warning")
+                                    admin_utils.show_feedback_dialog(f"Registrado: {qty_loss} peças perdidas em {stage}.", level="warning")
                                 except Exception as e:
                                     conn_write.rollback()
                                     admin_utils.show_feedback_dialog(f"Erro ao registrar quebra: {e}", level="error")
@@ -205,7 +253,17 @@ with tab_kanban:
 with tab_new:
     st.header("Iniciar Produção para Estoque")
     
-    products = pd.read_sql("SELECT id, name FROM products ORDER BY name", conn)
+    # 1. Category Filter
+    cats_query = "SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND category != '' ORDER BY category"
+    cats_list = pd.read_sql(cats_query, conn)['category'].tolist()
+    sel_cat = st.selectbox("Filtrar por Categoria", ["Todas"] + cats_list)
+    
+    # 2. Product Selection
+    if sel_cat == "Todas":
+        products = pd.read_sql("SELECT id, name FROM products ORDER BY name", conn)
+    else:
+        products = pd.read_sql("SELECT id, name FROM products WHERE category = ? ORDER BY name", conn, params=(sel_cat,))
+        
     sel_prod_name = st.selectbox("Produto", products['name'])
     
     if sel_prod_name:
@@ -232,7 +290,7 @@ with tab_new:
                 cursor_write.execute("BEGIN TRANSACTION")
                 production_service.start_production(cursor_write, pid, qty_new, start_dt.isoformat(), obs, vid)
                 conn_write.commit()
-                admin_utils.show_feedback_dialog("Produção iniciada!", level="success")
+                admin_utils.show_feedback_dialog(f"Produção iniciada: {qty_new} un de {sel_prod_name}", level="success")
             except Exception as e:
                 conn_write.rollback()
                 admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")

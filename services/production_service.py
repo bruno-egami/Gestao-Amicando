@@ -13,7 +13,7 @@ def get_wip_items(conn, stage=None):
     Fetches WIP items with product, client, and order details.
     """
     query = """
-        SELECT w.*, p.name as product_name, p.image_paths, c.name as client_name, co.date_due, co.id as real_order_id
+        SELECT w.*, p.name as product_name, p.category as product_category, p.image_paths, c.name as client_name, co.date_due, co.id as real_order_id
         FROM production_wip w
         JOIN products p ON w.product_id = p.id
         LEFT JOIN commission_orders co ON w.order_id = co.id
@@ -73,11 +73,14 @@ def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total
         
     # Glaze (if moving to Esmaltação)
     if current_stage == 'Biscoito' and next_stage == 'Esmaltação' and deduct_glaze and selected_variant_id:
-        var_data = pd.read_sql("SELECT material_id, material_quantity FROM product_variants WHERE id=?", conn, params=(int(selected_variant_id),))
+        var_data = pd.read_sql("SELECT m.name as mat_name, pv.material_id, pv.material_quantity, m.stock_level FROM product_variants pv LEFT JOIN materials m ON pv.material_id = m.id WHERE pv.id=?", conn, params=(int(selected_variant_id),))
         if not var_data.empty:
             vd = var_data.iloc[0]
             if vd['material_id'] and vd['material_quantity'] > 0:
                 d_qty = vd['material_quantity'] * qty_move
+                if d_qty > vd['stock_level']:
+                    raise ValueError(f"Estoque insuficiente de esmalte: {vd['mat_name']} (Necessário: {d_qty:.3f}, Disponível: {vd['stock_level']:.3f})")
+                
                 cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", (d_qty, int(vd['material_id'])))
                 cursor.execute("INSERT INTO inventory_transactions (date, material_id, quantity, type, notes) VALUES (?, ?, ?, 'SAIDA', ?)", 
                               (date.today().isoformat(), int(vd['material_id']), d_qty, f"Esmaltação Produto ID {curr['product_id']}"))
