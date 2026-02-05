@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import database
 import auth
+import services.production_service as production_service
 from datetime import date, datetime
-import services.product_service as product_service
-import time
 import json
 
 st.set_page_config(page_title="Produção", layout="wide", page_icon="🏭")
@@ -22,98 +21,6 @@ auth.render_custom_sidebar()
 
 st.title("🏭 Produção")
 
-
-
-# Helper Functions
-def get_wip_items(stage=None):
-    query = """
-        SELECT w.*, p.name as product_name, p.image_paths, c.name as client_name, co.date_due, co.id as real_order_id
-        FROM production_wip w
-        JOIN products p ON w.product_id = p.id
-        LEFT JOIN commission_orders co ON w.order_id = co.id
-        LEFT JOIN clients c ON co.client_id = c.id
-    """
-    params = []
-    if stage:
-        query += " WHERE w.stage = ?"
-        params.append(stage)
-    
-    # Sort by priority first, then date
-    query += " ORDER BY w.priority DESC, w.start_date, co.date_due"
-    return pd.read_sql(query, conn, params=params)
-
-def move_stage(item_id, current_stage, next_stage, qty_move, total_qty, selected_variant_id=None, deduct_glaze=False):
-    cursor = conn.cursor()
-    try:
-        # Fetch current record using pandas for safe name-based access
-        df_curr = pd.read_sql("SELECT * FROM production_wip WHERE id=?", conn, params=(item_id,))
-        if df_curr.empty: return
-        curr = df_curr.iloc[0]
-        
-        # Load existing history
-        try:
-            history = json.loads(curr['stage_history']) if curr['stage_history'] else {}
-        except:
-            history = {}
-        
-        # Add next stage timestamp
-        history[next_stage] = datetime.now().strftime("%d/%m %H:%M")
-        history_json = json.dumps(history)
-
-        # 1. Automatic Material Deduction
-        # Clay (if moving TO Modelagem)
-        m_deducted = curr['materials_deducted']
-        if next_stage == 'Modelagem' and m_deducted == 0:
-            product_service.deduct_production_materials_central(cursor, int(curr['product_id']), qty_move, filter_type='clay')
-            m_deducted = 1
-            
-        # Glaze (if moving to Esmaltação)
-        if current_stage == 'Biscoito' and next_stage == 'Esmaltação' and deduct_glaze and selected_variant_id:
-            var_data = pd.read_sql("SELECT material_id, material_quantity FROM product_variants WHERE id=?", conn, params=(int(selected_variant_id),))
-            if not var_data.empty:
-                vd = var_data.iloc[0]
-                if vd['material_id'] and vd['material_quantity'] > 0:
-                    d_qty = vd['material_quantity'] * qty_move
-                    cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", (d_qty, int(vd['material_id'])))
-                    cursor.execute("INSERT INTO inventory_transactions (date, material_id, quantity, type, notes) VALUES (?, ?, ?, 'SAIDA', ?)", 
-                                  (date.today().isoformat(), int(vd['material_id']), d_qty, f"Esmaltação Produto {curr['product_id']}"))
-
-        # Use provided variant or keep existing
-        final_variant_id = selected_variant_id if selected_variant_id else curr['variant_id']
-
-        # 2. Perform Move
-        if qty_move == total_qty:
-            cursor.execute("""
-                UPDATE production_wip 
-                SET stage=?, variant_id=?, materials_deducted=?, stage_history=? 
-                WHERE id=?
-            """, (next_stage, final_variant_id, int(m_deducted), history_json, item_id))
-        else:
-            # Update current (reduce qty)
-            cursor.execute("UPDATE production_wip SET quantity = quantity - ? WHERE id=?", (qty_move, item_id))
-            # Insert new item with updated history and stage
-            cursor.execute("""
-                INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (int(curr['product_id']), final_variant_id, 
-                  int(curr['order_id']) if pd.notna(curr['order_id']) else None, 
-                  int(curr['order_item_id']) if pd.notna(curr['order_item_id']) else None, 
-                  next_stage, qty_move, curr['start_date'], int(m_deducted), history_json, curr['notes']))
-            
-        conn.commit()
-        admin_utils.show_feedback_dialog("Movimentação concluída!", level="success")
-    except Exception as e:
-        admin_utils.show_feedback_dialog(f"Erro ao mover: {e}", level="error")
-
-def update_priority(item_id, increment):
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE production_wip SET priority = priority + ? WHERE id=?", (increment, item_id))
-        conn.commit()
-        st.rerun()
-    except Exception as e:
-        admin_utils.show_feedback_dialog(f"Erro ao atualizar prioridade: {e}", level="error")
-
 # --- TABS ---
 tab_kanban, tab_new, tab_hist, tab_analysis = st.tabs(["Kanban", "Nova Produção", "Histórico", "📊 Análise de Perdas"])
 
@@ -125,7 +32,7 @@ with tab_kanban:
     
     for i, stage in enumerate(stages):
         with cols[i]:
-            items = get_wip_items(stage)
+            items = production_service.get_wip_items(conn, stage)
             
             st.subheader(stage)
             st.caption(f"{len(items)} lotes")
@@ -154,12 +61,36 @@ with tab_kanban:
                         st.info(item['notes'])
                     
                     # --- Priority (Every stage) ---
-                    st.markdown(f"Prioridade: **{int(item['priority'])}**")
                     p_cols = st.columns(2)
                     if p_cols[0].button("Subir 🔼", key=f"pri_up_{item['id']}", use_container_width=True):
-                        update_priority(item['id'], 1)
+                        conn_write = database.get_connection()
+                        cursor_write = conn_write.cursor()
+                        try:
+                            cursor_write.execute("BEGIN TRANSACTION")
+                            production_service.update_priority(cursor_write, item['id'], 1)
+                            conn_write.commit()
+                            st.rerun()
+                        except Exception as e:
+                            conn_write.rollback()
+                            st.error(f"Erro: {e}")
+                        finally:
+                            cursor_write.close()
+                            conn_write.close()
+                    
                     if p_cols[1].button("Baixar 🔽", key=f"pri_dn_{item['id']}", use_container_width=True):
-                        update_priority(item['id'], -1)
+                        conn_write = database.get_connection()
+                        cursor_write = conn_write.cursor()
+                        try:
+                            cursor_write.execute("BEGIN TRANSACTION")
+                            production_service.update_priority(cursor_write, item['id'], -1)
+                            conn_write.commit()
+                            st.rerun()
+                        except Exception as e:
+                            conn_write.rollback()
+                            st.error(f"Erro: {e}")
+                        finally:
+                            cursor_write.close()
+                            conn_write.close()
                     
                     # --- Timeline ---
                     import json
@@ -200,14 +131,27 @@ with tab_kanban:
                                 if not pd.isna(item['variant_id']) and item['variant_id'] in variants['id'].values:
                                      curr_idx = list(variants['id'].values).index(item['variant_id'])
                                 
-                                sel_var_name = st.selectbox("Esmalte/Variação", variants['variant_name'], index=curr_idx, key=f"var_sel_{item['id']}")
-                                if not variants.empty:
+                                sel_var_name = st.selectbox("Esmalte/Variação", ["Padrão"] + variants['variant_name'].tolist(), index=curr_idx, key=f"var_sel_{item['id']}")
+                                if not variants.empty and sel_var_name != "Padrão":
                                     selected_variant_id = variants[variants['variant_name'] == sel_var_name].iloc[0]['id']
                                 
                                 deduct_glaze = st.checkbox("Baixar estoque esmalte?", value=True, key=f"glz_{item['id']}")
                             
                             if st.button("Confirmar", key=f"go_{item['id']}", type="primary"):
-                                move_stage(item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze)
+                                conn_write = database.get_connection()
+                                cursor_write = conn_write.cursor()
+                                try:
+                                    cursor_write.execute("BEGIN TRANSACTION")
+                                    production_service.move_stage(cursor_write, conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze)
+                                    conn_write.commit()
+                                    st.success("Movimentação concluída!")
+                                    st.rerun()
+                                except Exception as e:
+                                    conn_write.rollback()
+                                    st.error(f"Erro ao mover: {e}")
+                                finally:
+                                    cursor_write.close()
+                                    conn_write.close()
                     
                     else: # LAST STAGE (Queima de Alta) -> Finish
                         with st.popover("✅ Concluir", use_container_width=True):
@@ -218,52 +162,20 @@ with tab_kanban:
                             inc_stock = st.checkbox("Incrementar Estoque Produto?", value=default_inc, key=f"inc_{item['id']}")
                             
                             if st.button("Finalizar", key=f"end_{item['id']}", type="primary"):
-                                cursor = conn.cursor()
+                                conn_write = database.get_connection()
+                                cursor_write = conn_write.cursor()
                                 try:
-                                    # 0. Deduct Remaining Materials (everything else in recipe)
-                                    # We skip Clay and the Glaze material used in existing variant if it was already deducted
-                                    glaze_mat_id = None
-                                    if item.get('variant_id'):
-                                        glz_info = cursor.execute("SELECT material_id FROM product_variants WHERE id=?", (int(item['variant_id']),)).fetchone()
-                                        if glz_info: glaze_mat_id = glz_info[0]
-                                    
-                                    product_service.deduct_production_materials_central(cursor, int(item['product_id']), qty, filter_type='others', exclude_ids=[glaze_mat_id] if glaze_mat_id else None)
-
-                                    # 1. Update Order Item (if exists)
-                                    if pd.notna(item['real_order_id']):
-                                        cursor.execute("UPDATE commission_items SET quantity_produced = quantity_produced + ? WHERE id=?", (qty, item['order_item_id']))
-                                    
-                                    # 2. Increment Stock
-                                    if inc_stock:
-                                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (qty, item['product_id']))
-                                        if item.get('variant_id'):
-                                            cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id=?", (qty, item['variant_id']))
-                                            
-                                    # 3. History
-                                    cursor.execute("""
-                                        INSERT INTO production_history (timestamp, product_id, product_name, quantity, order_id, user_id, username)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                                    """, (datetime.now().isoformat(), item['product_id'], item['product_name'], qty, item.get('real_order_id'), None, 'WIP'))
-                                    
-                                    # 4. Check Order Completion
-                                    if pd.notna(item['real_order_id']):
-                                        cursor.execute("""
-                                            SELECT COUNT(*) FROM commission_items 
-                                            WHERE order_id=? AND quantity_produced < (quantity - quantity_from_stock)
-                                        """, (item['real_order_id'],))
-                                        if cursor.fetchone()[0] == 0:
-                                            cursor.execute("UPDATE commission_orders SET status='Concluída' WHERE id=?", (item['real_order_id'],))
-                                    
-                                    # 5. Remove WIP
-                                    if qty == item['quantity']:
-                                        cursor.execute("DELETE FROM production_wip WHERE id=?", (item['id'],))
-                                    else:
-                                        cursor.execute("UPDATE production_wip SET quantity = quantity - ? WHERE id=?", (qty, item['id']))
-                                    
-                                    conn.commit()
-                                    admin_utils.show_feedback_dialog("Finalizado!", level="success")
+                                    cursor_write.execute("BEGIN TRANSACTION")
+                                    production_service.finalize_production(cursor_write, item, qty, inc_stock)
+                                    conn_write.commit()
+                                    st.success("Finalizado!")
+                                    st.rerun()
                                 except Exception as e:
-                                    admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
+                                    conn_write.rollback()
+                                    st.error(f"Erro: {e}")
+                                finally:
+                                    cursor_write.close()
+                                    conn_write.close()
 
                     # 3. Breakage (Loss) Logic - Only for items IN production (not in Fila de Espera)
                     if stage != 'Fila de Espera':
@@ -273,51 +185,21 @@ with tab_kanban:
                             reason_loss = st.text_input("Motivo (opcional)", key=f"loss_reason_{item['id']}")
                             
                             if st.button("Confirmar Quebra", key=f"loss_btn_{item['id']}", type="secondary"):
-                                cursor = conn.cursor()
+                                conn_write = database.get_connection()
+                                cursor_write = conn_write.cursor()
                                 try:
-                                    # 1. Record Loss
-                                    cursor.execute("""
-                                        INSERT INTO production_losses (timestamp, product_id, variant_id, stage, quantity, reason, order_id)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                                    """, (datetime.now().isoformat(), item['product_id'], item['variant_id'], stage, qty_loss, reason_loss, item.get('real_order_id')))
-                                    
-                                    # 2. Update Stage History
-                                    try:
-                                        history = json.loads(item['stage_history']) if item.get('stage_history') else {}
-                                    except:
-                                        history = {}
-                                    
-                                    break_key = f"Quebra ({stage})"
-                                    history[break_key] = f"-{qty_loss} pcs | {datetime.now().strftime('%d/%m %H:%M')}"
-                                    history_json = json.dumps(history)
-                                    
-                                    # 3. Update WIP
-                                    if qty_loss == item['quantity']:
-                                        cursor.execute("DELETE FROM production_wip WHERE id=?", (item['id'],))
-                                    else:
-                                        cursor.execute("UPDATE production_wip SET quantity = quantity - ?, stage_history=? WHERE id=?", (qty_loss, history_json, item['id']))
-                                    
-                                    # 4. Automated Replenishment (for Orders)
-                                    if pd.notna(item['real_order_id']):
-                                        # Create same-day replenishment card
-                                        rep_history = {"Iniciado": datetime.now().strftime("%d/%m %H:%M"), "Fila de Espera (Reposição)": datetime.now().strftime("%d/%m %H:%M")}
-                                        rep_history_json = json.dumps(rep_history)
-                                        
-                                        cursor.execute("""
-                                            INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
-                                            VALUES (?, ?, ?, ?, 'Fila de Espera', ?, ?, 0, ?, ?)
-                                        """, (int(item['product_id']), 
-                                              int(item['variant_id']) if pd.notna(item['variant_id']) else None, 
-                                              int(item['real_order_id']), 
-                                              int(item['order_item_id']), 
-                                              qty_loss, date.today().isoformat(), rep_history_json, f"Reposição após quebra em {stage}"))
-                                        
+                                    cursor_write.execute("BEGIN TRANSACTION")
+                                    replenished = production_service.register_loss(cursor_write, item, stage, qty_loss, reason_loss)
+                                    conn_write.commit()
+                                    if replenished:
                                         st.info(f"🔄 Um novo card de {qty_loss} peças foi criado em **Fila de Espera** para repor a quebra da encomenda.")
-
-                                    conn.commit()
                                     admin_utils.show_feedback_dialog(f"Registrado: {qty_loss} peças perdidas.", level="warning")
                                 except Exception as e:
+                                    conn_write.rollback()
                                     admin_utils.show_feedback_dialog(f"Erro ao registrar quebra: {e}", level="error")
+                                finally:
+                                    cursor_write.close()
+                                    conn_write.close()
 
 # --- TAB 2: NOVA PRODUÇÃO (ESTOQUE) ---
 with tab_new:
@@ -344,22 +226,19 @@ with tab_new:
         # Phased deduction is now automatic, no checkbox needed
         
         if st.button("🚀 Iniciar Produção", type="primary"):
-            cursor = conn.cursor()
+            conn_write = database.get_connection()
+            cursor_write = conn_write.cursor()
             try:
-                # Insert WIP
-                # stage default Modelagem
-                history = {"Iniciado": datetime.now().strftime("%d/%m %H:%M"), "Fila de Espera": datetime.now().strftime("%d/%m %H:%M")}
-                history_json = json.dumps(history)
-                
-                cursor.execute("""
-                    INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
-                    VALUES (?, ?, NULL, NULL, 'Fila de Espera', ?, ?, 0, ?, ?)
-                """, (int(pid), int(vid) if vid else None, int(qty_new), start_dt.isoformat(), history_json, obs))
-                
-                conn.commit()
+                cursor_write.execute("BEGIN TRANSACTION")
+                production_service.start_production(cursor_write, pid, qty_new, start_dt.isoformat(), obs, vid)
+                conn_write.commit()
                 admin_utils.show_feedback_dialog("Produção iniciada!", level="success")
             except Exception as e:
+                conn_write.rollback()
                 admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
+            finally:
+                cursor_write.close()
+                conn_write.close()
 
 # --- TAB 3: HISTÓRICO ---
 with tab_hist:
@@ -490,3 +369,5 @@ with tab_analysis:
             st.caption("Sem dados de perdas para este filtro.")
     else:
         st.info("Nenhum dado encontrado para os filtros selecionados.")
+
+conn.close()

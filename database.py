@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import contextlib
 
 DB_FOLDER = "data"
 DB_NAME = "ceramic_admin.db"
@@ -10,6 +11,15 @@ def get_connection():
     conn.execute("PRAGMA journal_mode=WAL")
     run_migrations(conn) # Ensure DB is always up to date
     return conn
+
+@contextlib.contextmanager
+def db_session():
+    """Context manager for database connections."""
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 def run_migrations(conn):
     cursor = conn.cursor()
