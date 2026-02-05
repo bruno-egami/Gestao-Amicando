@@ -65,7 +65,7 @@ with col_form:
         btn_label = "💾 Salvar Alterações" if is_edit else "💾 Cadastrar"
         if st.form_submit_button(btn_label, type="primary", use_container_width=True):
             if not f_name:
-                st.error("Nome é obrigatório.")
+                admin_utils.show_feedback_dialog("Nome é obrigatório.", level="warning")
             else:
                 new_data = {'name': f_name, 'contact': f_contact, 'phone': f_phone, 'email': f_email, 'notes': f_notes}
                 
@@ -81,7 +81,7 @@ with col_form:
                     # Log UPDATE
                     audit.log_action(conn, 'UPDATE', 'clients', st.session_state.cli_edit_id, old_data, new_data)
                     
-                    st.success("Cliente atualizado!")
+                    admin_utils.show_feedback_dialog("Cliente atualizado!", level="success")
                     st.session_state.cli_edit_id = None
                 else:
                     cursor.execute("""
@@ -93,8 +93,7 @@ with col_form:
                     # Log CREATE
                     audit.log_action(conn, 'CREATE', 'clients', new_id, None, new_data)
                     
-                    st.success("Cliente cadastrado!")
-                st.rerun()
+                    admin_utils.show_feedback_dialog("Cliente cadastrado!", level="success")
 
 # === RIGHT: LIST WITH SEARCH ===
 with col_list:
@@ -136,21 +135,20 @@ with col_list:
                 
                 with c3:
                     if st.button("🗑️ Excluir", key=f"del_cli_{row['id']}", use_container_width=True):
-                        try:
-                            # Capture data for audit before delete
-                            old_data = {'id': row['id'], 'name': row['name'], 'contact': row['contact'], 
-                                       'phone': row['phone'], 'email': row['email'], 'notes': row['notes']}
-                            
-                            cursor.execute("DELETE FROM clients WHERE id=?", (row['id'],))
-                            conn.commit()
-                            
-                            # Log DELETE
-                            audit.log_action(conn, 'DELETE', 'clients', row['id'], old_data, None)
-                            
-                            st.success(f"'{row['name']}' excluído!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro: {e}")
+                        def do_delete(cid=row['id'], cname=row['name'], r=row):
+                            try:
+                                old_data = {'id': cid, 'name': cname, 'contact': r['contact'], 
+                                           'phone': r['phone'], 'email': r['email'], 'notes': r['notes']}
+                                cursor.execute("DELETE FROM clients WHERE id=?", (cid,))
+                                conn.commit()
+                                audit.log_action(conn, 'DELETE', 'clients', cid, old_data, None)
+                            except Exception as e:
+                                st.error(f"Erro: {e}")
+
+                        admin_utils.show_confirmation_dialog(
+                            f"Tem certeza que deseja excluir o cliente '{row['name']}'?",
+                            on_confirm=do_delete
+                        )
     else:
         st.info("Nenhum cliente cadastrado ou encontrado.")
 

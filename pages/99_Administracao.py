@@ -139,14 +139,14 @@ with tab_import:
             if up_file:
                 try:
                     df_in = pd.read_excel(up_file)
-                    st.success("Arquivo lido com sucesso!")
+                    admin_utils.show_feedback_dialog("Arquivo lido com sucesso!", level="success")
                     
                     # Validate Columns
                     missing_cols = [c for c in curr_schema['cols'] if c not in df_in.columns]
                     
                     if missing_cols:
-                        st.error(f"❌ Colunas faltando: {', '.join(missing_cols)}")
-                        st.warning("Por favor, use o modelo padrão.")
+                        admin_utils.show_feedback_dialog(f"Colunas faltando: {', '.join(missing_cols)}", level="error")
+                        admin_utils.show_feedback_dialog("Por favor, use o modelo padrão.", level="warning")
                     else:
                         st.write(f"📝 **{len(df_in)} registros encontrados.**")
                         with st.expander("Pré-visualização (Primeiros 5)"):
@@ -455,12 +455,12 @@ with tab_import:
                                 progress.progress((idx + 1) / len(df_in))
                             
                             conn.commit()
-                            st.success(f"✅ Importação finalizada! {count_ok} sucessos, {count_err} erros.")
+                            admin_utils.show_feedback_dialog(f"Importação finalizada! {count_ok} sucessos, {count_err} erros.", level="success")
                             st.balloons()
                             st.rerun()
 
                 except Exception as e:
-                    st.error(f"Erro ao ler arquivo: {e}")
+                    admin_utils.show_feedback_dialog(f"Erro ao ler arquivo: {e}", level="error")
 
 # ==============================================================================
 # TAB 5: EXPORT (Data Dumping)
@@ -755,7 +755,7 @@ with tab_users:
                         error = "Este usuário já existe."
                 
                 if error:
-                    st.error(error)
+                    admin_utils.show_feedback_dialog(error, level="error")
                 else:
                     if is_edit:
                         # Get old data for audit
@@ -774,7 +774,7 @@ with tab_users:
                         conn.commit()
                         audit.log_action(conn, 'UPDATE', 'users', st.session_state.user_edit_id, old_data,
                             {'name': f_name, 'role': f_role, 'active': f_active})
-                        st.success("Usuário atualizado!")
+                        admin_utils.show_feedback_dialog("Usuário atualizado!", level="success")
                         st.session_state.user_edit_id = None
                     else:
                         # Create user
@@ -786,7 +786,7 @@ with tab_users:
                         conn.commit()
                         audit.log_action(conn, 'CREATE', 'users', new_id, None,
                             {'username': f_username, 'name': f_name, 'role': f_role})
-                        st.success("Usuário cadastrado!")
+                        admin_utils.show_feedback_dialog("Usuário cadastrado!", level="success")
                     st.rerun()
 
     # === RIGHT: USER LIST ===
@@ -832,12 +832,15 @@ with tab_users:
                         
                         if not is_self:
                             if st.button("🗑️", key=f"del_user_{row['id']}", use_container_width=True, help="Excluir"):
-                                old_data = {'username': row['username'], 'name': row['name'], 'role': row['role']}
-                                cursor.execute("DELETE FROM users WHERE id=?", (row['id'],))
-                                conn.commit()
-                                audit.log_action(conn, 'DELETE', 'users', row['id'], old_data, None)
-                                st.success(f"Usuário '{row['username']}' removido!")
-                                st.rerun()
+                                def do_del_user(uid=row['id'], uname=row['username']):
+                                    cursor.execute("DELETE FROM users WHERE id=?", (uid,))
+                                    conn.commit()
+                                    audit.log_action(conn, 'DELETE', 'users', uid, {'username': uname}, None)
+
+                                admin_utils.show_confirmation_dialog(
+                                    f"Tem certeza que deseja excluir o usuário '{row['username']}'?",
+                                    on_confirm=do_del_user
+                                )
                         else:
                             st.caption("(você)")
         else:
@@ -939,11 +942,16 @@ with tab_audit:
                     # Rollback button (only for UPDATE and DELETE)
                     if row['action'] in ['UPDATE', 'DELETE'] and row['old_data']:
                         if st.button("↩️ Reverter", key=f"rb_{row['id']}", help="Restaurar dados anteriores"):
-                            if audit.rollback_record(conn, row['id']):
-                                st.success("Dados restaurados com sucesso!")
-                                st.rerun()
-                            else:
-                                st.error("Erro ao restaurar dados.")
+                            def do_rollback(rid=row['id']):
+                                if audit.rollback_record(conn, rid):
+                                    admin_utils.show_feedback_dialog("Dados restaurados com sucesso!", level="success")
+                                else:
+                                    admin_utils.show_feedback_dialog("Erro ao restaurar dados.", level="error")
+                            
+                            admin_utils.show_confirmation_dialog(
+                                f"Deseja reverter esta alteração (ID Auditoria: {row['id']})?",
+                                on_confirm=do_rollback
+                            )
 
 # ==============================================================================
 # TAB 3: DATABASE (Maintenance)
@@ -970,7 +978,7 @@ with tab_db:
                     type="primary"
                 )
         else:
-            st.error("Arquivo de banco de dados não encontrado.")
+            admin_utils.show_feedback_dialog("Arquivo de banco de dados não encontrado.", level="error")
             
     with col_rst:
         st.subheader("⬆️ Restaurar (Upload)")
@@ -1057,29 +1065,27 @@ with tab_db:
                 
                 if confirm:
                     if st.button("🚨 SUBSTITUIR BANCO DE DADOS AGORA", type="primary", use_container_width=True):
-                        try:
-                            # Close connection before replacing file
-                            conn.close()
-                            
-                            # Replace
-                            import shutil
-                            shutil.copy(temp_path, database.DB_PATH)
-                            
-                            # Clean temp
-                            os.remove(temp_path)
-                            
-                            st.toast("Banco de dados restaurado com sucesso!", icon="✅")
-                            st.success("Operação concluída. O sistema será reiniciado.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro crítico ao restaurar: {e}")
-                            # Reopen connection just in case to avoid downstream errors
-                            # conn = database.get_connection() 
+                        def do_restore(t_path=temp_path):
+                            try:
+                                # Close connection before replacing file
+                                conn.close()
+                                # Replace
+                                import shutil
+                                shutil.copy(t_path, database.DB_PATH)
+                                # Clean temp
+                                os.remove(t_path)
+                            except Exception as e:
+                                st.error(f"Erro ao restaurar: {e}")
+
+                        admin_utils.show_confirmation_dialog(
+                            "PERIGO: Você está prestes a SUBSTITUIR COMPLETAMENTE o banco de dados atual. Esta ação é irreversível e o sistema será reiniciado. Deseja prosseguir?",
+                            on_confirm=do_restore
+                        )
                 else:
                     st.button("🚨 SUBSTITUIR BANCO DE DADOS AGORA", disabled=True, use_container_width=True, help="Marque a caixa de confirmação acima.")
 
             except Exception as e:
-                st.error(f"Arquivo inválido ou erro na análise: {e}")
+                admin_utils.show_feedback_dialog(f"Arquivo inválido ou erro na análise: {e}", level="error")
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
 

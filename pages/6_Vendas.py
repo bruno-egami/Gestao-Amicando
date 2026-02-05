@@ -109,7 +109,7 @@ def show_receipt_dialog(order_data):
             mime="application/pdf"
         )
     except Exception as e:
-        st.error(f"Erro ao gerar PDF: {e}")
+        admin_utils.show_feedback_dialog(f"Erro ao gerar PDF: {e}", level="error")
 
 if 'last_order' in st.session_state:
     show_receipt_dialog(st.session_state['last_order'])
@@ -196,11 +196,11 @@ def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_ch
              # conn.close() # Keep connection open or let verify handle it? safely remove to avoid closing shared conn
              
              st.session_state['cart'] = []
-             st.success(f"✅ Orçamento #{quote_id} criado com sucesso!")
+             admin_utils.show_feedback_dialog(f"Orçamento #{quote_id} criado com sucesso!", level="success")
              st.rerun()
 
          except Exception as e:
-             st.error(f"Erro ao salvar orçamento: {e}")
+             admin_utils.show_feedback_dialog(f"Erro ao salvar orçamento: {e}", level="error")
 
 # --- Tabs Structure ---
 tab_pos, tab_quotes = st.tabs(["🛒 Nova Venda / Cotação", "📄 Orçamentos Salvos"])
@@ -590,7 +590,7 @@ with col_cart:
                         valid_client = True
                         if cli_choice == "++ Cadastrar Novo ++":
                              if not new_cli_name:
-                                 st.error("Digite o nome do novo cliente.")
+                                 admin_utils.show_feedback_dialog("Digite o nome do novo cliente.", level="error")
                                  valid_client = False
                              else:
                                  cursor = conn.cursor()
@@ -599,14 +599,14 @@ with col_cart:
                                  final_client_id = cursor.lastrowid
                                  final_client_name = new_cli_name
                         elif not cli_choice:
-                             st.error("Selecione o Cliente.")
+                             admin_utils.show_feedback_dialog("Selecione o Cliente.", level="error")
                              valid_client = False
                         else:
                              final_client_id = client_dict[cli_choice]
                              final_client_name = cli_choice
 
                         if valid_client and not salesperson_choice:
-                             st.error("Selecione a Vendedora.")
+                             admin_utils.show_feedback_dialog("Selecione a Vendedora.", level="error")
                              valid_client = False
                              
                         if valid_client:
@@ -660,9 +660,9 @@ with col_cart:
                                         audit.log_action(conn, 'CREATE', 'sales', sale_id, None, {'audit_msg': 'Partial Sale'}, commit=False)
                                         sales_created.append(f"{q_sell}x {it['product_name']}")
                                         
-                                        # Deduct Stock (Logic duplicated from before)
                                         # Deduct Stock (Service)
                                         logs = product_service.deduct_stock(cursor, p_id_check, q_sell, variant_id=it.get('variant_id'))
+                                        # (Toasts for stock deduction can stay as non-blocking logs)
                                         for log in logs:
                                             st.toast(log, icon="📉")
                                         
@@ -732,11 +732,11 @@ with col_cart:
                                     
                                      # Format ID for Toast
                                      fmt_oid_toast = f"ENC-{datetime.now().strftime('%y%m%d')}-{new_ord_id}"
-                                     st.toast(f"✅ Venda Finalizada! Encomenda {fmt_oid_toast} gerada automaticamente!", icon="📦")
+                                     admin_utils.show_feedback_dialog(f"Venda Finalizada! Encomenda {fmt_oid_toast} gerada automaticamente!", level="success")
                                  
                                  if 'new_ord_id' not in locals(): # Option A flow
                                      conn.commit()
-                                     st.toast(f"✅ Venda Finalizada com Sucesso!", icon="💰")
+                                     admin_utils.show_feedback_dialog("Venda Finalizada com Sucesso!", level="success")
                                  else:
                                      # Option B flow handles its own commit
                                      pass
@@ -758,8 +758,7 @@ with col_cart:
 
 
                              except Exception as e:
-                                 st.error(f"❌ ERRO GRAVE DE TRANSAÇÃO: {e}")
-                                 st.exception(e)
+                                 admin_utils.show_feedback_dialog(f"ERRO GRAVE DE TRANSAÇÃO: {e}", level="error")
                     
                     # --- QUOTE BUTTON (New) ---
                     if col_act3.button("📄 Salvar como Orçamento", type="secondary", use_container_width=True):
@@ -781,7 +780,7 @@ with col_cart:
                         valid_client = True
                         if cli_choice == "++ Cadastrar Novo ++":
                              if not new_cli_name:
-                                 st.error("Digite o nome do novo cliente.")
+                                 admin_utils.show_feedback_dialog("Digite o nome do novo cliente.", level="warning")
                                  valid_client = False
                              else:
                                  cursor = conn.cursor()
@@ -790,14 +789,14 @@ with col_cart:
                                  final_client_id = cursor.lastrowid
                                  final_client_name = new_cli_name
                         elif not cli_choice:
-                             st.error("Selecione o Cliente.")
+                             admin_utils.show_feedback_dialog("Selecione o Cliente.", level="warning")
                              valid_client = False
                         else:
                              final_client_id = client_dict[cli_choice]
                              final_client_name = cli_choice
 
                         if valid_client and not salesperson_choice:
-                             st.error("Selecione a Vendedora.")
+                             admin_utils.show_feedback_dialog("Selecione a Vendedora.", level="warning")
                              valid_client = False
                         
                         if valid_client:
@@ -1169,7 +1168,7 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                                 """, (dv, row['salesperson'], row['payment_method'], row['notes'], row['id']))
                         
                         conn.commit()
-                        st.success("Histórico atualizado com sucesso!")
+                        admin_utils.show_feedback_dialog("Histórico atualizado com sucesso!", level="success")
                         st.rerun()
             
                 # --- RECEIPT GENERATION FOR HISTORY ---
@@ -1228,16 +1227,16 @@ with st.expander("🔐 Histórico de Vendas (Área Restrita)"):
                 st.info("Nenhuma venda encontrada com estes filtros.")
 
     else:
-        st.warning("🔒 Acesso Restrito. Necessário autorização de Administrador.")
+        admin_utils.show_feedback_dialog("Acesso Restrito. Necessário autorização de Administrador.", level="warning", title="Acesso Negado")
         
         pwd_auth = st.text_input("Senha de Administrador", type="password", key="hist_auth_pwd")
         if pwd_auth:
-            if auth.verify_admin_authorization(conn, pwd_auth):
+             if auth.verify_admin_authorization(conn, pwd_auth):
                 st.session_state.hist_auth_override = True
-                st.success("Acesso Autorizado!")
+                admin_utils.show_feedback_dialog("Acesso Autorizado!", level="success")
                 st.rerun()
-            else:
-                st.error("Senha incorreta.")
+             else:
+                admin_utils.show_feedback_dialog("Senha incorreta.", level="error")
 
 
 # ==============================================================================
@@ -1255,7 +1254,7 @@ with tab_quotes:
             return True
         except Exception as e:
             conn.rollback()
-            st.error(f"Erro ao excluir orçamento: {e}")
+            admin_utils.show_feedback_dialog(f"Erro ao excluir orçamento: {e}", level="error")
             return False
 
     def calculate_quote_total(quote_id):
@@ -1404,7 +1403,7 @@ with tab_quotes:
                                 conn.commit()
                                 
                                 fmt_oid = f"ENC-{datetime.now().strftime('%y%m%d')}-{new_oid}"
-                                st.success(f"✅ Aprovado! Encomenda {fmt_oid} gerada.")
+                                admin_utils.show_feedback_dialog(f"Aprovado! Encomenda {fmt_oid} gerada.", level="success")
                                 st.rerun()
 
                     # Reject

@@ -63,7 +63,7 @@ with tab1:
                 row_edit = pd.read_sql("SELECT * FROM firings WHERE id = ?", conn, params=(st.session_state.firing_edit_id,)).iloc[0]
                 default_data = row_edit
             except Exception:
-                st.error("Erro ao carregar dados.")
+                admin_utils.show_feedback_dialog("Erro ao carregar dados.", level="error")
                 st.session_state.firing_edit_id = None
                 st.rerun()
                 
@@ -147,7 +147,7 @@ with tab1:
                         SET date=?, type=?, power_consumption_kwh=?, cost=?, kiln_id=?, observation=?, image_path=?
                         WHERE id=?
                     """, (date, f_type, consumption, cost, k_id, obs, final_img_path, st.session_state.firing_edit_id))
-                    st.success("Queima atualizada!")
+                    admin_utils.show_feedback_dialog("Queima atualizada!", level="success")
                     st.session_state.firing_edit_id = None
                 else:
                     cursor.execute("""
@@ -158,7 +158,7 @@ with tab1:
                     conn.commit()
                     audit.log_action(conn, 'CREATE', 'firings', new_id, None,
                         {'date': str(date), 'type': f_type, 'cost': cost, 'power_consumption_kwh': consumption})
-                    st.success("Queima registrada!")
+                    admin_utils.show_feedback_dialog("Queima registrada!", level="success")
                 
                 st.rerun()
 
@@ -252,6 +252,7 @@ with tab2:
                 m_row = pd.read_sql("SELECT * FROM kiln_maintenance WHERE id = ?", conn, params=(st.session_state.maint_edit_id,)).iloc[0]
                 m_default = m_row
             except Exception:
+                admin_utils.show_feedback_dialog("Erro ao carregar dados.", level="error")
                 st.session_state.maint_edit_id = None
                 st.rerun()
         
@@ -301,7 +302,7 @@ with tab2:
                         SET kiln_id=?, date=?, category=?, description=?, observation=?, image_path=?
                         WHERE id=?
                     """, (mk_id, m_date, m_cat, m_desc, m_obs, final_m_img, st.session_state.maint_edit_id))
-                    st.success("Manutenção Atualizada!")
+                    admin_utils.show_feedback_dialog("Manutenção Atualizada!", level="success")
                     st.session_state.maint_edit_id = None
                 else:
                     cursor.execute("""
@@ -312,7 +313,7 @@ with tab2:
                     conn.commit()
                     audit.log_action(conn, 'CREATE', 'kiln_maintenance', new_id, None,
                         {'date': str(m_date), 'category': m_cat, 'description': m_desc})
-                    st.success("Manutenção Registrada!")
+                    admin_utils.show_feedback_dialog("Manutenção Registrada!", level="success")
                 
                 st.rerun()
                 

@@ -101,10 +101,9 @@ def move_stage(item_id, current_stage, next_stage, qty_move, total_qty, selected
                   next_stage, qty_move, curr['start_date'], int(m_deducted), history_json, curr['notes']))
             
         conn.commit()
-        st.success("Movimentação concluída!")
-        st.rerun()
+        admin_utils.show_feedback_dialog("Movimentação concluída!", level="success")
     except Exception as e:
-        st.error(f"Erro ao mover: {e}")
+        admin_utils.show_feedback_dialog(f"Erro ao mover: {e}", level="error")
 
 def update_priority(item_id, increment):
     cursor = conn.cursor()
@@ -113,7 +112,7 @@ def update_priority(item_id, increment):
         conn.commit()
         st.rerun()
     except Exception as e:
-        st.error(f"Erro ao atualizar prioridade: {e}")
+        admin_utils.show_feedback_dialog(f"Erro ao atualizar prioridade: {e}", level="error")
 
 # --- TABS ---
 tab_kanban, tab_new, tab_hist, tab_analysis = st.tabs(["Kanban", "Nova Produção", "Histórico", "📊 Análise de Perdas"])
@@ -262,10 +261,9 @@ with tab_kanban:
                                         cursor.execute("UPDATE production_wip SET quantity = quantity - ? WHERE id=?", (qty, item['id']))
                                     
                                     conn.commit()
-                                    st.success("Finalizado!")
-                                    st.rerun()
+                                    admin_utils.show_feedback_dialog("Finalizado!", level="success")
                                 except Exception as e:
-                                    st.error(f"Erro: {e}")
+                                    admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
 
                     # 3. Breakage (Loss) Logic - Only for items IN production (not in Fila de Espera)
                     if stage != 'Fila de Espera':
@@ -317,11 +315,9 @@ with tab_kanban:
                                         st.info(f"🔄 Um novo card de {qty_loss} peças foi criado em **Fila de Espera** para repor a quebra da encomenda.")
 
                                     conn.commit()
-                                    st.warning(f"Registrado: {qty_loss} peças perdidas.")
-                                    time.sleep(2) # Give user time to read the replacements notice
-                                    st.rerun()
+                                    admin_utils.show_feedback_dialog(f"Registrado: {qty_loss} peças perdidas.", level="warning")
                                 except Exception as e:
-                                    st.error(f"Erro ao registrar quebra: {e}")
+                                    admin_utils.show_feedback_dialog(f"Erro ao registrar quebra: {e}", level="error")
 
 # --- TAB 2: NOVA PRODUÇÃO (ESTOQUE) ---
 with tab_new:
@@ -361,11 +357,9 @@ with tab_new:
                 """, (int(pid), int(vid) if vid else None, int(qty_new), start_dt.isoformat(), history_json, obs))
                 
                 conn.commit()
-                st.success("Produção iniciada! Atualizando...")
-                time.sleep(1)
-                st.rerun()
+                admin_utils.show_feedback_dialog("Produção iniciada!", level="success")
             except Exception as e:
-                st.error(f"Erro: {e}")
+                admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
 
 # --- TAB 3: HISTÓRICO ---
 with tab_hist:

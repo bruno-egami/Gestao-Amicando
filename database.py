@@ -8,7 +8,7 @@ DB_PATH = os.path.join(DB_FOLDER, DB_NAME)
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
-    # run_migrations(conn) # REMOVED: Migrations should run only on init_db
+    run_migrations(conn) # Ensure DB is always up to date
     return conn
 
 def run_migrations(conn):
@@ -64,6 +64,20 @@ def run_migrations(conn):
         )
     ''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_losses_product ON production_losses(product_id)")
+
+    # 11. Student Consumptions: Add 'payment_date', 'material_id'
+    try:
+        cursor.execute("ALTER TABLE student_consumptions ADD COLUMN payment_date TEXT")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE student_consumptions ADD COLUMN material_id INTEGER")
+    except sqlite3.OperationalError: pass
+
+    # 12. Tuitions: Add 'created_at' for debit tracking
+    try:
+        cursor.execute("ALTER TABLE tuitions ADD COLUMN created_at TEXT")
+    except sqlite3.OperationalError: pass
 
     conn.commit()
 
@@ -573,6 +587,7 @@ def init_db():
             total_value REAL,
             date TEXT,
             status TEXT DEFAULT 'Pendente', -- Pendente, Pago
+            payment_date TEXT,
             notes TEXT,
             markup REAL DEFAULT 0.0,
             FOREIGN KEY (student_id) REFERENCES students(id)

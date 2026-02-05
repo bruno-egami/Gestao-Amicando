@@ -67,7 +67,7 @@ with col_form:
         btn_label = "💾 Salvar Alterações" if is_edit else "💾 Cadastrar"
         if st.form_submit_button(btn_label, type="primary", use_container_width=True):
             if not f_name:
-                st.error("Nome é obrigatório.")
+                admin_utils.show_feedback_dialog("Nome é obrigatório.", level="warning")
             else:
                 new_data = {'name': f_name, 'contact': f_contact, 'phone': f_phone, 'email': f_email, 'notes': f_notes}
                 
@@ -78,7 +78,7 @@ with col_form:
                     """, (f_name, f_contact, f_phone, f_email, f_notes, st.session_state.sup_edit_id))
                     conn.commit()
                     audit.log_action(conn, 'UPDATE', 'suppliers', st.session_state.sup_edit_id, old_data, new_data)
-                    st.success("Fornecedor atualizado!")
+                    admin_utils.show_feedback_dialog("Fornecedor atualizado!", level="success")
                     st.session_state.sup_edit_id = None
                 else:
                     cursor.execute("""
@@ -87,7 +87,7 @@ with col_form:
                     conn.commit()
                     new_id = cursor.lastrowid
                     audit.log_action(conn, 'CREATE', 'suppliers', new_id, None, new_data)
-                    st.success("Fornecedor cadastrado!")
+                    admin_utils.show_feedback_dialog("Fornecedor cadastrado!", level="success")
                 st.rerun()
 
 # === RIGHT: LIST WITH SEARCH ===
@@ -130,16 +130,20 @@ with col_list:
                 
                 with c3:
                     if st.button("🗑️ Excluir", key=f"del_sup_{row['id']}", use_container_width=True):
-                        try:
-                            old_data = {'id': row['id'], 'name': row['name'], 'contact': row['contact'], 
-                                       'phone': row['phone'], 'email': row['email'], 'notes': row['notes']}
-                            cursor.execute("DELETE FROM suppliers WHERE id=?", (row['id'],))
-                            conn.commit()
-                            audit.log_action(conn, 'DELETE', 'suppliers', row['id'], old_data, None)
-                            st.success(f"'{row['name']}' excluído!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro: {e}")
+                        def do_delete(sid=row['id'], sname=row['name'], r=row):
+                            try:
+                                old_data = {'id': sid, 'name': sname, 'contact': r['contact'], 
+                                           'phone': r['phone'], 'email': r['email'], 'notes': r['notes']}
+                                cursor.execute("DELETE FROM suppliers WHERE id=?", (sid,))
+                                conn.commit()
+                                audit.log_action(conn, 'DELETE', 'suppliers', sid, old_data, None)
+                            except Exception as e:
+                                st.error(f"Erro: {e}")
+
+                        admin_utils.show_confirmation_dialog(
+                            f"Tem certeza que deseja excluir o fornecedor '{row['name']}'?",
+                            on_confirm=do_delete
+                        )
     else:
         st.info("Nenhum fornecedor cadastrado ou encontrado.")
 

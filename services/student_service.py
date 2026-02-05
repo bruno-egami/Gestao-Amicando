@@ -144,9 +144,9 @@ def process_material_consumption(conn, student_id, material_id, quantity, date, 
     
     # 3. Log Consumption
     cursor.execute("""
-        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup)
-        VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?)
-    """, (student_id, desc, quantity, unit_price, total_val, date, notes, markup))
+        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup, material_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?, ?)
+    """, (student_id, desc, quantity, unit_price, total_val, date, notes, markup, material_id))
     cons_id = cursor.lastrowid
     
     # 4. Inventory Log (We log the base cost for inventory purposes? Or the total val?)
@@ -187,6 +187,84 @@ def get_student_financial_summary(conn, student_id, month_year_filter=None):
     
     return tuitions, consumptions, total
 
+def get_student_payment_history(conn, student_id):
+    """
+    Returns tuple: (tuitions_df, consumptions_df) of paid items.
+    """
+    tuitions = pd.read_sql(f"SELECT * FROM tuitions WHERE student_id={student_id} AND status='Pago' ORDER BY payment_date DESC", conn)
+    consumptions = pd.read_sql(f"SELECT * FROM student_consumptions WHERE student_id={student_id} AND status='Pago' ORDER BY payment_date DESC", conn)
+    return tuitions, consumptions
+
+def get_payment_history(conn, start_date=None, end_date=None, student_id=None, payment_type=None, class_id=None, status_filter='Pago'):
+    """
+    Returns a combined DataFrame of payments/debits from students with filters.
+    """
+    t_where_pago = ["t.status = 'Pago'"]
+    c_where_pago = ["sc.status = 'Pago'"]
+    t_where_pend = ["t.status = 'Pendente'"]
+    c_where_pend = ["sc.status = 'Pendente'"]
+    
+    # We need separate params for each query because they are executed independently
+    params_t_pago, params_c_pago = [], []
+    params_t_pend, params_c_pend = [], []
+
+    def get_common_filters(date_col, student_id, class_id):
+        where = []
+        params = []
+        if start_date:
+            where.append(f"{date_col} >= ?")
+            params.append(start_date)
+        if end_date:
+            where.append(f"{date_col} <= ?")
+            params.append(end_date)
+        if student_id and student_id != "Todos":
+            where.append("s.id = ?")
+            params.append(int(student_id))
+        if class_id and class_id != "Todas":
+            where.append("s.class_id = ?")
+            params.append(int(class_id))
+        return where, params
+
+    # DATE FALLBACK FOR TUITIONS: 
+    # Try created_at, then payment_date, then month_year (mapped to YYYY-MM-01)
+    # SQLite logic: SUBSTR(month_year, 4, 4) || '-' || SUBSTR(month_year, 1, 2) || '-01'
+    t_date_sql = "COALESCE(t.created_at, t.payment_date, SUBSTR(t.month_year, 4, 4) || '-' || SUBSTR(t.month_year, 1, 2) || '-01')"
+
+    # Build filters and params for each case
+    w, p = get_common_filters("t.payment_date", student_id, class_id); t_where_pago += w; params_t_pago = p
+    w, p = get_common_filters("sc.payment_date", student_id, class_id); c_where_pago += w; params_c_pago = p
+    w, p = get_common_filters(t_date_sql, student_id, class_id); t_where_pend += w; params_t_pend = p
+    w, p = get_common_filters("sc.date", student_id, class_id); c_where_pend += w; params_c_pend = p
+    
+    t_query_pago = f"SELECT t.payment_date as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Recebimento' as movement_type, 'Pago' as status FROM tuitions t JOIN students s ON t.student_id = s.id WHERE {' AND '.join(t_where_pago)}"
+    c_query_pago = f"SELECT sc.payment_date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Recebimento' as movement_type, 'Pago' as status FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pago)}"
+    t_query_pend = f"SELECT {t_date_sql} as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status FROM tuitions t JOIN students s ON t.student_id = s.id WHERE {' AND '.join(t_where_pend)}"
+    c_query_pend = f"SELECT sc.date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pend)}"
+    
+    dfs = []
+    if status_filter in ['Todos', 'Pago']:
+        if payment_type in [None, 'Todos', 'Mensalidade']:
+            dfs.append(pd.read_sql(t_query_pago, conn, params=params_t_pago))
+        if payment_type in [None, 'Todos', 'Consumo']:
+            dfs.append(pd.read_sql(c_query_pago, conn, params=params_c_pago))
+
+    if status_filter in ['Todos', 'Pendente']:
+        if payment_type in [None, 'Todos', 'Mensalidade']:
+            dfs.append(pd.read_sql(t_query_pend, conn, params=params_t_pend))
+        if payment_type in [None, 'Todos', 'Consumo']:
+            dfs.append(pd.read_sql(c_query_pend, conn, params=params_c_pend))
+            
+    if not dfs:
+        return pd.DataFrame()
+        
+    combined = pd.concat(dfs, ignore_index=True)
+    if not combined.empty:
+        # Sort and ensure date format
+        combined['date'] = pd.to_datetime(combined['date'], errors='coerce')
+        combined = combined.sort_values(['date', 'movement_type'], ascending=[False, False])
+    
+    return combined
+
 def generate_tuition_record(conn, student_id, month_year, amount):
     """Generates a monthly tuition record if not exists."""
     cursor = conn.cursor()
@@ -195,8 +273,8 @@ def generate_tuition_record(conn, student_id, month_year, amount):
     if exist:
         return False, "Mensalidade já gerada."
         
-    cursor.execute("INSERT INTO tuitions (student_id, month_year, amount, status) VALUES (?, ?, ?, 'Pendente')", 
-                   (student_id, month_year, amount))
+    cursor.execute("INSERT INTO tuitions (student_id, month_year, amount, status, created_at) VALUES (?, ?, ?, 'Pendente', ?)", 
+                   (student_id, month_year, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     conn.commit()
     return True, "Gerada com sucesso."
 
@@ -209,10 +287,70 @@ def confirm_payment_all_pending(conn, student_id):
     cursor.execute("UPDATE tuitions SET status='Pago', payment_date=? WHERE student_id=? AND status='Pendente'", (now_str, student_id))
     
     # Consumptions
-    cursor.execute("UPDATE student_consumptions SET status='Pago' WHERE student_id=? AND status='Pendente'", (now_str, student_id)) # Add payment_date col if needed, schema didn't specify for consump but good to have. Schema says date is for consumption date.
+    cursor.execute("UPDATE student_consumptions SET status='Pago', payment_date=? WHERE student_id=? AND status='Pendente'", (now_str, student_id))
     
     conn.commit()
     audit.log_action(conn, 'PAYMENT', 'finance', student_id, None, {'type': 'ALL_PENDING'}, commit=True)
+
+def cancel_consumption(conn, consumption_id):
+    """Cancels a consumption and restores stock if it was a material."""
+    cursor = conn.cursor()
+    # Get record
+    res = cursor.execute("SELECT material_id, quantity, student_id, total_value, status FROM student_consumptions WHERE id=?", (consumption_id,)).fetchone()
+    if not res: return False, "Registro não encontrado."
+    mat_id, qty, sid, val, status = res
+    
+    if status == 'Cancelado': return False, "Já está cancelado."
+
+    # Restore stock if material
+    if mat_id and qty:
+        cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id=?", (qty, mat_id))
+        # Log restoration in inventory transactions
+        cursor.execute("""
+            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes)
+            VALUES (?, ?, ?, ?, 0, ?)
+        """, (mat_id, datetime.now().isoformat(), 'ENTRADA', qty, f"Estorno Cancelamento Aluno ID {sid}"))
+
+    # Update status
+    cursor.execute("UPDATE student_consumptions SET status='Cancelado' WHERE id=?", (consumption_id,))
+    
+    audit.log_action(conn, 'CANCEL_CONSUMPTION', 'student_consumptions', consumption_id, {'old_status': status}, {'new_status': 'Cancelado'}, commit=False)
+    conn.commit()
+    return True, "Cancelado com sucesso."
+
+def cancel_tuition(conn, tuition_id):
+    """Cancels a tuition record."""
+    cursor = conn.cursor()
+    res = cursor.execute("SELECT status FROM tuitions WHERE id=?", (tuition_id,)).fetchone()
+    if not res: return False, "Registro não encontrado."
+    status = res[0]
+    
+    if status == 'Cancelado': return False, "Já está cancelado."
+    
+    cursor.execute("UPDATE tuitions SET status='Cancelado' WHERE id=?", (tuition_id,))
+    audit.log_action(conn, 'CANCEL_TUITION', 'tuitions', tuition_id, {'old_status': status}, {'new_status': 'Cancelado'}, commit=False)
+    conn.commit()
+    return True, "Cancelado com sucesso."
+
+def update_tuition(conn, tuition_id, amount):
+    """Updates tuition amount."""
+    cursor = conn.cursor()
+    old = pd.read_sql(f"SELECT amount FROM tuitions WHERE id={tuition_id}", conn).iloc[0].to_dict()
+    cursor.execute("UPDATE tuitions SET amount=? WHERE id=?", (amount, tuition_id))
+    audit.log_action(conn, 'UPDATE', 'tuitions', tuition_id, old, {'amount': amount}, commit=False)
+    conn.commit()
+    return True
+
+def update_consumption(conn, consumption_id, description, total_value):
+    """Updates consumption description or value."""
+    # Note: Quantity/Unit Price changes are complex for materials due to stock. 
+    # For now, we allow description and total value adjustments.
+    cursor = conn.cursor()
+    old = pd.read_sql(f"SELECT description, total_value FROM student_consumptions WHERE id={consumption_id}", conn).iloc[0].to_dict()
+    cursor.execute("UPDATE student_consumptions SET description=?, total_value=? WHERE id=?", (description, total_value, consumption_id))
+    audit.log_action(conn, 'UPDATE', 'student_consumptions', consumption_id, old, {'description': description, 'total_value': total_value}, commit=False)
+    conn.commit()
+    return True
 
 def get_module_summary_stats(conn):
     """
@@ -256,12 +394,20 @@ def get_module_summary_stats(conn):
     return stats
 
 def get_debts_summary(conn):
-    """Returns a DataFrame of students with total pending balance > 0."""
+    """Returns a DataFrame of students with total pending balance > 0, showing the oldest month of debt."""
     query = """
-        SELECT id, name, total_due FROM (
+        SELECT id, name, total_due, oldest_month as months FROM (
             SELECT s.id, s.name, 
                    COALESCE((SELECT SUM(amount) FROM tuitions WHERE student_id = s.id AND status = 'Pendente'), 0) +
-                   COALESCE((SELECT SUM(total_value) FROM student_consumptions WHERE student_id = s.id AND status = 'Pendente'), 0) as total_due
+                   COALESCE((SELECT SUM(total_value) FROM student_consumptions WHERE student_id = s.id AND status = 'Pendente'), 0) as total_due,
+                   COALESCE(
+                       (SELECT strftime('%m/%Y', MIN(d)) FROM (
+                           SELECT SUBSTR(month_year, 4, 4) || '-' || SUBSTR(month_year, 1, 2) || '-01' as d FROM tuitions WHERE student_id = s.id AND status = 'Pendente'
+                           UNION ALL
+                           SELECT date as d FROM student_consumptions WHERE student_id = s.id AND status = 'Pendente'
+                       )), 
+                       '---'
+                   ) as oldest_month
             FROM students s
             WHERE s.active = 1
         ) WHERE total_due > 0

@@ -69,12 +69,11 @@ with tab_cat:
                 try:
                     cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (new_cat_name,))
                     conn.commit()
-                    st.success(f"Categoria '{new_cat_name}' criada!")
-                    st.rerun()
+                    admin_utils.show_feedback_dialog(f"Categoria '{new_cat_name}' criada!", level="success")
                 except sqlite3.IntegrityError:
-                    st.error("Categoria já existe.")
+                    admin_utils.show_feedback_dialog("Categoria já existe.", level="error")
             else:
-                st.warning("Digite um nome.")
+                admin_utils.show_feedback_dialog("Digite um nome.", level="warning")
                 
         # List Existing (small editor)
         if not cats_df.empty:
@@ -123,9 +122,8 @@ with tab_cat:
             try:
                 target_data = df_materials[df_materials['id'] == st.session_state.insumo_edit_id].iloc[0]
             except IndexError:
-                st.error("Insumo não encontrado.")
+                admin_utils.show_feedback_dialog("Insumo não encontrado.", level="error")
                 st.session_state.insumo_edit_id = None
-                st.rerun()
         
         # Header
         c_back, c_tit = st.columns([1, 5])
@@ -193,7 +191,7 @@ with tab_cat:
                 
                 if submitted:
                     if not name:
-                        st.error("Nome é obrigatório.")
+                        admin_utils.show_feedback_dialog("Nome é obrigatório.", level="error")
                     else:
                         cat_id = cat_map.get(sel_cat)
                         sup_id = sup_map.get(sel_sup)
@@ -218,9 +216,8 @@ with tab_cat:
                             audit.log_action(conn, 'CREATE', 'materials', new_id, None, {
                                 'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
                             })
-                            st.success("Criado com sucesso!")
                             st.session_state.insumo_edit_id = None
-                            st.rerun()
+                            admin_utils.show_feedback_dialog("Criado com sucesso!", level="success")
                         else:
                             target_id = st.session_state.insumo_edit_id
                             # Get old data for audit
@@ -252,24 +249,30 @@ with tab_cat:
                             audit.log_action(conn, 'UPDATE', 'materials', target_id, old_data, {
                                 'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
                             })
-                            st.success("Atualizado com sucesso!")
-                            st.rerun()
+                            admin_utils.show_feedback_dialog("Atualizado com sucesso!", level="success")
 
             # Delete Option (Only for Edit)
             if not is_new:
                 st.markdown("---")
                 with st.expander("Zona de Perigo"):
-                    if st.button("EXCLUIR INSUMO", type="primary"):
-                        # Get old data for audit
-                        old_mat = pd.read_sql("SELECT name, price_per_unit, unit, stock_level, type FROM materials WHERE id=?", conn, params=(st.session_state.insumo_edit_id,))
-                        old_data = old_mat.iloc[0].to_dict() if not old_mat.empty else {}
-                        
-                        cursor.execute("DELETE FROM materials WHERE id=?", (st.session_state.insumo_edit_id,))
-                        conn.commit()
-                        audit.log_action(conn, 'DELETE', 'materials', st.session_state.insumo_edit_id, old_data, None)
-                        st.success("Insumo excluído.")
-                        st.session_state.insumo_edit_id = None
-                        st.rerun()
+                    if st.button("EXCLUIR INSUMO", type="primary", use_container_width=True):
+                        def do_delete(mid=st.session_state.insumo_edit_id, mname=target_data.get('name')):
+                            try:
+                                # Get old data for audit
+                                old_mat = pd.read_sql("SELECT name, price_per_unit, unit, stock_level, type FROM materials WHERE id=?", conn, params=(mid,))
+                                old_data = old_mat.iloc[0].to_dict() if not old_mat.empty else {}
+                                
+                                cursor.execute("DELETE FROM materials WHERE id=?", (mid,))
+                                conn.commit()
+                                audit.log_action(conn, 'DELETE', 'materials', mid, old_data, None)
+                                st.session_state.insumo_edit_id = None
+                            except Exception as e:
+                                st.error(f"Erro ao excluir: {e}")
+
+                        admin_utils.show_confirmation_dialog(
+                            f"Tem certeza que deseja EXCLUIR PERMANENTEMENTE o insumo '{target_data.get('name')}'?",
+                            on_confirm=do_delete
+                        )
 
         with tab_history:
             if is_new:
@@ -319,8 +322,7 @@ with tab_cat:
                         # Update Material Stock
                         cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_rec_stock_py, mat_id_py))
                         conn.commit()
-                        st.success("Movimentação registrada!")
-                        st.rerun()
+                        admin_utils.show_feedback_dialog("Movimentação registrada!", level="success")
 
                 st.divider()
                 st.subheader("Extrato de Movimentações")

@@ -7,6 +7,7 @@ import audit
 from datetime import datetime, date, timedelta
 import plotly.express as px
 import io
+from services import finance_service
 
 st.set_page_config(page_title="Gestão Financeira", page_icon="💰", layout="wide")
 
@@ -139,19 +140,23 @@ with tab_gestao:
                     try:
                         cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (new_cat,))
                         conn.commit()
-                        st.success(f"Categoria '{new_cat}' adicionada!")
-                        st.rerun()
+                        admin_utils.show_feedback_dialog(f"Categoria '{new_cat}' adicionada!", level="success")
                     except Exception:
-                        st.error("Categoria já existe.")
+                        admin_utils.show_feedback_dialog("Categoria já existe.", level="error")
         with c_cat2:
             st.write("Categorias Existentes:")
             for cat in expense_categories:
                 cc1, cc2 = st.columns([4, 1])
                 cc1.text(cat)
                 if cc2.button("🗑️", key=f"del_cat_{cat}"):
-                    cursor.execute("DELETE FROM expense_categories WHERE name=?", (cat,))
-                    conn.commit()
-                    st.rerun()
+                    def do_del_cat(name=cat):
+                        cursor.execute("DELETE FROM expense_categories WHERE name=?", (name,))
+                        conn.commit()
+                    
+                    admin_utils.show_confirmation_dialog(
+                        f"Deseja excluir a categoria de despesa '{cat}'?",
+                        on_confirm=do_del_cat
+                    )
 
     st.divider()
 
@@ -225,8 +230,8 @@ with tab_gestao:
                         conn.commit()
                         audit.log_action(conn, 'UPDATE', 'expenses', st.session_state.exp_edit_id, old_data, 
                             {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
-                        st.success("Atualizado!")
                         st.session_state.exp_edit_id = None
+                        admin_utils.show_feedback_dialog("Atualizado!", level="success")
                     else:
                         cursor.execute("INSERT INTO expenses (date, description, amount, category, supplier_id, linked_material_id) VALUES (?, ?, ?, ?, ?, ?)", (e_date, e_desc, e_val, e_cat, sup_id, material_to_stock))
                         new_id = cursor.lastrowid
@@ -235,8 +240,7 @@ with tab_gestao:
                         conn.commit()
                         audit.log_action(conn, 'CREATE', 'expenses', new_id, None,
                             {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
-                        st.success("Salvo!")
-                    st.rerun()
+                        admin_utils.show_feedback_dialog("Salvo!", level="success")
 
         with c_list:
             st.subheader("Histórico")
@@ -296,11 +300,15 @@ with tab_gestao:
                                 st.session_state.exp_edit_id = row['id']
                                 st.rerun()
                             if st.button("🗑️", key=f"d_e_{row['id']}", help="Excluir"):
-                                old_data = {'description': row['description'], 'amount': row['amount'], 'category': row['category']}
-                                cursor.execute("DELETE FROM expenses WHERE id=?", (row['id'],))
-                                conn.commit()
-                                audit.log_action(conn, 'DELETE', 'expenses', row['id'], old_data, None)
-                                st.rerun()
+                                def do_del_exp(eid=row['id'], desc=row['description'], amt=row['amount'], cat=row['category']):
+                                    cursor.execute("DELETE FROM expenses WHERE id=?", (eid,))
+                                    conn.commit()
+                                    audit.log_action(conn, 'DELETE', 'expenses', eid, {'description': desc, 'amount': amt, 'category': cat}, None)
+
+                                admin_utils.show_confirmation_dialog(
+                                    f"Excluir a despesa '{row['description']}' de R$ {row['amount']:.2f}?",
+                                    on_confirm=do_del_exp
+                                )
             else:
                 st.info("Sem lançamentos.")
 
@@ -400,8 +408,8 @@ with tab_gestao:
                         conn.commit()
                         audit.log_action(conn, 'UPDATE', 'fixed_costs', st.session_state.fix_edit_id, old_data,
                             {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
-                        st.success("Atualizado!")
                         st.session_state.fix_edit_id = None
+                        admin_utils.show_feedback_dialog("Atualizado!", level="success")
                     else:
                         try:
                             cursor.execute("INSERT INTO fixed_costs (description, value, due_day, periodicity, category) VALUES (?, ?, ?, ?, ?)", (f_desc, f_val, f_day, f_per, f_cat))
@@ -409,10 +417,9 @@ with tab_gestao:
                             conn.commit()
                             audit.log_action(conn, 'CREATE', 'fixed_costs', new_id, None,
                                 {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
-                            st.success("Criado!")
+                            admin_utils.show_feedback_dialog("Criado!", level="success")
                         except Exception:
-                            st.error("Erro: Descrição deve ser única.")
-                    st.rerun()
+                            admin_utils.show_feedback_dialog("Erro: Descrição deve ser única.", level="error")
                     
         with fc_list:
             st.subheader("Despesas recorrentes cadastradas")
@@ -446,11 +453,15 @@ with tab_gestao:
                             st.session_state.fix_edit_id = row['id']
                             st.rerun()
                         if fc_del.button("🗑️ Excluir", key=f"d_f_{row['id']}"):
-                            old_data = {'description': row['description'], 'value': row['value'], 'category': row['category']}
-                            cursor.execute("DELETE FROM fixed_costs WHERE id=?", (row['id'],))
-                            conn.commit()
-                            audit.log_action(conn, 'DELETE', 'fixed_costs', row['id'], old_data, None)
-                            st.rerun()
+                            def do_del_fix(fid=row['id'], desc=row['description'], val=row['value'], cat=row['category']):
+                                cursor.execute("DELETE FROM fixed_costs WHERE id=?", (fid,))
+                                conn.commit()
+                                audit.log_action(conn, 'DELETE', 'fixed_costs', fid, {'description': desc, 'value': val, 'category': cat}, None)
+
+                            admin_utils.show_confirmation_dialog(
+                                f"Excluir a definição de custo fixo: '{row['description']}'?",
+                                on_confirm=do_del_fix
+                            )
             else:
                 st.info("Nenhum custo fixo definido.")
 
@@ -498,8 +509,7 @@ with tab_relatorios:
     st.caption(f"Exibindo dados de **{start_date.strftime('%d/%m/%Y')}** até **{end_date.strftime('%d/%m/%Y')}**")
     st.divider()
 
-    # --- DATA QUERIES ---
-    # Sales
+    # --- DETAILED DATA QUERIES (Used for Excel & Details) ---
     sales_df = pd.read_sql("""
         SELECT s.id, s.date, s.total_price, s.discount, s.payment_method, s.salesperson,
                p.name as product_name, p.category as product_category, c.name as client_name
@@ -509,7 +519,6 @@ with tab_relatorios:
         WHERE s.date BETWEEN ? AND ?
     """, conn, params=(start_date, end_date))
 
-    # Expenses
     expenses_df = pd.read_sql("""
         SELECT e.id, e.date, e.description, e.amount, e.category, s.name as supplier_name
         FROM expenses e
@@ -517,29 +526,23 @@ with tab_relatorios:
         WHERE e.date BETWEEN ? AND ?
     """, conn, params=(start_date, end_date))
 
-    # Commission Orders (Deposits)
-    orders_df = pd.read_sql("""
-        SELECT co.id, co.date_created, co.deposit_amount, co.total_price, co.status, c.name as client_name
-        FROM commission_orders co
-        LEFT JOIN clients c ON co.client_id = c.id
-        WHERE co.date_created BETWEEN ? AND ?
-    """, conn, params=(start_date, end_date))
-
-    # --- CALCULATIONS ---
-    total_sales = sales_df['total_price'].sum() if not sales_df.empty else 0.0
-    total_discounts = sales_df['discount'].sum() if not sales_df.empty else 0.0
-    total_expenses = expenses_df['amount'].sum() if not expenses_df.empty else 0.0
-    total_deposits = orders_df['deposit_amount'].sum() if not orders_df.empty else 0.0
-
-    gross_revenue = total_sales + total_deposits
-    net_profit = gross_revenue - total_expenses
+    # --- UNIFIED FINANCE SUMMARY ---
+    # Use centralized finance_service
+    fin_summary = finance_service.get_financial_summary(conn, start_date, end_date)
+    
+    gross_revenue = fin_summary['gross_revenue']
+    total_expenses = fin_summary['total_expenses']
+    net_profit = fin_summary['net_profit']
+    total_discounts = fin_summary['total_discounts']
+    rev_details = fin_summary['revenue_details']
+    exp_details = fin_summary['expense_details']
 
     # --- MAIN METRICS ---
     st.subheader("📊 Resumo do Período")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("💵 Faturamento Bruto", f"R$ {gross_revenue:,.2f}", 
-              help="Vendas finalizadas + Sinais de encomendas")
+              help="Vendas + Sinais de Encomenda + Mensalidades + Extras (Pagos)")
     c2.metric("📤 Despesas", f"R$ {total_expenses:,.2f}")
     c3.metric("📉 Descontos Concedidos", f"R$ {total_discounts:,.2f}")
     c4.metric("💰 Lucro Líquido", f"R$ {net_profit:,.2f}", 
@@ -574,19 +577,20 @@ with tab_relatorios:
 
     with exp_col3:
         # Combined Report
-        if not sales_df.empty or not expenses_df.empty:
+        if not rev_details.empty or not exp_details.empty:
             output_all = io.BytesIO()
             with pd.ExcelWriter(output_all, engine='openpyxl') as writer:
+                if not rev_details.empty:
+                    rev_details.to_excel(writer, sheet_name='Receitas_Unificadas', index=False)
+                if not exp_details.empty:
+                    exp_details.to_excel(writer, sheet_name='Despesas', index=False)
+                # Keep original sales/orders sheets if they have data for backward compatibility or detail
                 if not sales_df.empty:
-                    sales_df.to_excel(writer, sheet_name='Vendas', index=False)
-                if not expenses_df.empty:
-                    expenses_df.to_excel(writer, sheet_name='Despesas', index=False)
-                if not orders_df.empty:
-                    orders_df.to_excel(writer, sheet_name='Encomendas', index=False)
+                    sales_df.to_excel(writer, sheet_name='Vendas_Detalhe', index=False)
             st.download_button(
                 "📥 Relatório Completo (Excel)",
                 output_all.getvalue(),
-                file_name=f"relatorio_financeiro_{start_date}_{end_date}.xlsx",
+                file_name=f"relatorio_financeiro_unificado_{start_date}_{end_date}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
@@ -596,7 +600,7 @@ with tab_relatorios:
     subtab_sales, subtab_expenses, subtab_charts = st.tabs(["📈 Detalhe Vendas", "📉 Detalhe Despesas", "📊 Gráficos Avançados"])
 
     # ======================
-    # SUBTAB: VENDAS
+    # SUBTAB: VENDAS (Details from Sales Table)
     # ======================
     with subtab_sales:
         if not sales_df.empty:
@@ -657,6 +661,7 @@ with tab_relatorios:
     # SUBTAB: DESPESAS
     # ======================
     with subtab_expenses:
+        # Actually, let's just use the detailed query here for the subtab to keep supplier name.
         if not expenses_df.empty:
             # Filters
             e1, e2 = st.columns(2)
@@ -722,16 +727,14 @@ with tab_relatorios:
         with chart_col2:
             st.markdown("### Evolução Diária")
             
-            if not sales_df.empty:
-                sales_df['date'] = pd.to_datetime(sales_df['date'])
-                daily_sales = sales_df.groupby(sales_df['date'].dt.date)['total_price'].sum().reset_index()
-                daily_sales.columns = ['Data', 'Vendas']
+            if not rev_details.empty:
+                daily_sales = rev_details.groupby(rev_details['date'].dt.date)['amount'].sum().reset_index()
+                daily_sales.columns = ['Data', 'Receita']
             else:
-                daily_sales = pd.DataFrame({'Data': [], 'Vendas': []})
+                daily_sales = pd.DataFrame({'Data': [], 'Receita': []})
             
-            if not expenses_df.empty:
-                expenses_df['date'] = pd.to_datetime(expenses_df['date'])
-                daily_expenses = expenses_df.groupby(expenses_df['date'].dt.date)['amount'].sum().reset_index()
+            if not exp_details.empty:
+                daily_expenses = exp_details.groupby(exp_details['date'].dt.date)['amount'].sum().reset_index()
                 daily_expenses.columns = ['Data', 'Despesas']
             else:
                 daily_expenses = pd.DataFrame({'Data': [], 'Despesas': []})
@@ -741,7 +744,7 @@ with tab_relatorios:
                 daily_all = pd.merge(daily_sales, daily_expenses, on='Data', how='outer').fillna(0)
                 daily_all = daily_all.sort_values('Data')
                 
-                fig_line = px.line(daily_all, x='Data', y=['Vendas', 'Despesas'],
+                fig_line = px.line(daily_all, x='Data', y=['Receita', 'Despesas'],
                                    labels={'value': 'Valor (R$)', 'variable': 'Tipo'},
                                    color_discrete_sequence=['#2ecc71', '#e74c3c'])
                 fig_line.update_layout(margin=dict(t=20, b=0, l=0, r=0))
@@ -752,31 +755,31 @@ with tab_relatorios:
         # Monthly Trend (if enough data)
         st.markdown("### Tendência Mensal")
         
-        # Sales Monthly
-        if not sales_df.empty:
-            sales_df['month'] = sales_df['date'].dt.to_period('M').astype(str)
-            monthly_sales = sales_df.groupby('month')['total_price'].sum().reset_index()
-            monthly_sales.columns = ['Mês', 'Vendas']
-        else:
-            monthly_sales = pd.DataFrame({'Mês': [], 'Vendas': []})
-        
-        # Expenses Monthly
-        if not expenses_df.empty:
-            expenses_df['month'] = expenses_df['date'].dt.to_period('M').astype(str)
-            monthly_expenses = expenses_df.groupby('month')['amount'].sum().reset_index()
+        if not rev_details.empty or not exp_details.empty:
+            # Monthly Trend
+            rev_details['month'] = rev_details['date'].dt.to_period('M').astype(str)
+            monthly_sales = rev_details.groupby('month')['amount'].sum().reset_index()
+            monthly_sales.columns = ['Mês', 'Receita']
+            
+            exp_details['month'] = exp_details['date'].dt.to_period('M').astype(str)
+            monthly_expenses = exp_details.groupby('month')['amount'].sum().reset_index()
             monthly_expenses.columns = ['Mês', 'Despesas']
-        else:
-            monthly_expenses = pd.DataFrame({'Mês': [], 'Despesas': []})
-        
-        if not monthly_sales.empty or not monthly_expenses.empty:
+            
             monthly_all = pd.merge(monthly_sales, monthly_expenses, on='Mês', how='outer').fillna(0)
             monthly_all = monthly_all.sort_values('Mês')
-            monthly_all['Lucro'] = monthly_all['Vendas'] - monthly_all['Despesas']
+            monthly_all['Lucro'] = monthly_all['Receita'] - monthly_all['Despesas']
             
-            fig_bar = px.bar(monthly_all, x='Mês', y=['Vendas', 'Despesas', 'Lucro'],
+            fig_bar = px.bar(monthly_all, x='Mês', y=['Receita', 'Despesas', 'Lucro'],
                              barmode='group',
                              color_discrete_sequence=['#2ecc71', '#e74c3c', '#3498db'])
             st.plotly_chart(fig_bar, use_container_width=True)
+            
+            # Additional Breakdown: Revenue by Source
+            st.markdown("### Composição do Faturamento")
+            source_breakdown = rev_details.groupby('source')['amount'].sum().reset_index()
+            fig_source = px.bar(source_breakdown, x='source', y='amount', color='source',
+                                labels={'amount': 'Total (R$)', 'source': 'Origem'})
+            st.plotly_chart(fig_source, use_container_width=True)
         else:
             st.info("Sem dados para a tendência mensal.")
 

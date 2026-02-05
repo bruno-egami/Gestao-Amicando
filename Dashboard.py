@@ -233,6 +233,7 @@ try:
                 use_container_width=True,
                 column_config={
                     "name": "Aluno",
+                    "months": "Mês(es)",
                     "total_due": st.column_config.NumberColumn("Valor em Aberto", format="R$ %.2f")
                 }
             )

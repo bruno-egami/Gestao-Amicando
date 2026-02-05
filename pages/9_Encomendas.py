@@ -90,7 +90,7 @@ def delete_order(oid):
         return True
     except Exception as e:
         conn.rollback()
-        st.error(f"Erro ao excluir encomenda: {e}")
+        admin_utils.show_feedback_dialog(f"Erro ao excluir encomenda: {e}", level="error")
         return False
 
 # --- Filters ---
@@ -285,10 +285,9 @@ else:
                             cursor.execute("UPDATE commission_orders SET image_paths=? WHERE id=?", 
                                            (str(order_images), order['id']))
                             conn.commit()
-                            st.success(f"✅ {len(new_photos)} foto(s) salva(s)!")
-                            st.rerun()
+                            admin_utils.show_feedback_dialog(f"{len(new_photos)} foto(s) salva(s)!", level="success")
                         else:
-                            st.warning("Selecione pelo menos uma foto.")
+                            admin_utils.show_feedback_dialog("Selecione pelo menos uma foto.", level="warning")
 
             st.divider()
             
@@ -370,10 +369,10 @@ else:
                                 success = True
                             except Exception as e:
                                 conn.rollback()
-                                st.error(f"Erro ao adicionar item: {e}")
+                                admin_utils.show_feedback_dialog(f"Erro ao adicionar item: {e}", level="error")
                             
                             if success:
-                                st.success("Item adicionado!")
+                                admin_utils.show_feedback_dialog("Item adicionado!", level="success")
                                 st.rerun()                
             # Edit Order Button
             with c_act2:
@@ -407,13 +406,13 @@ else:
                                 WHERE id=?
                             """, (new_date, new_notes, new_discount, new_deposit, int(new_client_id), order['id']))
                             conn.commit()
-                            st.success("Atualizado!")
+                            admin_utils.show_feedback_dialog("Atualizado!", level="success")
                             st.rerun()
 
             # Delete Order
             if c_act3.button("🗑️ Excluir", key=f"del_ord_{order['id']}"):
                 if delete_order(order['id']):
-                    st.success("Encomenda excluída e estoque restaurado!")
+                    admin_utils.show_feedback_dialog("Encomenda excluída e estoque restaurado!", level="success")
                     st.rerun()
 
  
@@ -513,7 +512,7 @@ else:
                                         success = True
                                     except Exception as e:
                                         conn.rollback()
-                                        st.error(f"Erro na operação: {e}")
+                                        admin_utils.show_feedback_dialog(f"Erro na operação: {e}", level="error")
                                     
                                     if success:
                                         st.rerun()
@@ -603,11 +602,11 @@ else:
                                         
                                         except Exception as e:
                                             conn.rollback()
-                                            st.error(f"Erro: {e}")
+                                            admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                                         
                                         if success:
                                             st.session_state['expanded_order_id'] = order['id']
-                                            st.success("Produção lançada!")
+                                            admin_utils.show_feedback_dialog("Produção lançada!", level="success")
                                             st.rerun()
 
                             with b_wip:
@@ -638,14 +637,14 @@ else:
                                             success = True
                                         except Exception as e:
                                             conn.rollback()
-                                            st.error(f"Erro: {e}")
+                                            admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                                             
                                         if success:
                                             st.session_state['expanded_order_id'] = order['id']
-                                            st.success("Enviado para Fluxo de Produção!")
+                                            admin_utils.show_feedback_dialog("Enviado para Fluxo de Produção!", level="success")
                                             st.rerun()
                     else:
-                        st.success("✅ Produção Concluída (ou Totalmente Reservado)")
+                        st.info("✅ Produção Concluída (ou Totalmente Reservado)")
 
                 # Delete Item Button
                 with ci3:
@@ -694,7 +693,7 @@ else:
                             success = True
                         except Exception as e:
                             conn.rollback()
-                            st.error(f"Erro ao excluir item: {e}")
+                            admin_utils.show_feedback_dialog(f"Erro ao excluir item: {e}", level="error")
                         
                         if success:
                             st.session_state['expanded_order_id'] = order['id']
@@ -712,7 +711,7 @@ else:
                         audit.log_action(conn, 'UPDATE', 'commission_orders', order['id'], {'status': order['status']}, {'status': 'Concluída'})
                         conn.commit()
                         st.session_state['expanded_order_id'] = order['id']
-                        st.success("Status atualizado para Concluído!")
+                        admin_utils.show_feedback_dialog("Status atualizado para Concluído!", level="success")
                         st.rerun()
 
                 if st.button("📦 Realizar Entrega", key=f"dlv_{order['id']}"):
@@ -807,7 +806,7 @@ else:
                         success = True
                     except Exception as e:
                         conn.rollback()
-                        st.error(f"Erro: {e}")
+                        admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                     
                     if success:
                         # Prepare data for Receipt

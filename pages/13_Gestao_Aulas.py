@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time
 from datetime import datetime
 import database
 import auth
@@ -30,7 +31,7 @@ admin_utils.render_header_logo()
 st.title("🎓 Gestão de Aulas e Alunos")
 
 # TABS
-tab_summary, tab_classes, tab_students, tab_consume, tab_finance = st.tabs(["📊 Resumo", "🗓️ Turmas", "👥 Alunos", "📦 Lançar Consumo", "💰 Financeiro e Extratos"])
+tab_summary, tab_classes, tab_students, tab_finance, tab_history = st.tabs(["📊 Resumo", "🗓️ Turmas", "👥 Alunos", "💰 Gestão Financeira", "📜 Histórico Financeiro"])
 
 # ==============================================================================
 # TAB 0.5: TURMAS (NEW)
@@ -48,12 +49,11 @@ with tab_classes:
                 if c_name:
                     try:
                         student_service.create_class(conn, c_name, c_sched, c_notes)
-                        st.success("Turma criada!")
-                        st.rerun()
+                        admin_utils.show_feedback_dialog("Turma criada!", level="success")
                     except Exception as e:
-                        st.error(f"Erro: {e}")
+                        admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                 else:
-                    st.warning("Nome obrigatório.")
+                    admin_utils.show_feedback_dialog("Nome obrigatório.", level="warning")
     
     with c2:
         classes = student_service.get_all_classes(conn)
@@ -80,8 +80,7 @@ with tab_classes:
                         ec_notes = st.text_area("Notas", value=row['notes'])
                         if st.form_submit_button("Salvar"):
                             student_service.update_class(conn, row['id'], ec_name, ec_sched, ec_notes)
-                            st.success("Atualizado!")
-                            st.rerun()
+                            admin_utils.show_feedback_dialog("Atualizado!", level="success")
 
 # ==============================================================================
 # TAB 0: RESUMO
@@ -129,12 +128,11 @@ with tab_students:
                     try:
                         cid = class_opts.get(sel_class_name)
                         nid = student_service.create_student(conn, name, phone, cid, join_date.strftime('%Y-%m-%d'))
-                        st.success(f"Aluno {name} cadastrado com ID {nid}!")
-                        st.rerun()
+                        admin_utils.show_feedback_dialog(f"Aluno {name} cadastrado com ID {nid}!", level="success")
                     except Exception as e:
-                        st.error(f"Erro: {e}")
+                        admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                 else:
-                    st.warning("Nome obrigatório.")
+                    admin_utils.show_feedback_dialog("Nome obrigatório.", level="warning")
     
     with c2:
         st.markdown("**Alunos Ativos**")
@@ -201,7 +199,10 @@ with tab_students:
                             try:
                                 # CAST sid to native int to prevent numpy type issues in SQLite
                                 student_service.update_student_class(conn_cb, int(sid), new_cid)
-                                st.toast(f"✅ Turma do Aluno {sid} alterada para: {sel_val} (ID Turma: {new_cid})", icon="💾")
+                                # (Toasts are used for reactive background updates, but the user requested persistent. 
+                                # However, show_feedback_dialog calls st.rerun which might be aggressive for a reactive dropdown. 
+                                # Let's convert to dialog for full consistency as requested.)
+                                admin_utils.show_feedback_dialog(f"Turma do Aluno {sid} alterada para: {sel_val}", level="success")
                             finally:
                                 conn_cb.close()
                                 
@@ -229,115 +230,49 @@ with tab_students:
                             try:
                                 # Update only personal details. Class is handled by reactive widget above.
                                 student_service.update_student(conn, row['id'], en, ep, ea)
-                                st.success(f"Dados atualizados!")
+                                admin_utils.show_feedback_dialog("Dados atualizados!", level="success")
                                 st.cache_data.clear()
-                                st.rerun()
                             except Exception as e:
-                                st.error(f"Erro ao atualizar: {e}")
+                                admin_utils.show_feedback_dialog(f"Erro ao atualizar: {e}", level="error")
 
 # ==============================================================================
-# TAB 2: LANÇAR CONSUMO
+# TAB 3: GESTÃO FINANCEIRA (UNIFIED)
 # ==============================================================================
-with tab_consume:
-    st.subheader("Lançar Consumo ou Aula Extra")
-    
-    # 1. Filter by Class
-    classes_df = student_service.get_all_classes(conn)
-    class_opts = {row['name']: row['id'] for _, row in classes_df.iterrows()} if not classes_df.empty else {}
-    
-    col_filter, col_res = st.columns([1, 2])
-    with col_filter:
-        filter_class = st.selectbox("Filtrar Alunos por Turma", ["Todos"] + list(class_opts.keys()), key="cons_filter_class")
+@st.dialog("✨ Registro Concluído")
+def show_success_summary(item_name, qty, total, movement_type="Lançamento"):
+    st.success(f"**{movement_type} realizado com sucesso!**")
+    st.markdown(f"""
+    ---
+    **Resumo do Registro:**
+    - **Item:** {item_name}
+    - **Quantidade:** {qty}
+    - **Valor Total:** R$ {total:.2f}
+    ---
+    """)
+    if st.button("Fechar e Atualizar", type="primary", use_container_width=True):
+        st.rerun()
 
-    # 2. Select Student
-    target_class_id = class_opts.get(filter_class) if filter_class != "Todos" else None
-    students = student_service.get_all_active_students(conn, class_id=target_class_id)
-    
-    if students.empty:
-        st.warning("Nenhum aluno encontrado.")
-    else:
-        s_dict = {f"{row['name']} ({row.get('class_name') or 'Sem Turma'})": row['id'] for _, row in students.iterrows()}
-        # Ensure we reset or keep selection valid
-        sel_student = st.selectbox("Selecione o Aluno", [""] + list(s_dict.keys()), key="cons_student_sel")
-        
-        if sel_student:
-            st_id = s_dict[sel_student]
-            
-            # Type of Consumption
-            c_type = st.radio("Tipo de Lançamento", ["Material (Baixa Estoque)", "Aula Extra / Serviço / Taxas"], horizontal=True)
-            
-            if c_type.startswith("Material"):
-                # Category Filter Data
-                cats = pd.read_sql("SELECT id, name FROM material_categories ORDER BY name", conn)
-                cat_opts = {row['name']: row['id'] for _, row in cats.iterrows()}
-                
-                # Material Filters
-                c_mf1, c_mf2 = st.columns([1, 1])
-                cat_filter = c_mf1.selectbox("Filtrar Categoria", ["Todas"] + list(cat_opts.keys()))
-                name_filter = c_mf2.text_input("🔍 Buscar Material", placeholder="Ex: Argila...")
-                
-                # Query Materials
-                q_mat = "SELECT id, name, unit, price_per_unit, stock_level FROM materials WHERE type != 'Serviço'"
-                if cat_filter != "Todas":
-                    q_mat += f" AND category_id={cat_opts[cat_filter]}"
-                if name_filter:
-                    q_mat += f" AND name LIKE '%{name_filter}%'"
-                q_mat += " ORDER BY name"
-                
-                mats = pd.read_sql(q_mat, conn)
-                
-                if mats.empty:
-                    st.warning("Nenhum material encontrado com estes filtros.")
-                else:
-                    m_dict = {f"{r['name']} (R$ {r['price_per_unit']:.2f}/{r['unit']})": r['id'] for _, r in mats.iterrows()}
-                    
-                    with st.form("form_mat_consumption"):
-                        target_mat = st.selectbox("Selecione Material", list(m_dict.keys()))
-                        c_m1, c_m2 = st.columns(2)
-                        qty = c_m1.number_input("Quantidade", min_value=0.01, step=0.1)
-                        markup = c_m2.number_input("Markup (x Multiplicador)", min_value=1.0, value=2.0, step=0.1)
-                        
-                        date_cons = st.date_input("Data", value=datetime.today())
-                        notes = st.text_input("Observações (Opcional)", key="cons_notes_mat")
-                        
-                        if st.form_submit_button("Lançar Consumo", type="primary", use_container_width=True):
-                            mat_id = m_dict[target_mat]
-                            try:
-                                uid = st.session_state.current_user['id'] if 'current_user' in st.session_state else None
-                                cid = student_service.process_material_consumption(conn, st_id, mat_id, qty, date_cons.strftime('%Y-%m-%d'), uid, notes, markup)
-                                st.success("Consumo registrado com sucesso!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro: {e}")
-                            
-            else:
-                # Manual Extra/Service
-                with st.form("form_extra"):
-                    desc = st.text_input("Descrição (Ex: Queima Extra, Aula Avulsa)")
-                    c_e1, c_e2, c_e3 = st.columns(3)
-                    val_unit = c_e1.number_input("Valor Unitário (R$)", min_value=0.0)
-                    qty = c_e2.number_input("Quantidade", value=1.0, min_value=0.1)
-                    markup = c_e3.number_input("Markup (x Fator)", min_value=1.0, value=2.0, step=0.1)
-                    
-                    date_cons = st.date_input("Data", value=datetime.today())
-                    notes = st.text_input("Observações (Opcional)", key="cons_notes_extra")
-                    
-                    if st.form_submit_button("Lançar", type="primary", use_container_width=True):
-                        if desc and val_unit > 0:
-                            # Apply markup factor to unit price
-                            marked_up_price = val_unit * markup
-                            total = marked_up_price * qty
-                            student_service.add_consumption(conn, st_id, desc, qty, marked_up_price, total, date_cons.strftime('%Y-%m-%d'), notes=notes, markup=markup)
-                            st.success(f"Lançamento realizado! Total: R$ {total:.2f}")
-                            st.rerun()
-                        else:
-                            st.error("Preencha descrição e valor.")
+@st.dialog("📝 Editar Mensalidade")
+def edit_tuition_dialog(tid, sname, month, current_val):
+    st.markdown(f"**Aluno:** {sname} | **Ref:** {month}")
+    new_val = st.number_input("Novo Valor (R$)", value=float(current_val), min_value=0.0)
+    if st.button("Salvar Alterações", type="primary", use_container_width=True):
+        student_service.update_tuition(conn, tid, new_val)
+        admin_utils.show_feedback_dialog("Valor da mensalidade atualizado!", level="success")
+        st.rerun()
 
-# ==============================================================================
-# TAB 3: FINANCEIRO
-# ==============================================================================
+@st.dialog("📝 Editar Consumo")
+def edit_consumption_dialog(cid, sname, current_desc, current_val):
+    st.markdown(f"**Aluno:** {sname}")
+    new_desc = st.text_input("Descrição", value=current_desc)
+    new_val = st.number_input("Valor Total (R$)", value=float(current_val), min_value=0.0)
+    if st.button("Salvar Alterações", type="primary", use_container_width=True):
+        student_service.update_consumption(conn, cid, new_desc, new_val)
+        admin_utils.show_feedback_dialog("Consumo atualizado!", level="success")
+        st.rerun()
+
 with tab_finance:
-    st.subheader("Controle Financeiro Mensal")
+    st.subheader("Controle Financeiro e Consumo")
     
     # Global Actions (Generate Monthly Tuition)
     with st.expander("🛠️ Ferramentas em Massa (Gerar Mensalidades)"):
@@ -351,8 +286,7 @@ with tab_finance:
             for _, s in students.iterrows():
                 ok, msg = student_service.generate_tuition_record(conn, s['id'], month_ref, default_val)
                 if ok: count += 1
-            st.success(f"Geradas {count} mensalidades para {month_ref}.")
-            st.rerun()
+            admin_utils.show_feedback_dialog(f"Geradas {count} mensalidades for {month_ref}.", level="success")
 
     st.divider()
     
@@ -364,7 +298,7 @@ with tab_finance:
     cls_opts = ["Todas"] + classes_df['name'].tolist() if not classes_df.empty else ["Todas"]
     filter_cls_fin = c_f2.selectbox("📚 Turma", cls_opts, key="fin_filter_cls")
     
-    only_pending = c_f3.checkbox("⚠️ Apenas Pendentes", value=True, key="fin_only_pend")
+    only_pending = c_f3.checkbox("⚠️ Apenas Pendentes", value=False, key="fin_only_pend")
     
     # Load and Filter Students
     students = student_service.get_all_active_students(conn)
@@ -393,30 +327,56 @@ with tab_finance:
                 row = students[students['id'] == sid].iloc[0]
                 sname = row['name']
                 
-                st.markdown(f"### 👤 Gestão: {sname}")
-                tuit, cons, total = student_service.get_student_financial_summary(conn, sid)
+                st.markdown(f"### 👤 Aluno: {sname}")
                 
-                c_det, c_act = st.columns([3, 2], gap="medium")
+                # --- TWO COLUMN LAYOUT: ACTIONS/SUMMARY (Left) vs NEW CONSUMPTION (Right) ---
+                col_fin_left, col_fin_right = st.columns([1, 1], gap="large")
                 
-                with c_det:
-                    st.markdown("**Extrato de Pendências**")
-                    # Details Table logic
-                    items = []
-                    for _, t in tuit.iterrows():
-                        items.append({"date": t['month_year'], "description": f"Mensalidade {t['month_year']}", "quantity": 1, "value": t['amount'], "status": t['status']})
-                    for _, c in cons.iterrows():
-                        desc = c['description']
-                        if c.get('notes'):
-                            desc += f" ({c['notes']})"
-                        items.append({"date": c['date'], "description": desc, "quantity": c['quantity'], "value": c['total_value'], "status": c['status']})
+                with col_fin_left:
+                    st.markdown("#### 📊 Extrato e Pendências")
+                    tuit, cons, total = student_service.get_student_financial_summary(conn, sid)
                     
-                    if items:
-                        df_items = pd.DataFrame(items)
-                        st.dataframe(df_items, hide_index=True, use_container_width=True)
+                    if not tuit.empty or not cons.empty:
+                        # Render Tuitions
+                        for _, t in tuit.iterrows():
+                            with st.expander(f"💰 Mensalidade {t['month_year']} - R$ {t['amount']:.2f}", expanded=False):
+                                ec1, ec2 = st.columns(2)
+                                if ec1.button("📝 Editar", key=f"edit_t_{t['id']}"):
+                                    edit_tuition_dialog(t['id'], sname, t['month_year'], t['amount'])
+                                if ec2.button("🗑️ Cancelar", key=f"cancel_t_{t['id']}"):
+                                    admin_utils.show_confirmation_dialog(
+                                        f"Deseja cancelar a mensalidade de {t['month_year']}?",
+                                        on_confirm=lambda tid=t['id']: student_service.cancel_tuition(conn, tid)
+                                    )
+
+                        # Render Consumptions
+                        for _, c in cons.iterrows():
+                            desc_label = c['description']
+                            if c.get('notes'): desc_label += f" ({c['notes']})"
+                            with st.expander(f"📦 {desc_label} - R$ {c['total_value']:.2f}", expanded=False):
+                                ec1, ec2 = st.columns(2)
+                                if ec1.button("📝 Editar", key=f"edit_c_{c['id']}"):
+                                    edit_consumption_dialog(c['id'], sname, c['description'], c['total_value'])
+                                if ec2.button("🗑️ Cancelar", key=f"cancel_c_{c['id']}"):
+                                    admin_utils.show_confirmation_dialog(
+                                        f"Deseja cancelar o lançamento: {c['description']}?",
+                                        on_confirm=lambda cid=c['id']: student_service.cancel_consumption(conn, cid)
+                                    )
+                                    
+                        st.divider()
+                        st.metric("Total em Aberto", f"R$ {total:.2f}")
+
+                        # Prepare list for PDF (unchanged logic for PDF generation)
+                        items = []
+                        for _, t in tuit.iterrows():
+                            items.append({"date": t['month_year'], "description": f"Mensalidade {t['month_year']}", "quantity": 1, "value": t['amount'], "status": t['status']})
+                        for _, c in cons.iterrows():
+                            desc = c['description']
+                            if c.get('notes'): desc += f" ({c['notes']})"
+                            items.append({"date": c['date'], "description": desc, "quantity": c['quantity'], "value": c['total_value'], "status": c['status']})
                     else:
                         st.success("Tudo pago! Nenhuma pendência encontrada. 🎉")
 
-                with c_act:
                     if total > 0:
                         st.markdown("**Ações Rápidas**")
                         # Billing Text
@@ -429,27 +389,203 @@ with tab_finance:
                         with st.expander("💬 Texto para WhatsApp", expanded=False):
                             st.text_area("Copiar", bill_txt, height=120, key=f"txt_{sid}")
                         
-                        # Confirm Payment
                         if st.button("✅ Confirmar Pagamento Total", key=f"pay_{sid}", type="primary", use_container_width=True):
-                            student_service.confirm_payment_all_pending(conn, sid)
-                            st.toast(f"Pagamento de {sname} confirmado!", icon="💰")
-                            time.sleep(1)
-                            st.rerun()
+                            admin_utils.show_confirmation_dialog(
+                                f"Confirmar o pagamento de todas as pendências (R$ {total:.2f}) de {sname}?",
+                                on_confirm=lambda sid=sid: student_service.confirm_payment_all_pending(conn, sid)
+                            )
                         
                         # PDF Download
                         st_data = {'name': sname, 'month': datetime.now().strftime('%m/%Y')}
                         pdf_bytes = reports.generate_student_statement(st_data, items, total)
+                        st.download_button("📄 Baixar Extrato PDF", data=pdf_bytes, file_name=f"extrato_{sname.replace(' ', '_')}.pdf", mime="application/pdf", key=f"pdf_{sid}", use_container_width=True)
+
+                with col_fin_right:
+                    st.markdown("#### ✨ Lançar Novo Consumo")
+                    c_type = st.radio("Tipo de Lançamento", ["Material (Baixa Estoque)", "Aula Extra / Serviço / Taxas"], horizontal=True, key=f"ctype_{sid}")
+                    
+                    if c_type.startswith("Material"):
+                        # Category Filter Data
+                        cats = pd.read_sql("SELECT id, name FROM material_categories ORDER BY name", conn)
+                        cat_opts = {row['name']: row['id'] for _, row in cats.iterrows()}
                         
-                        st.download_button(
-                            "📄 Baixar Extrato PDF",
-                            data=pdf_bytes,
-                            file_name=f"extrato_{sname.replace(' ', '_')}.pdf",
-                            mime="application/pdf",
-                            key=f"pdf_{sid}",
-                            use_container_width=True
-                        )
+                        # Material Filters
+                        c_mf1, c_mf2 = st.columns([1, 1])
+                        cat_filter = c_mf1.selectbox("Filtrar Categoria", ["Todas"] + list(cat_opts.keys()), key=f"fcat_{sid}")
+                        name_filter = c_mf2.text_input("🔍 Buscar Material", placeholder="Ex: Argila...", key=f"fmat_{sid}")
+                        
+                        # Query Materials
+                        q_mat = "SELECT id, name, unit, price_per_unit, stock_level FROM materials WHERE type != 'Serviço'"
+                        if cat_filter != "Todas":
+                            q_mat += f" AND category_id={cat_opts[cat_filter]}"
+                        if name_filter:
+                            q_mat += f" AND name LIKE '%{name_filter}%'"
+                        q_mat += " ORDER BY name"
+                        
+                        mats = pd.read_sql(q_mat, conn)
+                        
+                        if mats.empty:
+                            st.warning("Nenhum material encontrado.")
+                        else:
+                            m_dict = {f"{r['name']} (R$ {r['price_per_unit']:.2f}/{r['unit']})": r['id'] for _, r in mats.iterrows()}
+                            
+                            with st.form(f"form_mat_consumption_{sid}"):
+                                target_mat = st.selectbox("Selecione Material", list(m_dict.keys()))
+                                cm1, cm2 = st.columns(2)
+                                qty = cm1.number_input("Quantidade", min_value=0.01, step=0.1)
+                                markup = cm2.number_input("Markup (x Multiplicador)", min_value=1.0, value=2.0, step=0.1)
+                                
+                                date_cons = st.date_input("Data", value=datetime.today())
+                                notes = st.text_input("Observações (Opcional)", key=f"notes_mat_{sid}")
+                                
+                                if st.form_submit_button("Lançar Consumo", type="primary", use_container_width=True):
+                                    mat_id = m_dict[target_mat]
+                                    try:
+                                        uid = st.session_state.current_user['id'] if 'current_user' in st.session_state else None
+                                        cid = student_service.process_material_consumption(conn, sid, mat_id, qty, date_cons.strftime('%Y-%m-%d'), uid, notes, markup)
+                                        mat_name_clean = target_mat.split(" (R$")[0]
+                                        mat_price = float(mats[mats['id'] == mat_id]['price_per_unit'].iloc[0]) * markup
+                                        show_success_summary(f"Material: {mat_name_clean}", qty, mat_price * qty)
+                                    except Exception as e:
+                                        admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                     else:
-                        st.info("Este aluno não possui débitos pendentes.")
+                        # Manual Extra/Service
+                        with st.form(f"form_extra_{sid}"):
+                            desc = st.text_input("Descrição (Ex: Queima Extra, Aula Avulsa)")
+                            ce1, ce2, ce3 = st.columns(3)
+                            val_unit = ce1.number_input("Valor Unitário (R$)", min_value=0.0)
+                            ext_qty = ce2.number_input("Quantidade", value=1.0, min_value=0.1)
+                            markup = ce3.number_input("Markup (x Fator)", min_value=1.0, value=2.0, step=0.1)
+                            
+                            date_cons = st.date_input("Data", value=datetime.today())
+                            notes = st.text_input("Observações (Opcional)", key=f"notes_extra_{sid}")
+                            
+                            if st.form_submit_button("Lançar", type="primary", use_container_width=True):
+                                if desc and val_unit > 0:
+                                    marked_up_price = val_unit * markup
+                                    total_ext = marked_up_price * ext_qty
+                                    student_service.add_consumption(conn, sid, desc, ext_qty, marked_up_price, total_ext, date_cons.strftime('%Y-%m-%d'), notes=notes, markup=markup)
+                                    show_success_summary(desc, ext_qty, total_ext)
+                                else:
+                                    admin_utils.show_feedback_dialog("Preencha descrição e valor.", level="warning")
     else:
         st.info("Sem alunos ativos cadastrados.")
+
+# ==============================================================================
+# TAB 4: HISTÓRICO FINANCEIRO (Refined)
+# ==============================================================================
+with tab_history:
+    st.subheader("Histórico de Movimentações")
+    
+    # --- FILTERS ---
+    with st.expander("🔍 Filtros de Visualização", expanded=False):
+        f_c1, f_c2 = st.columns(2)
+        
+        # Period
+        today = datetime.today()
+        start_date = f_c1.date_input("De", value=today.replace(day=1))
+        end_date = f_c2.date_input("Até", value=today)
+        
+        f_c3, f_c4, f_c5, f_c6 = st.columns(4)
+        
+        # Student
+        students_all = student_service.get_all_active_students(conn)
+        st_opts = {"Todos": "Todos"}
+        if not students_all.empty:
+            for _, s in students_all.iterrows():
+                st_opts[s['name']] = s['id']
+        
+        sel_st_name = f_c3.selectbox("Aluno", list(st_opts.keys()), key="hist_student_sel")
+        sel_st_id = st_opts[sel_st_name]
+        
+        # Class (Turma)
+        classes_df = student_service.get_all_classes(conn)
+        cls_opts = {"Todas": "Todas"}
+        if not classes_df.empty:
+            for _, c in classes_df.iterrows():
+                cls_opts[c['name']] = c['id']
+        
+        sel_cls_name = f_c4.selectbox("Turma", list(cls_opts.keys()), key="hist_cls_sel")
+        sel_cls_id = cls_opts[sel_cls_name]
+        
+        # Type
+        type_opts = ["Todos", "Mensalidade", "Consumo"]
+        sel_type = f_c5.selectbox("Tipo Lançamento", type_opts, key="hist_type_sel")
+        
+        # Status
+        status_opts = ["Todos", "Pago", "Pendente"]
+        sel_status = f_c6.selectbox("Status Fatura", status_opts, key="hist_status_sel")
+        
+    st.divider()
+    
+    # Fetch Data
+    history_df = student_service.get_payment_history(
+        conn, 
+        start_date=start_date.strftime('%Y-%m-%d'), 
+        end_date=end_date.strftime('%Y-%m-%d'),
+        student_id=sel_st_id,
+        payment_type=sel_type,
+        class_id=sel_cls_id,
+        status_filter=sel_status
+    )
+    
+    if not history_df.empty:
+        # Summary Metrics
+        m1, m2 = st.columns(2)
+        total_rec = history_df[history_df['status'] == 'Pago']['amount'].sum()
+        total_pend = history_df[history_df['status'] == 'Pendente']['amount'].sum()
+        m1.metric("Total Recebido (Pago)", f"R$ {total_rec:,.2f}")
+        m2.metric("Total Aberto (Pendente)", f"R$ {total_pend:,.2f}")
+        
+        st.markdown("---")
+        
+        # Table
+        # Columns in DF: date, amount, student_name, student_id, description, cat, movement_type, status
+        st.dataframe(
+            history_df[['date', 'student_name', 'movement_type', 'description', 'amount', 'status']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                "student_name": "Aluno",
+                "movement_type": "Movimentação",
+                "description": "Descrição",
+                "amount": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                "status": "Status"
+            }
+        )
+        
+        st.divider()
+        st.subheader("📄 Gerar Extrato Individual")
+        st.info("Selecione um aluno filtrado acima para gerar o PDF consolidado do período selecionado.")
+        
+        if sel_st_id != "Todos":
+            # Generate Statement for this student and period
+            st_items = []
+            for _, row in history_df[history_df['student_id'] == sel_st_id].iterrows():
+                st_items.append({
+                    "date": row['date'].strftime('%Y-%m-%d'),
+                    "description": row['description'],
+                    "quantity": 1,
+                    "value": row['amount'],
+                    "status": row['status']
+                })
+            
+            if st_items:
+                st_data = {'name': sel_st_name, 'month': f"{start_date.strftime('%d/%m/%y')} - {end_date.strftime('%d/%m/%y')}"}
+                pdf_bytes = reports.generate_student_statement(st_data, st_items)
+                
+                st.download_button(
+                    f"Baixar PDF de {sel_st_name}",
+                    data=pdf_bytes,
+                    file_name=f"extrato_{sel_st_name.replace(' ', '_')}.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_hist_{sel_st_id}",
+                    use_container_width=True
+                )
+        else:
+            st.warning("Selecione um aluno específico no filtro para habilitar o download do PDF.")
+            
+    else:
+        st.info("Nenhuma movimentação encontrada com os filtros selecionados.")
 

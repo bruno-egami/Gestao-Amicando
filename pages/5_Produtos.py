@@ -45,12 +45,11 @@ with tab1:
                 try:
                     cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (new_cat_name,))
                     conn.commit()
-                    st.success(f"Categoria '{new_cat_name}' adicionada!")
-                    st.rerun()
+                    admin_utils.show_feedback_dialog(f"Categoria '{new_cat_name}' adicionada!", level="success")
                 except Exception as e:
-                    st.error(f"Erro: {e}")
+                    admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
             elif new_cat_name in cat_opts:
-                st.warning("Categoria já existe.")
+                admin_utils.show_feedback_dialog("Categoria já existe.", level="warning")
         
         # List to delete
         if cat_opts:
@@ -59,12 +58,16 @@ with tab1:
             st.write(", ".join(cat_opts))
             
             del_cat = st.selectbox("Apagar Categoria", [""] + cat_opts)
-            if st.button("Excluir Categoria Selecionada"):
+            if st.button("Excluir Categoria Selecionada", use_container_width=True):
                  if del_cat:
-                    cursor.execute("DELETE FROM product_categories WHERE name=?", (del_cat,))
-                    conn.commit()
-                    st.success(f"Categoria '{del_cat}' removida!")
-                    st.rerun()
+                    def do_del_cat(name=del_cat):
+                        cursor.execute("DELETE FROM product_categories WHERE name=?", (name,))
+                        conn.commit()
+                    
+                    admin_utils.show_confirmation_dialog(
+                        f"Deseja excluir a categoria '{del_cat}'? Isso não excluirá os produtos, mas eles ficarão sem categoria vinculada.",
+                        on_confirm=do_del_cat
+                    )
 
     # --- SHARED DATA FETCH ---
     try:
@@ -295,7 +298,7 @@ with tab1:
                                             missing_extras.append(em['name'])
                                     
                                     if not insufficient.empty or missing_extras:
-                                        st.error(f"Estoque insuficiente! {', '.join(insufficient['name'].tolist() + missing_extras)}")
+                                        admin_utils.show_feedback_dialog(f"Estoque insuficiente! {', '.join(insufficient['name'].tolist() + missing_extras)}", level="error")
                                     else:
                                         # Execute Production
                                         from datetime import datetime as dt
@@ -324,7 +327,7 @@ with tab1:
                                                     miss_msg.append(f"{child_stock['name']}: Precisa {needed_total}, Tem {child_stock['stock_quantity']}")
                                             
                                             if not can_make_kit:
-                                                st.error(f"Estoque insuficiente de componentes: {', '.join(miss_msg)}")
+                                                admin_utils.show_feedback_dialog(f"Estoque insuficiente de componentes: {', '.join(miss_msg)}", level="error")
                                             else:
                                                 # Deduct
                                                 for _, kit_item in kits.iterrows():
@@ -341,7 +344,7 @@ with tab1:
                                                 cursor.execute("INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
                                                                (dt.now().isoformat(), row['id'], f"{row['name']} ({prod_target})", qty_make, user_id, username, 'Produção de Kit (Variação)' if target_variant_id else 'Produção de Kit'))
                                                 conn.commit()
-                                                st.toast(f"Kit Montado: {qty_make}x {row['name']}!", icon="📦")
+                                                admin_utils.show_feedback_dialog(f"Kit Montado: {qty_make}x {row['name']}!", level="success")
                                                 st.rerun()
 
                                         else:
@@ -349,7 +352,7 @@ with tab1:
                                             
                                             # 1. Deduct Base Recipe
                                             if recipe.empty and not extra_mat_needed:
-                                                st.warning("Sem receita. Ajustando apenas estoque.")
+                                                admin_utils.show_feedback_dialog("Sem receita. Ajustando apenas estoque.", level="warning", title="Aviso de Receita")
                                             
                                             # Deduct Base
                                             for _, mat in recipe.iterrows():
@@ -378,11 +381,11 @@ with tab1:
                                             
                                             audit.log_action(conn, 'CREATE', 'production_history', cursor.lastrowid, None, {'product_id': row['id'], 'quantity': qty_make, 'variant_id': target_variant_id})
                                             conn.commit()
-                                            st.toast(f"Produzido: {qty_make}x {row['name']} ({prod_target})!", icon="✅")
+                                            admin_utils.show_feedback_dialog(f"Produzido: {qty_make}x {row['name']} ({prod_target})!", level="success")
                                             st.rerun()
  
                                 except Exception as e:
-                                    st.error(f"Erro: {e}")
+                                    admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
 
                     # Edit Button
                     with c5:
@@ -419,13 +422,12 @@ with tab1:
                         audit.log_action(conn, 'CREATE', 'products', new_id, None, {'name': new_name}, commit=False)
                         conn.commit()
                         
-                        st.success(f"Produto '{new_name}' criado!")
                         st.session_state.editing_product_id = new_id # Switch to Edit Mode
-                        st.rerun()
+                        admin_utils.show_feedback_dialog(f"Produto '{new_name}' criado!", level="success")
                     except Exception as e:
-                        st.error(f"Erro: {e}")
+                        admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                 else:
-                    st.warning("Nome é obrigatório.")
+                    admin_utils.show_feedback_dialog("Nome é obrigatório.", level="warning")
 
     else:
         # EDITING INTERFACE
@@ -486,11 +488,10 @@ with tab1:
                         'name': new_name, 'duplicated_from': selected_prod_id
                     })
                     
-                    st.success(f"Produto '{new_name}' criado com sucesso!")
                     st.session_state.editing_product_id = new_prod_id
-                    st.rerun()
+                    admin_utils.show_feedback_dialog(f"Produto '{new_name}' criado com sucesso!", level="success")
                 except Exception as e:
-                    st.error(f"Erro ao duplicar: {e}")
+                    admin_utils.show_feedback_dialog(f"Erro ao duplicar: {e}", level="error")
         
         # --- 0. DETAILS EDIT (New) ---
         with st.expander("Editar Detalhes do Produto", expanded=False):
@@ -571,9 +572,7 @@ with tab1:
                         {'name': curr_prod['name'], 'stock': curr_prod['stock_quantity']},
                         {'name': new_name, 'stock': new_stock}, commit=False)
                     conn.commit()
-                    st.success("Detalhes atualizados!")
-                    # Just update local var to avoid full rerun jump if possible, but rerun easiest to sync UI title
-                    st.rerun()
+                    admin_utils.show_feedback_dialog("Detalhes atualizados!", level="success")
 
         # TABS INTERFACE
         tab_recipe, tab_variants, tab_comp, tab_pricing, tab_images = st.tabs(["📜 Receita", "🎨 Variações", "📦 Composição (Kit)", "💰 Precificação", "📷 Imagens"])
@@ -609,11 +608,16 @@ with tab1:
                 st.dataframe(current_recipe, hide_index=True, use_container_width=True)
                 # Remove
                 del_id = st.selectbox("Remover Insumo ID", [""] + current_recipe['id'].astype(str).tolist())
-                if st.button("🗑️ Remover Insumo selecionado"):
+                if st.button("🗑️ Remover Insumo selecionado", use_container_width=True):
                     if del_id:
-                        cursor.execute("DELETE FROM product_recipes WHERE id=?", (del_id,))
-                        conn.commit()
-                        st.rerun()
+                        def do_del_rec(rid=del_id):
+                            cursor.execute("DELETE FROM product_recipes WHERE id=?", (rid,))
+                            conn.commit()
+                        
+                        admin_utils.show_confirmation_dialog(
+                            "Remover este insumo da receita do produto?",
+                            on_confirm=do_del_rec
+                        )
             else:
                 st.info("Nenhuma receita definida.")
 
@@ -710,12 +714,11 @@ with tab1:
                         mat_id = mat_opts[v_mat] if v_mat else None
                         success = product_service.create_variant(conn, selected_prod_id, v_name, v_stock, v_price, mat_id, v_mat_qty)
                         if success:
-                            st.success("Variação adicionada!")
-                            st.rerun()
+                            admin_utils.show_feedback_dialog("Variação adicionada!", level="success")
                         else:
-                            st.error("Erro ao adicionar variação.")
+                            admin_utils.show_feedback_dialog("Erro ao adicionar variação.", level="error")
                     else:
-                        st.warning("Nome obrigatório.")
+                        admin_utils.show_feedback_dialog("Nome obrigatório.", level="warning")
 
             # List Variants
             variants_df = product_service.get_product_variants(conn, selected_prod_id)
@@ -742,8 +745,13 @@ with tab1:
                         
                         # Delete
                         if vc5.button("🗑️", key=f"del_var_{var_row['id']}"):
-                            product_service.delete_variant(conn, var_row['id'])
-                            st.rerun()
+                            def do_del_var(vid=var_row['id'], vname=var_row['variant_name']):
+                                product_service.delete_variant(conn, vid)
+                            
+                            admin_utils.show_confirmation_dialog(
+                                f"Excluir a variação '{var_row['variant_name']}'?",
+                                on_confirm=do_del_var
+                            )
             else:
                 st.info("Nenhuma variação cadastrada.")
 
@@ -782,10 +790,16 @@ with tab1:
                 st.dataframe(kit_items, hide_index=True, use_container_width=True)
                 
                 del_kit_id = st.selectbox("Remover Componente ID", [""] + kit_items['id'].astype(str).tolist())
-                if st.button("🗑️ Remover Componente selecionado"):
-                     cursor.execute("DELETE FROM product_kits WHERE id=?", (del_kit_id,))
-                     conn.commit()
-                     st.rerun()
+                if st.button("🗑️ Remover Componente selecionado", use_container_width=True):
+                     if del_kit_id:
+                        def do_del_kit(kid=del_kit_id):
+                            cursor.execute("DELETE FROM product_kits WHERE id=?", (kid,))
+                            conn.commit()
+
+                        admin_utils.show_confirmation_dialog(
+                            "Remover este componente do kit?",
+                            on_confirm=do_del_kit
+                        )
 
         # --- TAB 3: IMAGENS ---
         with tab_images:
@@ -821,7 +835,7 @@ with tab1:
                          curr_imgs.append(path)
                     cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(curr_imgs), selected_prod_id))
                     conn.commit()
-                    st.success("Salvo!")
+                    admin_utils.show_feedback_dialog("Salvo!", level="success")
                     st.rerun()
 
             # --- NEW: Auto-Display Component Images (Kits) ---
@@ -929,8 +943,7 @@ with tab1:
             if col_final.button("💾 Salvar", type="primary", use_container_width=True, help="Salvar Preço Base e Markup"):
                 cursor.execute("UPDATE products SET markup = ?, base_price = ? WHERE id = ?", (new_markup, new_price, selected_prod_id))
                 conn.commit()
-                st.success("Preço Base Salvo!")
-                st.rerun()
+                admin_utils.show_feedback_dialog("Preço Base Salvo!", level="success")
             
             # 2. Variation Cost Analysis (NEW)
             st.divider()
@@ -1046,22 +1059,25 @@ with tab1:
                          if new_adder < 0: new_adder = 0
                          
                          product_service.update_variant_price(conn, sel_var['id'], new_adder)
-                         st.success(f"Preço de '{sel_var_name}' atualizado!")
-                         st.rerun()
+                         admin_utils.show_feedback_dialog(f"Preço de '{sel_var_name}' atualizado!", level="success")
             else:
                 st.info("Nenhuma variação para analisar.")
 
         st.markdown("---")
         with st.expander("🚫 Zona de Perigo"):
-            if st.button("EXCLUIR PRODUTO", type="primary"):
-                cursor.execute("DELETE FROM product_recipes WHERE product_id=?", (selected_prod_id,))
-                cursor.execute("DELETE FROM product_kits WHERE parent_product_id=?", (selected_prod_id,))
-                cursor.execute("DELETE FROM products WHERE id=?", (selected_prod_id,))
-                audit.log_action(conn, 'DELETE', 'products', selected_prod_id, {'name': curr_prod['name']}, commit=False)
-                conn.commit()
-                st.success("Produto excluído.")
-                st.session_state.editing_product_id = None
-                st.rerun()
+            if st.button("EXCLUIR PRODUTO", type="primary", use_container_width=True):
+                def do_delete_prod(pid=selected_prod_id, pname=curr_prod['name']):
+                    cursor.execute("DELETE FROM product_recipes WHERE product_id=?", (pid,))
+                    cursor.execute("DELETE FROM product_kits WHERE parent_product_id=?", (pid,))
+                    cursor.execute("DELETE FROM products WHERE id=?", (pid,))
+                    audit.log_action(conn, 'DELETE', 'products', pid, {'name': pname}, commit=False)
+                    conn.commit()
+                    st.session_state.editing_product_id = None
+
+                admin_utils.show_confirmation_dialog(
+                    f"Tem certeza que deseja EXCLUIR PERMANENTEMENTE o produto '{curr_prod['name']}'? Todos os vínculos de receita e kit serão removidos.",
+                    on_confirm=do_delete_prod
+                )
 
 # --- Tab 2: History (Moved content) ---
 with tab2:
@@ -1158,25 +1174,23 @@ with tab2:
                             audit.log_action(conn, 'UPDATE', 'production_history', row['id'], 
                                 {'quantity': row['quantity']}, {'quantity': new_qty})
                             
-                            st.success("Atualizado!")
+                            admin_utils.show_feedback_dialog("Atualizado!", level="success")
                             st.rerun()
                 
                 with c3:
                     # Delete button
                     if st.button("🗑️", key=f"del_prod_{row['id']}", help="Excluir registro"):
-                        # Capture for audit
-                        old_data = {'product_id': row['product_id'], 'product_name': row['product_name'], 'quantity': row['quantity']}
-                        
-                        # Revert stock: subtract the quantity that was recorded
-                        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (row['quantity'], row['product_id']))
-                        cursor.execute("DELETE FROM production_history WHERE id = ?", (row['id'],))
-                        conn.commit()
-                        
-                        # Audit log
-                        audit.log_action(conn, 'DELETE', 'production_history', row['id'], old_data, None)
-                        
-                        st.success("Registro excluído e estoque revertido!")
-                        st.rerun()
+                        def do_delete_hist(rid=row['id'], pid=row['product_id'], qty=row['quantity'], pname=row['product_name']):
+                            # Revert stock: subtract the quantity that was recorded
+                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (qty, pid))
+                            cursor.execute("DELETE FROM production_history WHERE id = ?", (rid,))
+                            conn.commit()
+                            audit.log_action(conn, 'DELETE', 'production_history', rid, {'product_name': pname, 'quantity': qty}, None)
+
+                        admin_utils.show_confirmation_dialog(
+                            f"Excluir este registro de produção? O estoque de '{row['product_name']}' será revertido (subtraído em {int(row['quantity'])}).",
+                            on_confirm=do_delete_hist
+                        )
     else:
         st.info("Nenhum registro de produção encontrado para os filtros selecionados.")
 
