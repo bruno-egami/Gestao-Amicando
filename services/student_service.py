@@ -14,9 +14,20 @@ def get_all_active_students(conn, class_id=None):
     query += " ORDER BY s.name"
     return pd.read_sql(query, conn)
 
+def get_all_inactive_students(conn):
+    """Returns DataFrame of all inactive students."""
+    query = "SELECT s.*, c.name as class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.active=0 ORDER BY s.name"
+    return pd.read_sql(query, conn)
+
 def get_all_classes(conn):
-    """Returns DataFrame of all classes."""
-    return pd.read_sql("SELECT * FROM classes ORDER BY name", conn)
+    """Returns DataFrame of all classes with active student count."""
+    query = """
+        SELECT c.*, 
+               (SELECT COUNT(*) FROM students WHERE class_id = c.id AND active = 1) as student_count
+        FROM classes c
+        ORDER BY c.name
+    """
+    return pd.read_sql(query, conn)
 
 def create_class(conn, name, schedule, notes):
     """Creates a new class."""
@@ -49,6 +60,7 @@ def create_student(conn, name, phone, class_id=None, join_date=None):
 
 def update_student(conn, student_id, name, phone, active):
     """Updates student info (Name, Phone, Active). Class is handled separately."""
+    student_id = int(student_id)
     # Get old data
     old = pd.read_sql(f"SELECT * FROM students WHERE id={student_id}", conn).iloc[0].to_dict()
     
@@ -88,42 +100,41 @@ def update_student_class(conn, student_id, class_id):
 
 # --- Consumption Logic ---
 
-def add_consumption(conn, student_id, description, quantity, unit_price, total_val, date, user_id=None):
+def add_consumption(conn, student_id, description, quantity, unit_price, total_val, date, user_id=None, notes=None, markup=0.0):
     """
-    Logs a consumption (extra material/class).
-    WARNING: Does NOT deduct stock automatically here. 
-    Stock deduction logic should be handled by caller IF it links to a specific material ID, 
-    but for this module requirements:
-    'Ao registrar, busque o preço na tabela materials e realize a baixa automática no estoque (stock_level).'
-    
-    So we need an overload or parameter to handle material_id if applicable.
+    Logs a consumption (extra material/class) with optional markup.
+    The unit_price and total_val should be ALREADY MARKED UP before calling this 
+    IF they come from the UI, but let's ensure we store the markup % for audit.
     """
     cursor = conn.cursor()
     
     cursor.execute("""
-        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'Pendente')
-    """, (student_id, description, quantity, unit_price, total_val, date))
+        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup)
+        VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?)
+    """, (student_id, description, quantity, unit_price, total_val, date, notes, markup))
     
     new_id = cursor.lastrowid
     audit.log_action(conn, 'CREATE', 'student_consumptions', new_id, None, 
-                     {'student_id': student_id, 'desc': description, 'val': total_val}, commit=False)
+                     {'student_id': student_id, 'desc': description, 'val': total_val, 'markup': markup}, commit=False)
     conn.commit()
     return new_id
 
-def process_material_consumption(conn, student_id, material_id, quantity, date, user_id=None):
+def process_material_consumption(conn, student_id, material_id, quantity, date, user_id=None, notes=None, markup=0.0):
     """
     High-level flow: 
     1. Fetch material info (price, name).
     2. Deduct stock.
-    3. Log consumption record.
+    3. Log consumption record with markup applied.
     4. Log inventory transaction.
     """
     cursor = conn.cursor()
     
     # 1. Fetch Material
     mat = pd.read_sql(f"SELECT name, price_per_unit, stock_level FROM materials WHERE id={material_id}", conn).iloc[0]
-    unit_price = mat['price_per_unit']
+    base_price = mat['price_per_unit']
+    
+    # Calculate Marked-up price as a multiplier (Markup 2 = 200%)
+    unit_price = base_price * markup
     total_val = unit_price * quantity
     desc = f"Consumo: {mat['name']}"
     
@@ -133,16 +144,19 @@ def process_material_consumption(conn, student_id, material_id, quantity, date, 
     
     # 3. Log Consumption
     cursor.execute("""
-        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'Pendente')
-    """, (student_id, desc, quantity, unit_price, total_val, date))
+        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup)
+        VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?)
+    """, (student_id, desc, quantity, unit_price, total_val, date, notes, markup))
     cons_id = cursor.lastrowid
     
-    # 4. Inventory Log
+    # 4. Inventory Log (We log the base cost for inventory purposes? Or the total val?)
+    # Usually inventory SAIDA is at cost. But for student revenue tracking, we use the sale price.
+    # Let's log at base cost for inventory and noted as student consumption.
+    base_total = base_price * quantity
     cursor.execute("""
         INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (material_id, datetime.now().isoformat(), 'SAIDA', quantity, total_val, f"Aluno ID {student_id}", user_id))
+    """, (material_id, datetime.now().isoformat(), 'SAIDA', quantity, base_total, f"Aluno ID {student_id} (Markup: {markup}%)", user_id))
     
     # Audit
     audit.log_action(conn, 'CONSUME_MAT', 'student_consumptions', cons_id, None, 
@@ -240,3 +254,17 @@ def get_module_summary_stats(conn):
     stats['total_revenue_paid'] = t_paid_all + c_paid_all
     
     return stats
+
+def get_debts_summary(conn):
+    """Returns a DataFrame of students with total pending balance > 0."""
+    query = """
+        SELECT id, name, total_due FROM (
+            SELECT s.id, s.name, 
+                   COALESCE((SELECT SUM(amount) FROM tuitions WHERE student_id = s.id AND status = 'Pendente'), 0) +
+                   COALESCE((SELECT SUM(total_value) FROM student_consumptions WHERE student_id = s.id AND status = 'Pendente'), 0) as total_due
+            FROM students s
+            WHERE s.active = 1
+        ) WHERE total_due > 0
+        ORDER BY total_due DESC
+    """
+    return pd.read_sql(query, conn)

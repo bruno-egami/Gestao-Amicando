@@ -168,12 +168,9 @@ try:
     inventory_val = (products_df['stock_quantity'] * products_df['base_price']).sum()
     
     # 5. Class Highlights
-    try:
-        pending_tuitions = pd.read_sql("SELECT COUNT(*) as count FROM tuitions WHERE status = 'Pendente'", conn).iloc[0]['count']
-        upcoming_classes = pd.read_sql("SELECT COUNT(*) as count FROM classes", conn).iloc[0]['count']
-    except:
-        pending_tuitions = 0
-        upcoming_classes = 0
+    from services import student_service
+    class_stats = student_service.get_module_summary_stats(conn)
+    debts_df = student_service.get_debts_summary(conn)
 
     # --- METRICS ROW ---
     c1, c2, c3, c4 = st.columns(4)
@@ -187,8 +184,14 @@ try:
     c3.metric("🏺 Peças em Estoque", int(total_products))
     c4.metric("💰 Valor em Estoque", f"R$ {inventory_val:,.2f}")
 
-    if pending_tuitions > 0:
-        st.info(f"🎓 **Gestão de Aulas**: Existem **{pending_tuitions}** mensalidades pendentes de alunos. [Ver Gestão de Aulas](Gestao_Aulas)")
+    # Second Metrics Row: Classes
+    st.markdown("#### 🎓 Gestão de Aulas")
+    cl1, cl2, cl3, cl4 = st.columns(4)
+    cl1.metric("👥 Alunos Ativos", class_stats.get('total_students', 0))
+    cl2.metric("💸 Valor Pendente (Aulas)", f"R$ {class_stats.get('pending_revenue', 0):.2f}")
+    
+    if not debts_df.empty:
+        st.info(f"🎓 Existem **{len(debts_df)}** alunos com mensalidades ou consumos pendentes. [Ver Gestão de Aulas](Gestao_Aulas)")
 
     st.divider()
 
@@ -222,6 +225,26 @@ try:
             st.success("Nenhuma encomenda pendente! 🎉")
 
     with col_right:
+        st.subheader("🎓 Mensalidades Pendentes")
+        if not debts_df.empty:
+             st.dataframe(
+                debts_df,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "name": "Aluno",
+                    "total_due": st.column_config.NumberColumn("Valor em Aberto", format="R$ %.2f")
+                }
+            )
+        else:
+            st.success("Todas as mensalidades estão em dia! 🎉")
+
+    st.divider()
+
+    # Lower Row: Stock & Low Stock
+    col_st_1, col_st_2 = st.columns([1, 1], gap="large")
+    
+    with col_st_1:
         st.subheader("⚠️ Alerta de Insumos")
         if not low_stock_materials.empty:
             st.dataframe(
@@ -238,26 +261,18 @@ try:
         else:
             st.success("Estoque de insumos saudável. ✅")
 
-    st.divider()
-
-    # Products Stock
-    st.subheader("🏺 Estoque de Peças")
-    
-    # Search Filter
-    search = st.text_input("🔍 Buscar Peça", placeholder="Digite o nome...")
-    if search:
-        products_df = products_df[products_df['name'].str.contains(search, case=False)]
-    
-    ui_components.render_styled_dataframe(
-        products_df,
-        column_config={
-            "name": "Peça",
-            "stock_quantity": st.column_config.NumberColumn("Qtd Atual", format="%d"),
-            "base_price": st.column_config.NumberColumn("Preço Base", format="R$ %.2f")
-        }
-    )
-
-
+    with col_st_2:
+        st.subheader("🏺 Resumo de Estoque (Peças)")
+        # Small search and preview
+        st.dataframe(
+            products_df[['name', 'stock_quantity']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "name": "Peça",
+                "stock_quantity": st.column_config.NumberColumn("Qtd Atual", format="%d")
+            }
+        )
 
 except Exception as e:
     st.error(f"Erro no dashboard: {e}")

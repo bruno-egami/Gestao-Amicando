@@ -573,6 +573,8 @@ def init_db():
             total_value REAL,
             date TEXT,
             status TEXT DEFAULT 'Pendente', -- Pendente, Pago
+            notes TEXT,
+            markup REAL DEFAULT 0.0,
             FOREIGN KEY (student_id) REFERENCES students(id)
         )
     ''')

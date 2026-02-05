@@ -58,7 +58,17 @@ with tab_classes:
     with c2:
         classes = student_service.get_all_classes(conn)
         if not classes.empty:
-            st.dataframe(classes, hide_index=True, use_container_width=True)
+            st.dataframe(
+                classes[['id', 'name', 'schedule', 'student_count', 'notes']], 
+                hide_index=True, 
+                use_container_width=True,
+                column_config={
+                    "name": "Nome",
+                    "schedule": "Horário",
+                    "student_count": st.column_config.NumberColumn("Qtd Alunos", format="%d"),
+                    "notes": "Notas"
+                }
+            )
             
             with st.expander("Editar Turma"):
                 sel_c = st.selectbox("Editar", classes['name'].tolist(), key="edit_cls_sel")
@@ -141,16 +151,26 @@ with tab_students:
             # Display readable
             st.dataframe(df_students[['id', 'name', 'phone', 'class_name', 'join_date']], hide_index=True, use_container_width=True)
             
+            # --- Inactive Students ---
+            st.divider()
+            with st.expander("👻 Lista de Alunos Inativos", expanded=False):
+                inactive_df = student_service.get_all_inactive_students(conn)
+                if not inactive_df.empty:
+                    st.dataframe(inactive_df[['id', 'name', 'phone', 'class_name', 'join_date']], hide_index=True, use_container_width=True)
+                else:
+                    st.info("Nenhum aluno inativo.")
+            
             # Edit Expander
             with st.expander("Editar / Desativar Aluno"):
-                # Use ID-based mapping for uniqueness
-                st_map = {f"{row['id']} - {row['name']}": row['id'] for _, row in df_students.iterrows()}
+                # Combine active and inactive for editing
+                all_st_df = pd.concat([df_students, student_service.get_all_inactive_students(conn)])
+                st_map = {f"{row['id']} - {row['name']}": row['id'] for _, row in all_st_df.iterrows()}
                 sel_st_label = st.selectbox("Selecione para editar", [""] + list(st_map.keys()))
                 
                 if sel_st_label:
                     sid_target = st_map[sel_st_label]
                     # Filter by ID to be safe
-                    row = df_students[df_students['id'] == sid_target].iloc[0]
+                    row = all_st_df[all_st_df['id'] == sid_target].iloc[0]
                     
                     # --- Reactive Class Update ---
                     st.markdown("#### Alterar Turma")
@@ -247,35 +267,46 @@ with tab_consume:
             c_type = st.radio("Tipo de Lançamento", ["Material (Baixa Estoque)", "Aula Extra / Serviço / Taxas"], horizontal=True)
             
             if c_type.startswith("Material"):
-                # Category Filter
+                # Category Filter Data
                 cats = pd.read_sql("SELECT id, name FROM material_categories ORDER BY name", conn)
                 cat_opts = {row['name']: row['id'] for _, row in cats.iterrows()}
-                cat_filter = st.selectbox("Filtrar Categoria Material", ["Todas"] + list(cat_opts.keys()))
+                
+                # Material Filters
+                c_mf1, c_mf2 = st.columns([1, 1])
+                cat_filter = c_mf1.selectbox("Filtrar Categoria", ["Todas"] + list(cat_opts.keys()))
+                name_filter = c_mf2.text_input("🔍 Buscar Material", placeholder="Ex: Argila...")
                 
                 # Query Materials
                 q_mat = "SELECT id, name, unit, price_per_unit, stock_level FROM materials WHERE type != 'Serviço'"
                 if cat_filter != "Todas":
                     q_mat += f" AND category_id={cat_opts[cat_filter]}"
+                if name_filter:
+                    q_mat += f" AND name LIKE '%{name_filter}%'"
                 q_mat += " ORDER BY name"
                 
                 mats = pd.read_sql(q_mat, conn)
                 
                 if mats.empty:
-                    st.warning("Nenhum material nesta categoria.")
+                    st.warning("Nenhum material encontrado com estes filtros.")
                 else:
                     m_dict = {f"{r['name']} (R$ {r['price_per_unit']:.2f}/{r['unit']})": r['id'] for _, r in mats.iterrows()}
                     
                     with st.form("form_mat_consumption"):
                         target_mat = st.selectbox("Selecione Material", list(m_dict.keys()))
-                        qty = st.number_input("Quantidade", min_value=0.01, step=0.1)
-                        date_cons = st.date_input("Data", value=datetime.today())
+                        c_m1, c_m2 = st.columns(2)
+                        qty = c_m1.number_input("Quantidade", min_value=0.01, step=0.1)
+                        markup = c_m2.number_input("Markup (x Multiplicador)", min_value=1.0, value=2.0, step=0.1)
                         
-                        if st.form_submit_button("Lançar Consumo"):
+                        date_cons = st.date_input("Data", value=datetime.today())
+                        notes = st.text_input("Observações (Opcional)", key="cons_notes_mat")
+                        
+                        if st.form_submit_button("Lançar Consumo", type="primary", use_container_width=True):
                             mat_id = m_dict[target_mat]
                             try:
                                 uid = st.session_state.current_user['id'] if 'current_user' in st.session_state else None
-                                cid = student_service.process_material_consumption(conn, st_id, mat_id, qty, date_cons.strftime('%Y-%m-%d'), uid)
+                                cid = student_service.process_material_consumption(conn, st_id, mat_id, qty, date_cons.strftime('%Y-%m-%d'), uid, notes, markup)
                                 st.success("Consumo registrado com sucesso!")
+                                st.rerun()
                             except Exception as e:
                                 st.error(f"Erro: {e}")
                             
@@ -283,15 +314,22 @@ with tab_consume:
                 # Manual Extra/Service
                 with st.form("form_extra"):
                     desc = st.text_input("Descrição (Ex: Queima Extra, Aula Avulsa)")
-                    val_unit = st.number_input("Valor Unitário (R$)", min_value=0.0)
-                    qty = st.number_input("Quantidade", value=1.0, min_value=0.1)
-                    date_cons = st.date_input("Data", value=datetime.today())
+                    c_e1, c_e2, c_e3 = st.columns(3)
+                    val_unit = c_e1.number_input("Valor Unitário (R$)", min_value=0.0)
+                    qty = c_e2.number_input("Quantidade", value=1.0, min_value=0.1)
+                    markup = c_e3.number_input("Markup (x Fator)", min_value=1.0, value=2.0, step=0.1)
                     
-                    if st.form_submit_button("Lançar"):
+                    date_cons = st.date_input("Data", value=datetime.today())
+                    notes = st.text_input("Observações (Opcional)", key="cons_notes_extra")
+                    
+                    if st.form_submit_button("Lançar", type="primary", use_container_width=True):
                         if desc and val_unit > 0:
-                            total = val_unit * qty
-                            student_service.add_consumption(conn, st_id, desc, qty, val_unit, total, date_cons.strftime('%Y-%m-%d'))
-                            st.success("Lançamento realizado!")
+                            # Apply markup factor to unit price
+                            marked_up_price = val_unit * markup
+                            total = marked_up_price * qty
+                            student_service.add_consumption(conn, st_id, desc, qty, marked_up_price, total, date_cons.strftime('%Y-%m-%d'), notes=notes, markup=markup)
+                            st.success(f"Lançamento realizado! Total: R$ {total:.2f}")
+                            st.rerun()
                         else:
                             st.error("Preencha descrição e valor.")
 
@@ -318,69 +356,84 @@ with tab_finance:
 
     st.divider()
     
-    # Per Student View
+    # --- FILTERS & LIST ---
+    c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
+    search_fin = c_f1.text_input("🔍 Buscar Aluno", placeholder="Nome...", key="fin_search")
+    
+    classes_df = student_service.get_all_classes(conn)
+    cls_opts = ["Todas"] + classes_df['name'].tolist() if not classes_df.empty else ["Todas"]
+    filter_cls_fin = c_f2.selectbox("📚 Turma", cls_opts, key="fin_filter_cls")
+    
+    only_pending = c_f3.checkbox("⚠️ Apenas Pendentes", value=True, key="fin_only_pend")
+    
+    # Load and Filter Students
     students = student_service.get_all_active_students(conn)
-    if students.empty:
-        st.info("Sem alunos.")
-    else:
-        for i, row in students.iterrows():
-            sid = row['id']
-            sname = row['name']
+    if not students.empty:
+        # Pre-calculate totals for filtering
+        students['total_due'] = students['id'].apply(lambda x: student_service.get_student_financial_summary(conn, x)[2])
+        
+        # Apply filters
+        if search_fin:
+            students = students[students['name'].str.contains(search_fin, case=False)]
+        if filter_cls_fin != "Todas":
+            students = students[students['class_name'] == filter_cls_fin]
+        if only_pending:
+            students = students[students['total_due'] > 0]
             
-            # Fetch Financials
-            tuit, cons, total = student_service.get_student_financial_summary(conn, sid)
+        if students.empty:
+            st.info("Nenhum aluno encontrado com estes filtros.")
+        else:
+            # Selection Area
+            st.markdown("---")
+            sel_list = {f"{row['name']} (Pend: R$ {row['total_due']:.2f})": row['id'] for _, row in students.iterrows()}
+            selected_label = st.selectbox("🎯 Selecione Aluno para Gerenciar", [""] + list(sel_list.keys()))
             
-            # Determine color based on debt
-            status_color = "red" if total > 0 else "green"
-            label = f"{sname} - Pendente: R$ {total:.2f}"
-            
-            with st.expander(f"🎓 {label}"):
-                c_det, c_act = st.columns([2, 1])
+            if selected_label:
+                sid = sel_list[selected_label]
+                row = students[students['id'] == sid].iloc[0]
+                sname = row['name']
                 
-                # Details Table logic
-                items = []
-                # Tuitions
-                for _, t in tuit.iterrows():
-                    items.append({
-                        "date": t['month_year'], # Using month_year as date display for tuition
-                        "description": f"Mensalidade {t['month_year']}",
-                        "quantity": 1,
-                        "value": t['amount'],
-                        "status": t['status']
-                    })
-                # Consumptions
-                for _, c in cons.iterrows():
-                    items.append({
-                        "date": c['date'],
-                        "description": c['description'],
-                        "quantity": c['quantity'],
-                        "value": c['total_value'],
-                        "status": c['status']
-                    })
+                st.markdown(f"### 👤 Gestão: {sname}")
+                tuit, cons, total = student_service.get_student_financial_summary(conn, sid)
+                
+                c_det, c_act = st.columns([3, 2], gap="medium")
                 
                 with c_det:
+                    st.markdown("**Extrato de Pendências**")
+                    # Details Table logic
+                    items = []
+                    for _, t in tuit.iterrows():
+                        items.append({"date": t['month_year'], "description": f"Mensalidade {t['month_year']}", "quantity": 1, "value": t['amount'], "status": t['status']})
+                    for _, c in cons.iterrows():
+                        desc = c['description']
+                        if c.get('notes'):
+                            desc += f" ({c['notes']})"
+                        items.append({"date": c['date'], "description": desc, "quantity": c['quantity'], "value": c['total_value'], "status": c['status']})
+                    
                     if items:
                         df_items = pd.DataFrame(items)
                         st.dataframe(df_items, hide_index=True, use_container_width=True)
                     else:
-                        st.info("Tudo pago!")
-                        
+                        st.success("Tudo pago! Nenhuma pendência encontrada. 🎉")
+
                 with c_act:
-                    # Billing Text
                     if total > 0:
-                        st.caption("Texto para Cobrança")
+                        st.markdown("**Ações Rápidas**")
+                        # Billing Text
                         bill_txt = (f"Olá {sname.split()[0]}! 🏺\n"
                                     f"Estou passando para enviar o resumo do atelier.\n\n"
                                     f"Total em aberto: R$ {total:.2f}\n"
                                     f"Referente a mensalidade e consumos extras.\n\n"
                                     f"Pode realizar o PIX para a chave: (xxx) \n"
                                     f"Obrigado!")
-                        st.text_area("Copiar", bill_txt, height=150, key=f"txt_{sid}")
+                        with st.expander("💬 Texto para WhatsApp", expanded=False):
+                            st.text_area("Copiar", bill_txt, height=120, key=f"txt_{sid}")
                         
                         # Confirm Payment
-                        if st.button("✅ Confirmar Pagamento Total", key=f"pay_{sid}", type="primary"):
+                        if st.button("✅ Confirmar Pagamento Total", key=f"pay_{sid}", type="primary", use_container_width=True):
                             student_service.confirm_payment_all_pending(conn, sid)
-                            st.success("Baixa realizada!")
+                            st.toast(f"Pagamento de {sname} confirmado!", icon="💰")
+                            time.sleep(1)
                             st.rerun()
                         
                         # PDF Download
@@ -392,8 +445,11 @@ with tab_finance:
                             data=pdf_bytes,
                             file_name=f"extrato_{sname.replace(' ', '_')}.pdf",
                             mime="application/pdf",
-                            key=f"pdf_{sid}"
+                            key=f"pdf_{sid}",
+                            use_container_width=True
                         )
                     else:
-                        st.success("Em dia! 🎉")
+                        st.info("Este aluno não possui débitos pendentes.")
+    else:
+        st.info("Sem alunos ativos cadastrados.")
 
