@@ -174,6 +174,57 @@ def deduct_stock(cursor, product_id, quantity, check_kits=True, variant_id=None)
             
     return logs
 
+def deduct_production_materials_central(cursor, product_id, quantity, filter_type=None, exclude_ids=None, note_suffix=""):
+    """
+    Deducts raw materials from stock based on product recipe (recursive for kits).
+    filter_type: 'clay' (only materials with Massa/Argila in name), 
+                 'others' (everything except clay and material_ids in exclude_ids)
+    """
+    from datetime import date
+    
+    # 1. Collect all recipes (Recursive for Kits)
+    recipes_to_deduct = []
+    
+    def collect_recipes(pid, mul):
+        # Direct recipes for this product
+        query = "SELECT m.id, m.name, r.quantity as qty_per_unit FROM product_recipes r JOIN materials m ON r.material_id = m.id WHERE r.product_id=?"
+        cursor.execute(query, (int(pid),))
+        for mid, mname, qty_unit in cursor.fetchall():
+            recipes_to_deduct.append({
+                'id': mid,
+                'name': mname,
+                'qty_total': qty_unit * mul * quantity
+            })
+            
+        # If it's a kit, collect children recipes
+        cursor.execute("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", (int(pid),))
+        for child_id, child_qty in cursor.fetchall():
+            collect_recipes(child_id, mul * child_qty)
+            
+    collect_recipes(product_id, 1.0)
+    
+    logs = []
+    for r in recipes_to_deduct:
+        is_clay = any(keyword in r['name'].lower() for keyword in ['massa', 'argila'])
+        
+        should_deduct = False
+        if filter_type == 'clay' and is_clay:
+            should_deduct = True
+        elif filter_type == 'others' and not is_clay:
+            if not exclude_ids or r['id'] not in exclude_ids:
+                should_deduct = True
+        elif filter_type is None:
+            should_deduct = True
+            
+        if should_deduct:
+            d_qty = r['qty_total']
+            cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", (d_qty, r['id']))
+            cursor.execute("INSERT INTO inventory_transactions (date, material_id, quantity, type, notes) VALUES (?, ?, ?, 'SAIDA', ?)", 
+                          (date.today().isoformat(), r['id'], d_qty, f"Produção ID {product_id} {note_suffix}"))
+            logs.append(f"Deduzido {d_qty} de {r['name']}")
+            
+    return logs
+
 def create_variant(conn, product_id, name, stock, price_adder, material_id=None, material_quantity=0.0):
     """Creates a new variant for a product."""
     cursor = conn.cursor()

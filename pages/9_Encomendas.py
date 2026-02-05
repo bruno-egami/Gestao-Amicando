@@ -3,12 +3,14 @@ import pandas as pd
 import database
 from datetime import date, datetime, timedelta
 import admin_utils
+import services.product_service as product_service
 import audit
 import reports
 import time
 import auth
 import uuid
 import os
+import json
 
 st.set_page_config(page_title="Encomendas", page_icon="📦")
 
@@ -543,48 +545,14 @@ else:
                                     st.caption("Baixa estoque e finaliza imediatamente")
                                     amount = st.number_input("Qtd", min_value=1, max_value=remaining, key=f"prod_in_{item['id']}")
                                     if st.button("Confirmar", key=f"conf_{item['id']}", type="primary"):
-                                        # Deduct materials query...
-                                        # Deduct materials query (Handle Kits Recursively)
-                                        # 1. Get Direct Recipe
-                                        recipes_to_deduct = []
-                                        
-                                        # Check direct recipe
-                                        direct_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(item['product_id'],))
-                                        for _, r in direct_recipe.iterrows():
-                                            recipes_to_deduct.append({'mid': r['material_id'], 'qty_per_unit': r['quantity']})
-                                            
-                                        # Check Kit Children Recipes
-                                        kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(item['product_id'],))
-                                        for _, kc in kit_comps.iterrows():
-                                            # For each child, get its recipe
-                                            child_recipe = pd.read_sql("SELECT material_id, quantity FROM product_recipes WHERE product_id=?", conn, params=(int(kc['child_product_id']),))
-                                            for _, cr in child_recipe.iterrows():
-                                                # Total Qty = Child Qty in Kit * Ingredient Qty in Child
-                                                recipes_to_deduct.append({'mid': cr['material_id'], 'qty_per_unit': cr['quantity'] * kc['quantity']})
-
-                                        # Check Variant Recipe (Material)
-                                        if item.get('variant_id') and item['variant_id'] > 0:
-                                            var_info = pd.read_sql("SELECT material_id, material_quantity FROM product_variants WHERE id=?", conn, params=(item['variant_id'],))
-                                            if not var_info.empty:
-                                                vi = var_info.iloc[0]
-                                                if vi['material_id'] and vi['material_quantity'] > 0:
-                                                     recipes_to_deduct.append({'mid': vi['material_id'], 'qty_per_unit': vi['material_quantity']})
-
                                         success = False
                                         old_order_status = order['status']
                                         cursor.execute("BEGIN TRANSACTION")
                                         try:
-                                            # Update Materials
-                                            for rd in recipes_to_deduct:
-                                                deducted_qty = rd['qty_per_unit'] * amount
-                                                cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", 
-                                                              (deducted_qty, rd['mid']))
-                                                 
-                                                # Log Transaction
-                                                cursor.execute("""
-                                                    INSERT INTO inventory_transactions (date, material_id, quantity, type, notes)
-                                                    VALUES (?, ?, ?, 'production', ?)
-                                                """, (date.today().isoformat(), rd['mid'], deducted_qty, f"Produção Rápida Encomenda #{fmt_id}"))
+                                            # Use centralized deduction (handles kits recursively)
+                                            # Pass glaze id if applicable
+                                            glaze_id = item.get('variant_id') if item.get('variant_id') and item['variant_id'] > 0 else None
+                                            product_service.deduct_production_materials_central(cursor, item['product_id'], amount, note_suffix=f"Produção Rápida Encomenda #{fmt_id}")
                                             
                                             # Update Item
                                             # LOGIC CHANGE: Check if order is fully complete
@@ -653,13 +621,12 @@ else:
                                         cursor.execute("BEGIN TRANSACTION")
                                         try:
                                             # Insert into WIP (materials_deducted = 0)
-                                            import json
-                                            history = {"Iniciado": datetime.now().strftime("%d/%m %H:%M"), "Modelagem": datetime.now().strftime("%d/%m %H:%M")}
+                                            history = {"Iniciado": datetime.now().strftime("%d/%m %H:%M"), "Fila de Espera": datetime.now().strftime("%d/%m %H:%M")}
                                             history_json = json.dumps(history)
 
                                             cursor.execute("""
                                                 INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
-                                                VALUES (?, ?, ?, ?, 'Modelagem', ?, ?, 0, ?, ?)
+                                                VALUES (?, ?, ?, ?, 'Fila de Espera', ?, ?, 0, ?, ?)
                                             """, (item['product_id'], item['variant_id'], order['id'], item['id'], wip_amount, wip_date.isoformat(), history_json, item.get('notes')))
                                             
                                             # Update Order Status to "Em Produção" if not already

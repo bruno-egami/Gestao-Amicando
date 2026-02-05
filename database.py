@@ -43,11 +43,27 @@ def run_migrations(conn):
         cursor.execute("ALTER TABLE commission_orders ADD COLUMN image_paths TEXT")
     except sqlite3.OperationalError: pass
 
-    # Inventory Transactions (Stock History) - ensuring existence
-    # Inventory Transactions (Stock History) - ensuring existence
+    # inventory transactions (stock history) - ensuring existence
     # Moved to init_db or handled there.
     # Check if table exists before create in migration is fine, but init_db handles creation.
-    pass
+    
+    # 10. Production Losses (Migration stage)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS production_losses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            product_id INTEGER,
+            variant_id INTEGER,
+            stage TEXT,
+            quantity INTEGER,
+            reason TEXT,
+            order_id INTEGER,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (variant_id) REFERENCES product_variants(id),
+            FOREIGN KEY (order_id) REFERENCES commission_orders(id)
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_losses_product ON production_losses(product_id)")
 
     conn.commit()
 
@@ -590,17 +606,20 @@ def init_db():
             variant_id INTEGER, 
             order_id INTEGER,
             order_item_id INTEGER,
-            stage TEXT CHECK( stage IN ('Modelagem', 'Secagem', 'Biscoito', 'Esmaltação', 'Queima de Alta') ),
+            stage TEXT CHECK( stage IN ('Fila de Espera', 'Modelagem', 'Secagem', 'Biscoito', 'Esmaltação', 'Queima de Alta') ),
             quantity INTEGER NOT NULL,
             start_date TEXT, -- Data agendada ou real de início
             materials_deducted BOOLEAN DEFAULT 0, -- Controle se a massa/argila já foi baixada
             stage_history TEXT, -- Histórico de datas por etapa (JSON)
             notes TEXT,
+            priority INTEGER DEFAULT 0, -- Prioridade para ordenação customizada
             FOREIGN KEY (product_id) REFERENCES products(id),
             FOREIGN KEY (order_id) REFERENCES commission_orders(id),
             FOREIGN KEY (order_item_id) REFERENCES commission_items(id)
         )
     ''')
+    
+    # Production Losses (Breakage Tracking) - Handled in run_migrations
     
     # Commission Orders indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON commission_orders(status)")
