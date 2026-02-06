@@ -35,6 +35,7 @@ with database.db_session() as conn_init:
     auth.create_default_admin(conn_init)
 
 # --- AUTHENTICATION ---
+conn = get_db_connection()
 if not auth.require_login(conn):
     st.stop()
 

@@ -54,42 +54,46 @@ Sistema completo de gestão para ateliês de cerâmica artesanal, desenvolvido e
 ### ⚙️ Administração
 - Gestão de usuários com controle de acesso
 - Auditoria de ações (CRUD)
-- Backup e restauração do banco de dados
+- Backup Automático Agendado e Restauração
 - Importação em massa via Excel
 
-### 📊 Relatórios (16 tipos)
+### 📊 Relatórios (18 tipos)
 
 #### Estoque e Inventário
-- **Estoque Atual** - Visão geral do estoque de produtos
+- **Estoque Atual** - Visão geral do estoque de produtos e insumos
+- **Valuation WIP** - Valor investido em peças em andamento (Work in Process)
 - **Itens sem Movimentação** - Produtos/insumos parados (dead stock)
 - **Previsão de Estoque** - Estimativa de quando itens vão acabar
 
 #### Vendas e Faturamento
 - **Vendas por Período** - Detalhamento de vendas com filtros
-- **Top Produtos Vendidos** - Ranking de produtos mais vendidos
-- **Análise de Vendas Anual** - Pivot table de vendas mensais por produto
+- **Top Produtos Vendidos** - Ranking de produtos
+- **Análise de Vendas Anual** - Pivot table mensal
 - **Lucratividade por Produto** - Margem de lucro por item
-- **Análise de Sazonalidade** - Comparação do mesmo mês em diferentes anos
+- **Análise de Sazonalidade** - Comparação anual
+
+#### Produção e Qualidade
+- **Gargalos de Produção** - Lead time (tempo de permanência) por estágio
+- **Controle de Qualidade** - Análise de perdas por motivo e estágio
+- **Histórico de Produção** - Registro detalhado de itens produzidos
+- **Tendência de Produtividade** - Gráficos de evolução da produção mensal
+- **Consumo de Insumos** - Matérias-primas utilizadas
+- **Custo de Produção** - Estimativa de custo teórico
 
 #### Clientes e Encomendas
 - **Clientes - Histórico** - Histórico de compras por cliente
 - **Encomendas Pendentes** - Status de pedidos em aberto
 
 #### Financeiro
-- **Despesas por Categoria** - Gastos agrupados por categoria
-- **Fluxo de Caixa** - Entradas vs saídas com saldo acumulado
-- **Fornecedores - Compras** - Valores pagos por fornecedor
-
-#### Produção
-- **Histórico de Produção** - Registro de produção por período
-- **Consumo de Insumos** - Matérias-primas consumidas
-- **Custo de Produção** - Estimativa de custo por produto
+- **Despesas por Categoria** - Gastos agrupados
+- **Fluxo de Caixa** - Entradas vs saídas
+- **Fornecedores - Compras** - Histórico de pagamentos
 
 #### Recursos dos Relatórios
 - 📈 Gráficos interativos (Plotly)
-- 📄 Exportação para PDF (com gráficos incluídos)
+- 📄 Exportação para PDF (com gráficos)
 - 📊 Exportação para Excel
-- 🔍 Filtros por período, categoria, etc.
+- 🔍 Filtros dinâmicos
 - 📱 Layout responsivo
 
 ---

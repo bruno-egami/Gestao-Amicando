@@ -10,6 +10,8 @@ __pycache__/
 data/*.db
 data/backups/
 *.db
+*.db-wal
+*.db-shm
 
 # Generated files
 recibo_*.pdf

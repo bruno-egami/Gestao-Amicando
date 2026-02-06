@@ -20,9 +20,10 @@
 9. [Clientes e Fornecedores](#9-clientes-e-fornecedores)
 10. [Vendas](#10-vendas)
 11. [Encomendas](#11-encomendas)
-12. [Relatórios](#12-relatórios)
-13. [Administração](#13-administração)
-14. [Dicas e Melhores Práticas](#14-dicas-e-melhores-práticas)
+12. [Gestão de Aulas](#12-gestão-de-aulas)
+13. [Relatórios](#13-relatórios)
+14. [Administração](#14-administração)
+15. [Dicas e Melhores Práticas](#15-dicas-e-melhores-práticas)
 
 ---
 
@@ -382,26 +383,43 @@ Pedidos de produtos sob demanda.
 
 ---
 
-## 12. Relatórios
+---
 
-16 tipos de análises disponíveis.
+## 12. Gestão de Aulas
 
-### 12.1 Como Gerar
+Módulo completo para gestão de alunos, turmas e mensalidades.
+
+### 12.1 Turmas e Alunos
+1. **Turmas**: Crie turmas definindo horários (ex: "Terça Manhã").
+2. **Alunos**: Cadastre alunos e vincule-os a uma turma.
+   - O sistema controla a presença e saldo de massas/queimas individualmente.
+
+### 12.2 Painel Financeiro (Unificado)
+A aba **"💰 Gestão Financeira"** centraliza tudo:
+1. **Lançar Consumo**: Registre o uso de materiais (argila) ou queimas para uma lista de alunos.
+2. **Gerar Mensalidades**: Ferramenta em lote para criar cobranças para todos os alunos ativos.
+3. **Controle de Pagamento**:
+   - Marque mensalidades como PAGAS.
+   - Envie comprovantes via WhatsApp (abertura automática).
+   - Visualize alunos com 3+ mensalidades em atraso (destaque em vermelho).
+
+---
+
+## 13. Relatórios
+
+18 tipos de análises disponíveis.
+
+### 13.1 Como Gerar
 
 1. Acesse **"Relatórios"**
 2. Selecione o tipo
 3. Configure filtros
 4. Clique em **"🔄 Gerar"**
 
-### 12.2 Exportação
-
-- PDF (com gráficos)
-- Excel (planilha)
-
-### 12.3 Tipos Disponíveis
+### 13.2 Tipos Disponíveis
 
 **Estoque:**
-- Estoque Atual
+- Estoque Atual (+ Valuation WIP)
 - Itens sem Movimentação
 - Previsão de Estoque
 
@@ -412,27 +430,22 @@ Pedidos de produtos sob demanda.
 - Lucratividade por Produto
 - Análise de Sazonalidade
 
-**Clientes:**
-- Histórico de Compras
-- Encomendas Pendentes
+**Produção e Qualidade:**
+- **Gargalos de Produção**: Descubra onde suas peças ficam paradas (Lead Time).
+- **Controle de Qualidade**: Monitore perdas e motivos (ex: trincas na queima).
+- **Histórico de Produção**: Registro temporal.
+- **Tendência de Produtividade**: Gráficos de evolução.
 
-**Financeiro:**
-- Despesas por Categoria
-- Fluxo de Caixa
-- Fornecedores - Compras
-
-**Produção:**
-- Histórico de Produção
-- Consumo de Insumos
-- Custo de Produção
+**Financeiro e Outros:**
+- Despesas, Fluxo de Caixa, Fornecedores e Clientes.
 
 ---
 
-## 13. Administração
+## 14. Administração
 
 Acessível apenas para administradores.
 
-### 13.1 Usuários
+### 14.1 Usuários
 
 **Criar:**
 1. Acesse "Administração > Usuários"
@@ -444,25 +457,31 @@ Acessível apenas para administradores.
 1. Localize o usuário
 2. Clique em "🔑 Alterar Senha"
 
-### 13.2 Backup
+### 14.2 Backup (Automático e Manual)
 
-**Criar:**
+O sistema realiza **backups automáticos** periodicamente (configurável).
+
+**Configurar Frequência:**
+1. Acesse a aba "Configurações" na Administração.
+2. Escolha: Diário, Semanal, Mensal ou Manual.
+
+**Backup Manual:**
 1. Acesse "Administração > Backup"
-2. Clique em "📥 Baixar Backup"
-3. Salve o arquivo em local seguro
+2. Clique em "📥 Baixar Backup" para salvar no seu computador.
+3. Ou use "Fazer Backup Local" para salvar na pasta do sistema.
 
 **Restaurar:**
 1. Clique em "📤 Restaurar"
-2. Selecione o arquivo
+2. Selecione o arquivo `.db`
 3. Confirme
 
 > ⚠️ A restauração substitui todos os dados atuais.
 
-### 13.3 Auditoria
+### 14.3 Auditoria
 
 Registra todas as ações: quem fez, o quê e quando.
 
-### 13.4 Importação
+### 14.4 Importação
 
 Importe dados via Excel:
 1. Baixe o modelo
@@ -472,9 +491,9 @@ Importe dados via Excel:
 
 ---
 
-## 14. Dicas e Melhores Práticas
+## 15. Dicas e Melhores Práticas
 
-### 14.1 Organização
+### 15.1 Organização
 
 - Verifique vendas e despesas diariamente
 - Analise relatórios semanalmente
