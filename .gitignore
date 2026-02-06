@@ -8,10 +8,10 @@ __pycache__/
 
 # Database
 data/*.db
+data/backups/
 *.db
-temp_restore.db
 
-# Generated files (recibos only)
+# Generated files
 recibo_*.pdf
 
 # IDE
@@ -38,6 +38,6 @@ venv/
 env/
 .env
 
-# Debug files (temporary)
+# Legacy/Temp Scripts (if any remain in root)
 debug_*.py
 fix_*.py
