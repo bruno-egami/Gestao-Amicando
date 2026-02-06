@@ -7,6 +7,7 @@ import admin_utils
 import auth
 import reports
 import io
+import services.production_service as production_service
 from datetime import datetime, date, timedelta
 
 st.set_page_config(page_title="Relatórios", page_icon="📊", layout="wide")
@@ -37,7 +38,8 @@ report_types = {
     "Fornecedores - Compras": "suppliers",
     "Despesas por Categoria": "expenses",
     "Consumo de Insumos": "consumption",
-    "Histórico de Produção": "production"
+    "Histórico de Produção": "production",
+    "Gargalos de Produção": "bottlenecks"
 }
 
 selected_report = st.selectbox("Selecione o Relatório", list(report_types.keys()))
@@ -95,11 +97,37 @@ if report_key == "stock":
             if show_low_only:
                 materials_df = materials_df[materials_df['Estoque'] <= materials_df.get('min_stock_alert', 0)]
         
+        # Calculate WIP Value (Work In Process)
+        wip_df = pd.DataFrame()
+        if stock_type in ["Todos", "Produtos"]:
+            wip_query = """
+                SELECT 
+                    'WIP: ' || p.name as 'Nome', 
+                    'Em Produção' as 'Categoria',
+                    w.quantity as 'Estoque',
+                    'un' as 'Unidade',
+                    SUM(pr.quantity * m.price_per_unit) as 'Preço Unit.',  -- Estimated Material Cost per Unit
+                    (w.quantity * SUM(pr.quantity * m.price_per_unit)) as 'Valor Total'
+                FROM production_wip w
+                JOIN products p ON w.product_id = p.id
+                JOIN product_recipes pr ON p.id = pr.product_id
+                JOIN materials m ON pr.material_id = m.id
+                WHERE w.materials_deducted = 1
+                GROUP BY w.id
+            """
+            try:
+                wip_df = pd.read_sql(wip_query, conn)
+                if not wip_df.empty:
+                    wip_df['Tipo'] = 'WIP (Em Processo)'
+            except Exception as e:
+                print(f"Error calculating WIP: {e}")
+
         # Combine or select
         if stock_type == "Produtos":
-            report_df = products_df[['Nome', 'Categoria', 'Estoque', 'Preço Unit.', 'Valor Total']]
+            report_df = pd.concat([products_df, wip_df], ignore_index=True) if not wip_df.empty else products_df
+            report_df = report_df[['Nome', 'Categoria', 'Estoque', 'Preço Unit.', 'Valor Total']]
             headers = ['Nome', 'Categoria', 'Estoque', 'Preço Unit.', 'Valor Total']
-            chart_data = {'type': 'bar', 'df': products_df, 'x': 'Nome', 'y': 'Valor Total', 'title': 'Valor em Estoque por Produto'}
+            chart_data = {'type': 'bar', 'df': report_df, 'x': 'Nome', 'y': 'Valor Total', 'title': 'Valor em Estoque (Acabados + WIP)'}
         elif stock_type == "Insumos":
             report_df = materials_df[['Nome', 'Categoria', 'Estoque', 'Unidade', 'Preço Unit.', 'Valor Total']]
             headers = ['Nome', 'Categoria', 'Estoque', 'Unidade', 'Preço Unit.', 'Valor Total']
@@ -107,16 +135,28 @@ if report_key == "stock":
         else:
             products_df = products_df[['Nome', 'Tipo', 'Categoria', 'Estoque', 'Valor Total']]
             materials_df = materials_df[['Nome', 'Tipo', 'Categoria', 'Estoque', 'Valor Total']]
-            report_df = pd.concat([products_df, materials_df], ignore_index=True)
+            
+            # Prepare WIP for concat
+            if not wip_df.empty:
+                wip_df = wip_df[['Nome', 'Tipo', 'Categoria', 'Estoque', 'Valor Total']]
+            
+            report_df = pd.concat([products_df, materials_df, wip_df], ignore_index=True)
             headers = ['Nome', 'Tipo', 'Categoria', 'Estoque', 'Valor Total']
             # Pie chart by type
             chart_data = {'type': 'pie', 'df': report_df.groupby('Tipo')['Valor Total'].sum().reset_index(), 
-                         'names': 'Tipo', 'values': 'Valor Total', 'title': 'Distribuição de Valor por Tipo'}
+                         'names': 'Tipo', 'values': 'Valor Total', 'title': 'Distribuição de Valor (Matéria-Prima vs Acabado vs WIP)'}
         
         # Format values
         if 'Valor Total' in report_df.columns:
             total_value = report_df['Valor Total'].sum()
-            totals = [("Total em Estoque", f"R$ {total_value:,.2f}")]
+            
+            # Totals breakdown
+            totals = [("Total Geral Ativos", f"R$ {total_value:,.2f}")]
+            
+            if 'Tipo' in report_df.columns:
+                by_type = report_df.groupby('Tipo')['Valor Total'].sum()
+                for t, v in by_type.items():
+                    totals.append((f"Total {t}", f"R$ {v:,.2f}"))
             report_df['Valor Total'] = report_df['Valor Total'].apply(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "-")
         if 'Preço Unit.' in report_df.columns:
             report_df['Preço Unit.'] = report_df['Preço Unit.'].apply(lambda x: f"R$ {x:,.2f}" if pd.notnull(x) else "-")
@@ -503,34 +543,112 @@ elif report_key == "production":
         """
         
         report_df = pd.read_sql(query, conn, params=[start_date, end_date])
+        totals = []
+        charts = []
         
+        # 1. Main Production Stats (if any)
         if not report_df.empty:
             total_produced = report_df['Quantidade'].sum()
             unique_products = report_df['Produto'].nunique()
             
-            totals = [
-                ("Total Produzido", str(int(total_produced))),
-                ("Produtos Diferentes", str(unique_products))
-            ]
+            totals.append(("Total Produzido", str(int(total_produced))))
+            totals.append(("Produtos Diferentes", str(unique_products)))
             
-            # Chart - Production by product (using customizable limit)
+            # Chart - Production by product
             prod_by_product = report_df.groupby('Produto')['Quantidade'].sum().reset_index()
             prod_by_product = prod_by_product.nlargest(top_limit, 'Quantidade')
-            chart_data = {'type': 'bar_h', 'df': prod_by_product, 'x': 'Quantidade', 'y': 'Produto', 
-                         'title': f'Top {top_limit} Produtos Produzidos'}
+            charts.append({'type': 'bar_h', 'df': prod_by_product, 'x': 'Quantidade', 'y': 'Produto', 
+                          'title': f'Top {top_limit} Produtos Produzidos'})
             
             # Format date
             report_df['Data'] = pd.to_datetime(report_df['Data']).dt.strftime('%d/%m/%Y')
-            
             headers = ['Data', 'Produto', 'Categoria', 'Quantidade', 'Usuário']
         else:
             headers = []
-            totals = []
-            chart_data = None
-        
+
+        # 2. Loss Statistics (Quality) - Independent of main production
+        loss_df = production_service.get_loss_statistics(conn, start_date, end_date)
+            
+        if not loss_df.empty:
+            total_losses = loss_df['Quantidade'].sum()
+            # Calculate total produced (handle if report_df was empty)
+            prod_qty = report_df['Quantidade'].sum() if not report_df.empty else 0
+            
+            loss_rate = (total_losses / (prod_qty + total_losses) * 100) if (prod_qty + total_losses) > 0 else 0
+            totals.append(("Total Perdas (Qtd)", str(int(total_losses))))
+            totals.append(("Taxa de Perda Global", f"{loss_rate:.1f}%"))
+            
+            # Pizza: Motivos
+            loss_by_reason = loss_df.groupby('Motivo')['Quantidade'].sum().reset_index()
+            charts.append({'type': 'pie', 'df': loss_by_reason, 'names': 'Motivo', 'values': 'Quantidade', 
+                             'title': 'Distribuição de Perdas por Motivo'})
+            
+            # Bar: Stage
+            loss_by_stage = loss_df.groupby('Estágio')['Quantidade'].sum().reset_index()
+            charts.append({'type': 'bar', 'df': loss_by_stage, 'x': 'Estágio', 'y': 'Quantidade', 
+                             'title': 'Perdas por Estágio de Produção'})
+
+        # 3. Productivity History (Trend) - Independent (Last 180 days)
+        hist_df = production_service.get_production_history_stats(conn, days=180)
+        if not hist_df.empty:
+            charts.append({'type': 'line', 'df': hist_df, 'x': 'Mes', 'y': 'Quantidade', 
+                          'title': 'Tendência de Produtividade (Últimos 6 Meses)'})
+
         st.session_state.report_data = {
             'df': report_df, 'title': report_title, 'info': info_lines,
-            'headers': headers, 'totals': totals, 'chart': chart_data
+            'headers': headers, 'totals': totals, 'charts': charts 
+        }
+
+# ============================================================
+# REPORT: GARGALOS DE PRODUÇÃO (LEAD TIME)
+# ============================================================
+elif report_key == "bottlenecks":
+    st.subheader("⏳ Gargalos de Produção (Lead Time)")
+    st.info("Analise há quanto tempo os itens estão parados em cada estágio.")
+    
+    if st.button("🔄 Analisar Gargalos", type="primary"):
+        report_title = "Análise de Gargalos e Lead Time"
+        info_lines = {
+            "Data da Análise": datetime.now().strftime('%d/%m/%Y %H:%M')
+        }
+        
+        # Get stats
+        report_df = production_service.get_stage_duration_stats(conn)
+        
+        if not report_df.empty:
+            # Sort by days descending for the table
+            report_df = report_df.sort_values('Dias no Estágio', ascending=False)
+            
+            # Avg days by stage for chart
+            avg_days = report_df.groupby('Estágio')['Dias no Estágio'].mean().reset_index()
+            avg_days = avg_days.sort_values('Dias no Estágio', ascending=True)
+            
+            totals = [
+                ("Total Itens em WIP", str(len(report_df))),
+                ("Média Geral de Dias", f"{report_df['Dias no Estágio'].mean():.1f} dias"),
+                ("Maior Gargalo", f"{report_df['Dias no Estágio'].max()} dias")
+            ]
+            
+            # Chart - Horizontal Bar for Avg Days
+            chart_bottleneck = {
+                'type': 'bar_h', 
+                'df': avg_days, 
+                'x': 'Dias no Estágio', 
+                'y': 'Estágio', 
+                'title': 'Tempo Médio de Permanência por Estágio (Dias)'
+            }
+            
+            headers = ['Produto', 'Estágio', 'Quantidade', 'Dias no Estágio', 'Data Entrada']
+            charts = [chart_bottleneck]
+        else:
+            headers = []
+            totals = []
+            charts = []
+            st.success("Nenhum item em produção no momento! 🎉")
+
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'charts': charts 
         }
 
 # ============================================================
@@ -1627,10 +1745,14 @@ if 'report_data' in st.session_state and st.session_state.report_data:
         for label, value in data['info'].items():
             st.caption(f"**{label}:** {value}")
         
-        # Chart (if available)
-        chart_image_bytes = None
-        if data.get('chart'):
-            chart = data['chart']
+        # Charts
+        charts_to_render = []
+        if data.get('charts'):
+            charts_to_render = data['charts']
+        elif data.get('chart'):
+            charts_to_render = [data['chart']]
+            
+        for i, chart in enumerate(charts_to_render):
             st.markdown(f"### 📈 {chart['title']}")
             
             fig = None

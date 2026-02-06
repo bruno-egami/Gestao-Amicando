@@ -5,7 +5,7 @@ material deduction, loss registration, and finalization.
 """
 import pandas as pd
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import services.product_service as product_service
 
 def get_wip_items(conn, stage=None):
@@ -221,3 +221,118 @@ def update_priority(cursor, item_id, increment):
     """
     cursor.execute("UPDATE production_wip SET priority = priority + ? WHERE id=?", (increment, item_id))
     return True
+
+def get_loss_statistics(conn, start_date, end_date):
+    """
+    Retrieves loss statistics grouped by reason and stage.
+    Uses 'production_losses' table.
+    """
+    query = """
+        SELECT stage as 'Estágio', 
+               reason as 'Motivo', 
+               SUM(quantity) as 'Quantidade',
+               p.name as 'Produto'
+        FROM production_losses pl
+        LEFT JOIN products p ON pl.product_id = p.id
+        WHERE DATE(pl.timestamp) BETWEEN ? AND ?
+        GROUP BY stage, reason, p.name
+    """
+    return pd.read_sql(query, conn, params=[start_date, end_date])
+
+def get_production_history_stats(conn, days=180):
+    """
+    Retrieves production history statistics for trend analysis.
+    Groups by Month.
+    """
+    start_date = (date.today() - timedelta(days=days)).isoformat()
+    
+    query = """
+        SELECT strftime('%Y-%m', timestamp) as 'Mes',
+               SUM(quantity) as 'Quantidade'
+        FROM production_history
+        WHERE timestamp >= ?
+        GROUP BY strftime('%Y-%m', timestamp)
+        ORDER BY Mes ASC
+    """
+    return pd.read_sql(query, conn, params=[start_date])
+
+def get_stage_duration_stats(conn):
+    """
+    Fetches all active WIP items and calculates duration in current stage.
+    Returns a DataFrame with item details and 'days_in_stage'.
+    """
+    # Fetch active WIP (not Finished)
+    query = """
+        SELECT w.id, 
+               p.name as 'Produto', 
+               w.stage as 'Estágio', 
+               w.quantity as 'Quantidade', 
+               w.stage_history,
+               w.start_date
+        FROM production_wip w
+        JOIN products p ON w.product_id = p.id
+        WHERE w.stage != 'Finalizado'
+    """
+    df = pd.read_sql(query, conn)
+    
+    if df.empty:
+        return pd.DataFrame(columns=['Produto', 'Estágio', 'Quantidade', 'Dias no Estágio', 'Data Entrada'])
+        
+    results = []
+    today = datetime.now()
+    
+    for _, row in df.iterrows():
+        days_in_stage = 0
+        entry_date_str = None
+        
+        # Try to parse history
+        try:
+            history = json.loads(row['stage_history']) if row['stage_history'] else {}
+            
+            # Find entry date for current stage
+            if row['Estágio'] in history:
+                # Format roughly: "dd/mm HH:MM" or "yyyy-mm-dd..." depending on legacy. 
+                # The current format used in start_production/move_stage is "%d/%m %H:%M" (current year implied? No, wait)
+                # Let's check move_stage implementation: 
+                # history[next_stage] = datetime.now().strftime("%d/%m %H:%M") -> This is risky for year transitions!
+                # Ideally we should fix the date format in move_stage to ISO, but for now let's handle parsing.
+                # If parsed without year, assume current year or adjust if future.
+                
+                date_str = history[row['Estágio']]
+                # Try parsing "%d/%m %H:%M"
+                try:
+                    dt = datetime.strptime(date_str, "%d/%m %H:%M")
+                    # Replace year with current year
+                    dt = dt.replace(year=today.year)
+                    # If result is in future (e.g. it was Dec 31 and now is Jan 1), subtract a year
+                    if dt > today:
+                        dt = dt.replace(year=today.year - 1)
+                    entry_date_str = dt
+                except:
+                    # Fallback or different format
+                    entry_date_str = today 
+            else:
+                # Fallback to start_date if Fila/Iniciado or unknown
+                # start_date is usually ISO "YYYY-MM-DD" or similar
+                try:
+                    entry_date_str = datetime.fromisoformat(row['start_date'])
+                except:
+                    entry_date_str = today
+
+            if entry_date_str:
+                # Calculate fractional days for better precision (e.g. 0.5 days)
+                delta = today - entry_date_str
+                days_in_stage = round(delta.total_seconds() / 86400, 1)
+                
+        except Exception:
+            days_in_stage = 0
+            
+        results.append({
+            'Produto': row['Produto'],
+            'Estágio': row['Estágio'],
+            'Quantidade': row['Quantidade'],
+            'Dias no Estágio': days_in_stage,
+            'Data Entrada': entry_date_str.strftime('%d/%m/%Y') if isinstance(entry_date_str, datetime) else str(entry_date_str)
+        })
+        
+    return pd.DataFrame(results)
