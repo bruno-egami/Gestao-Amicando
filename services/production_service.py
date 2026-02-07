@@ -7,6 +7,9 @@ import pandas as pd
 import json
 from datetime import datetime, date, timedelta
 import services.product_service as product_service
+from utils.logging_config import get_logger, log_exception, log_database_operation
+
+logger = get_logger(__name__)
 
 def get_wip_items(conn, stage=None):
     """
@@ -120,6 +123,8 @@ def finalize_production(cursor, item, qty, inc_stock):
     order_id = int(item['real_order_id']) if pd.notna(item['real_order_id']) else None
     order_item_id = int(item['order_item_id']) if pd.notna(item['order_item_id']) else None
 
+    logger.info(f"Finalizing production: WIP#{item_id}, Product#{product_id}, qty={qty}, inc_stock={inc_stock}")
+
     # 0. Deduct Remaining Materials (others)
     glaze_mat_id = None
     if variant_id:
@@ -142,6 +147,7 @@ def finalize_production(cursor, item, qty, inc_stock):
         cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (qty, product_id))
         if variant_id:
             cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id=?", (qty, variant_id))
+        logger.debug(f"Stock incremented: Product#{product_id} +{qty}")
             
     # 3. History
     cursor.execute("""
@@ -157,6 +163,7 @@ def finalize_production(cursor, item, qty, inc_stock):
         """, (order_id,))
         if cursor.fetchone()[0] == 0:
             cursor.execute("UPDATE commission_orders SET status='Concluída' WHERE id=?", (order_id,))
+            logger.info(f"Order#{order_id} auto-completed (all items produced)")
     
     # 5. Remove/Update WIP
     if qty == item['quantity']:
@@ -164,6 +171,7 @@ def finalize_production(cursor, item, qty, inc_stock):
     else:
         cursor.execute("UPDATE production_wip SET quantity = quantity - ? WHERE id=?", (qty, item_id))
     
+    log_database_operation(logger, "FINALIZE", "production_wip", item_id)
     return True
 
 def register_loss(cursor, item, stage, qty_loss, reason_loss):

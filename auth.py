@@ -27,7 +27,6 @@ PAGE_ACCESS = {
     'Fornecedores': ['admin'],
     'Clientes': ['admin', 'vendedor'],
     'Encomendas': ['admin', 'vendedor'],
-    'Encomendas': ['admin', 'vendedor'],
     'Producao': ['admin', 'vendedor'],
     'Relatorios': ['admin'],
     'Administracao': ['admin'],

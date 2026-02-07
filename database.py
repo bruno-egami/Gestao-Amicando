@@ -1,6 +1,9 @@
 import sqlite3
 import os
 import contextlib
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 DB_FOLDER = "data"
 DB_NAME = "ceramic_admin.db"

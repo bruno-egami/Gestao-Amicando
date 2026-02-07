@@ -33,6 +33,7 @@ assets/product_images/
 assets/orders/
 
 # Logs
+logs/
 *.log
 
 # Virtual Environment
