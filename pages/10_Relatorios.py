@@ -652,6 +652,121 @@ elif report_key == "bottlenecks":
         }
 
 # ============================================================
+# REPORT: LUCRATIVIDADE POR PRODUTO (MARGEM DE LUCRO)
+# ============================================================
+elif report_key == "profitability":
+    st.subheader("💰 Relatório de Lucratividade por Produto")
+    st.info("Analisa a margem de lucro comparando custos de produção com preços de venda.")
+    
+    # Filters
+    c1, c2 = st.columns(2)
+    categories = ["Todas"] + pd.read_sql("SELECT DISTINCT category FROM products WHERE category IS NOT NULL", conn)['category'].tolist()
+    cat_filter = c1.selectbox("Categoria", categories)
+    
+    margin_filter = c2.selectbox("Filtrar por Margem", ["Todas", "Margem Alta (>50%)", "Margem Média (20-50%)", "Margem Baixa (<20%)", "Margem Negativa"])
+    
+    if st.button("🔄 Gerar Relatório", type="primary"):
+        report_title = "Relatório de Lucratividade"
+        info_lines = {
+            "Data": datetime.now().strftime('%d/%m/%Y %H:%M'),
+            "Categoria": cat_filter
+        }
+        
+        # Query products with cost calculation
+        # Cost is calculated from product_recipes (materials used)
+        query = """
+            SELECT 
+                p.id,
+                p.name as 'Produto',
+                p.category as 'Categoria',
+                p.base_price as 'Preço Venda',
+                COALESCE((
+                    SELECT SUM(pr.quantity * m.price_per_unit)
+                    FROM product_recipes pr
+                    JOIN materials m ON pr.material_id = m.id
+                    WHERE pr.product_id = p.id
+                ), 0) as 'Custo Produção',
+                p.stock_quantity as 'Estoque'
+            FROM products p
+            WHERE 1=1
+        """
+        params = []
+        
+        if cat_filter != "Todas":
+            query += " AND p.category = ?"
+            params.append(cat_filter)
+        
+        query += " ORDER BY p.name"
+        
+        report_df = pd.read_sql(query, conn, params=params)
+        
+        if not report_df.empty:
+            # Calculate margin columns
+            report_df['Margem R$'] = report_df['Preço Venda'] - report_df['Custo Produção']
+            report_df['Margem %'] = report_df.apply(
+                lambda row: (row['Margem R$'] / row['Preço Venda'] * 100) if row['Preço Venda'] > 0 else 0,
+                axis=1
+            )
+            
+            # Apply margin filter
+            if margin_filter == "Margem Alta (>50%)":
+                report_df = report_df[report_df['Margem %'] > 50]
+            elif margin_filter == "Margem Média (20-50%)":
+                report_df = report_df[(report_df['Margem %'] >= 20) & (report_df['Margem %'] <= 50)]
+            elif margin_filter == "Margem Baixa (<20%)":
+                report_df = report_df[(report_df['Margem %'] >= 0) & (report_df['Margem %'] < 20)]
+            elif margin_filter == "Margem Negativa":
+                report_df = report_df[report_df['Margem %'] < 0]
+            
+            # Totals
+            avg_margin = report_df['Margem %'].mean()
+            total_products = len(report_df)
+            negative_count = len(report_df[report_df['Margem %'] < 0])
+            
+            totals = [
+                ("Total Produtos", str(total_products)),
+                ("Margem Média", f"{avg_margin:.1f}%"),
+                ("Produtos com Margem Negativa", str(negative_count))
+            ]
+            
+            # Category summary
+            if cat_filter == "Todas" and len(report_df['Categoria'].unique()) > 1:
+                cat_margins = report_df.groupby('Categoria')['Margem %'].mean().reset_index()
+                cat_margins = cat_margins.sort_values('Margem %', ascending=False)
+                for _, row in cat_margins.iterrows():
+                    totals.append((f"Margem Média - {row['Categoria']}", f"{row['Margem %']:.1f}%"))
+            
+            # Chart - Top 10 products by margin
+            chart_df = report_df.nlargest(10, 'Margem %')[['Produto', 'Margem %']].copy()
+            chart_data = {
+                'type': 'bar_h', 
+                'df': chart_df, 
+                'x': 'Margem %', 
+                'y': 'Produto', 
+                'title': 'Top 10 Produtos por Margem de Lucro (%)'
+            }
+            
+            # Format for display
+            report_df['Preço Venda'] = report_df['Preço Venda'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Custo Produção'] = report_df['Custo Produção'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Margem R$'] = report_df['Margem R$'].apply(lambda x: f"R$ {x:,.2f}")
+            report_df['Margem %'] = report_df['Margem %'].apply(lambda x: f"{x:.1f}%")
+            
+            # Remove id column for display
+            report_df = report_df.drop(columns=['id'])
+            
+            headers = ['Produto', 'Categoria', 'Preço Venda', 'Custo Produção', 'Margem R$', 'Margem %', 'Estoque']
+        else:
+            headers = []
+            totals = []
+            chart_data = None
+            
+        st.session_state.report_data = {
+            'df': report_df, 'title': report_title, 'info': info_lines,
+            'headers': headers, 'totals': totals, 'chart': chart_data
+        }
+
+# ============================================================
 # REPORT: ANÁLISE DE VENDAS ANUAL
 # ============================================================
 elif report_key == "sales_trend":
