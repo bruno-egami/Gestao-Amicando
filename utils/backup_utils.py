@@ -4,6 +4,9 @@ import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
 import database
+from utils.logging_config import get_logger, log_exception
+
+logger = get_logger(__name__)
 
 BACKUP_FOLDER = os.path.join("data", "backups")
 
@@ -16,7 +19,7 @@ def get_backup_settings(conn):
             'frequency': settings_dict.get('backup_frequency', 'Diário'),
             'last_run': settings_dict.get('last_backup_timestamp', '2000-01-01T00:00:00')
         }
-    except Exception:
+    except (sqlite3.Error, pd.io.sql.DatabaseError, KeyError):
         return {'frequency': 'Diário', 'last_run': '2000-01-01T00:00:00'}
 
 def save_backup_settings(conn, frequency):
@@ -71,9 +74,10 @@ def perform_backup(conn):
         # Update last run
         cursor.execute("UPDATE settings SET value = ? WHERE key = 'last_backup_timestamp'", (datetime.now().isoformat(),))
         conn.commit()
+        logger.info(f"Backup created successfully: {backup_filename}")
         return True
-    except Exception as e:
-        print(f"Backup Error: {e}")
+    except sqlite3.Error as e:
+        log_exception(logger, "Backup failed", e)
         return False
 
 def list_backups():

@@ -17,7 +17,7 @@ class PDFReport(FPDF):
         # Logo
         try:
             self.image('logo-amicando-RGB.jpg', x=10, y=10, w=30)
-        except Exception:
+        except (FileNotFoundError, RuntimeError):
             pass
         
         # Title
@@ -169,7 +169,7 @@ class PDFReceipt(FPDF):
             # x = (210 - 40) / 2 = 85
             self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
             self.set_y(55) # Move cursor down explicitly below logo (10 + ~40 height + margin)
-        except Exception:
+        except (FileNotFoundError, RuntimeError):
              # Fallback if image not found
              self.set_font('Helvetica', 'B', 16)
              self.cell(0, 10, 'Atelier Amicando', new_x="LMARGIN", new_y="NEXT", align='C')
@@ -297,7 +297,7 @@ def generate_quote_pdf(quote_data):
             # Logo centered
             try:
                 self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
-            except Exception:
+            except (FileNotFoundError, RuntimeError):
                 pass
             
             self.set_y(55) # Below logo
@@ -632,7 +632,7 @@ def generate_student_statement(student_data, items, total_due=None):
             # Centered Header Standard
             try:
                 self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
-            except Exception:
+            except (FileNotFoundError, RuntimeError):
                 pass
             
             self.set_y(55) # Below logo

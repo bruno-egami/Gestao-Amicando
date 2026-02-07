@@ -8,6 +8,9 @@ import admin_utils
 import auth
 import audit
 from services import product_service
+from utils.logging_config import get_logger, log_exception
+
+logger = get_logger(__name__)
 
 st.set_page_config(page_title="Produtos", page_icon="🏺", layout="wide")
 admin_utils.render_sidebar_logo()
@@ -34,7 +37,7 @@ with tab1:
     try:
         cat_df = pd.read_sql("SELECT name FROM product_categories", conn)
         cat_opts = cat_df['name'].tolist()
-    except Exception:
+    except (sqlite3.Error, pd.io.sql.DatabaseError):
         cat_opts = ["Utilitário", "Decorativo", "Outros"]
 
     with st.expander("Gerenciar Categorias", expanded=False):
@@ -46,7 +49,8 @@ with tab1:
                     cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (new_cat_name,))
                     conn.commit()
                     admin_utils.show_feedback_dialog(f"Categoria '{new_cat_name}' adicionada!", level="success")
-                except Exception as e:
+                except sqlite3.Error as e:
+                    log_exception(logger, "Error adding category", e)
                     admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
             elif new_cat_name in cat_opts:
                 admin_utils.show_feedback_dialog("Categoria já existe.", level="warning")
@@ -72,7 +76,8 @@ with tab1:
     # --- SHARED DATA FETCH ---
     try:
         products = pd.read_sql("SELECT * FROM products", conn)
-    except Exception as e:
+    except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
+        logger.error(f"Database read error: {e}")
         st.error(f"Erro ao ler banco de dados: {e}")
         products = pd.DataFrame()
 

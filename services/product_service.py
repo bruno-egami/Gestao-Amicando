@@ -5,6 +5,10 @@ Handles business logic related to products, stock, and categories.
 import pandas as pd
 import ast
 import os
+import sqlite3
+from utils.logging_config import get_logger, log_exception
+
+logger = get_logger(__name__)
 
 def get_valid_path(paths_str):
     """Parses a string representation of a list of paths and returns the first valid one."""
@@ -12,7 +16,7 @@ def get_valid_path(paths_str):
         p = ast.literal_eval(paths_str)
         if p and len(p) > 0: return p[0]
         return None
-    except Exception:
+    except (ValueError, SyntaxError):
         return None
 
 def get_all_products(conn):
@@ -42,7 +46,7 @@ def get_categories(conn, from_products_df=None):
     try:
         cats = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
         if cats: return cats
-    except Exception:
+    except (sqlite3.Error, pd.io.sql.DatabaseError):
         pass
     
     # Fallback
@@ -52,7 +56,7 @@ def get_categories(conn, from_products_df=None):
     # DB Fallback
     try:
         return pd.read_sql("SELECT DISTINCT category FROM products WHERE category IS NOT NULL", conn)['category'].tolist()
-    except:
+    except (sqlite3.Error, pd.io.sql.DatabaseError):
         return []
 
 def get_kit_components(conn, product_id):
@@ -284,8 +288,8 @@ def create_variant(conn, product_id, name, stock, price_adder, material_id=None,
         """, (int(product_id), name, int(stock), float(price_adder), material_id if material_id else None, float(material_quantity)))
         conn.commit()
         return True
-    except Exception as e:
-        print(f"Error creating variant: {e}")
+    except sqlite3.Error as e:
+        log_exception(logger, f"Error creating variant for product {product_id}", e)
         return False
 
 def get_product_variants(conn, product_id):
@@ -305,8 +309,8 @@ def update_variant_stock(conn, variant_id, new_quantity):
         cursor.execute("UPDATE product_variants SET stock_quantity = ? WHERE id = ?", (int(new_quantity), int(variant_id)))
         conn.commit()
         return True
-    except Exception as e:
-        print(f"Error updating variant stock: {e}")
+    except sqlite3.Error as e:
+        log_exception(logger, f"Error updating variant stock {variant_id}", e)
         return False
 
 def delete_variant(conn, variant_id):
@@ -316,8 +320,8 @@ def delete_variant(conn, variant_id):
         cursor.execute("DELETE FROM product_variants WHERE id = ?", (int(variant_id),))
         conn.commit()
         return True
-    except Exception as e:
-        print(f"Error deleting variant: {e}")
+    except sqlite3.Error as e:
+        log_exception(logger, f"Error deleting variant {variant_id}", e)
         return False
 
 def update_variant_price(conn, variant_id, new_adder):
@@ -327,6 +331,6 @@ def update_variant_price(conn, variant_id, new_adder):
         cursor.execute("UPDATE product_variants SET price_adder = ? WHERE id = ?", (float(new_adder), int(variant_id)))
         conn.commit()
         return True
-    except Exception as e:
-        print(f"Error updating variant price: {e}")
+    except sqlite3.Error as e:
+        log_exception(logger, f"Error updating variant price {variant_id}", e)
         return False

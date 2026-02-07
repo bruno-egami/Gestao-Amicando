@@ -324,7 +324,7 @@ def get_stage_duration_stats(conn):
                 # start_date is usually ISO "YYYY-MM-DD" or similar
                 try:
                     entry_date_str = datetime.fromisoformat(row['start_date'])
-                except:
+                except (ValueError, TypeError):
                     entry_date_str = today
 
             if entry_date_str:
@@ -332,7 +332,7 @@ def get_stage_duration_stats(conn):
                 delta = today - entry_date_str
                 days_in_stage = round(delta.total_seconds() / 86400, 1)
                 
-        except Exception:
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
             days_in_stage = 0
             
         results.append({
