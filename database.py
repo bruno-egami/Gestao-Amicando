@@ -1,18 +1,19 @@
 import sqlite3
 import os
 import contextlib
+import config
 from utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-DB_FOLDER = "data"
-DB_NAME = "ceramic_admin.db"
-DB_PATH = os.path.join(DB_FOLDER, DB_NAME)
+DB_FOLDER = config.DB_FOLDER
+DB_NAME = config.DB_NAME
+DB_PATH = config.DB_PATH
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
-    run_migrations(conn) # Ensure DB is always up to date
+    # run_migrations(conn) # Ensure DB is always up to date (Removed: Locking DB)
     return conn
 
 @contextlib.contextmanager
@@ -102,6 +103,15 @@ def run_migrations(conn):
     # Initialize default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_frequency', 'Diário')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('last_backup_timestamp', '2000-01-01T00:00:00')")
+
+    # 14. Partial Payments (Classes Module)
+    try:
+        cursor.execute("ALTER TABLE tuitions ADD COLUMN amount_paid REAL DEFAULT 0")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE student_consumptions ADD COLUMN amount_paid REAL DEFAULT 0")
+    except sqlite3.OperationalError: pass
 
     conn.commit()
 

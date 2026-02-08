@@ -11,6 +11,11 @@ import auth
 import uuid
 import os
 import json
+import logging
+import sqlite3
+from utils.logging_config import get_logger, log_exception
+
+logger = get_logger(__name__)
 
 st.set_page_config(page_title="Encomendas", page_icon="📦")
 
@@ -87,9 +92,15 @@ def delete_order(oid):
         # Audit log (needs a connection, using global for simplicity as it's a read-then-write but better to use del or its own)
         audit.log_action(conn_del, 'DELETE', 'commission_orders', oid, old_data, None)
         return True
+    except sqlite3.Error as e:
+        conn_del.rollback()
+        log_exception(logger, f"Database error deleting order {oid}", e)
+        admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
+        return False
     except Exception as e:
         conn_del.rollback()
-        admin_utils.show_feedback_dialog(f"Erro ao excluir encomenda: {e}", level="error")
+        log_exception(logger, f"Unexpected error deleting order {oid}", e)
+        admin_utils.show_feedback_dialog(f"Erro inesperado: {e}", level="error")
         return False
     finally:
         cursor_del.close()
@@ -260,8 +271,13 @@ else:
                                                        (str(order_images), order['id']))
                                         conn_write.commit()
                                         st.rerun()
+                                    except sqlite3.Error as e:
+                                        conn_write.rollback()
+                                        log_exception(logger, f"Database error deleting image for order {order['id']}", e)
+                                        st.error(f"Erro de Banco de Dados: {e}")
                                     except Exception as e:
                                         conn_write.rollback()
+                                        log_exception(logger, f"Error deleting image for order {order['id']}", e)
                                         st.error(f"Erro ao excluir imagem: {e}")
                                     finally:
                                         cursor_write.close()
@@ -300,8 +316,13 @@ else:
                                                (str(order_images), order['id']))
                                 conn_write.commit()
                                 admin_utils.show_feedback_dialog(f"{len(new_photos)} foto(s) salva(s)!", level="success")
+                            except sqlite3.Error as e:
+                                conn_write.rollback()
+                                log_exception(logger, f"Database error uploading photos for order {order['id']}", e)
+                                admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                             except Exception as e:
                                 conn_write.rollback()
+                                log_exception(logger, f"Error uploading photos for order {order['id']}", e)
                                 admin_utils.show_feedback_dialog(f"Erro ao salvar fotos: {e}", level="error")
                             finally:
                                 cursor_write.close()
@@ -397,8 +418,13 @@ else:
                                     conn_write.commit()
                                     admin_utils.show_feedback_dialog("Item adicionado!", level="success")
                                     st.rerun()
+                                except sqlite3.Error as e:
+                                    conn_write.rollback()
+                                    log_exception(logger, f"Database error adding item to order {order['id']}", e)
+                                    admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                                 except Exception as e:
                                     conn_write.rollback()
+                                    log_exception(logger, f"Error adding item to order {order['id']}", e)
                                     admin_utils.show_feedback_dialog(f"Erro ao adicionar item: {e}", level="error")
                                 finally:
                                     cursor_write.close()
@@ -429,14 +455,21 @@ else:
                             new_client_id = all_clients[all_clients['name'] == new_client_name]['id'].values[0]
                             
                             # Update Order
-                            cursor.execute("""
-                                UPDATE commission_orders 
-                                SET date_due=?, notes=?, manual_discount=?, deposit_amount=?, client_id=? 
-                                WHERE id=?
-                            """, (new_date, new_notes, new_discount, new_deposit, int(new_client_id), order['id']))
-                            conn.commit()
-                            admin_utils.show_feedback_dialog("Atualizado!", level="success")
-                            st.rerun()
+                            try:
+                                cursor.execute("""
+                                    UPDATE commission_orders 
+                                    SET date_due=?, notes=?, manual_discount=?, deposit_amount=?, client_id=? 
+                                    WHERE id=?
+                                """, (new_date, new_notes, new_discount, new_deposit, int(new_client_id), order['id']))
+                                conn.commit()
+                                admin_utils.show_feedback_dialog("Atualizado!", level="success")
+                                st.rerun()
+                            except sqlite3.Error as e:
+                                log_exception(logger, f"Database error updating order {order['id']}", e)
+                                admin_utils.show_feedback_dialog(f"Erro ao atualizar: {e}", level="error")
+                            except Exception as e:
+                                log_exception(logger, f"Error updating order {order['id']}", e)
+                                admin_utils.show_feedback_dialog(f"Erro inesperado: {e}", level="error")
 
             # Delete Order
             if c_act3.button("🗑️ Excluir", key=f"del_ord_{order['id']}"):
@@ -539,8 +572,13 @@ else:
                                         
                                         conn_write.commit()
                                         success = True
+                                    except sqlite3.Error as e:
+                                        conn_write.rollback()
+                                        log_exception(logger, f"Database error updating qty for item {item['id']}", e)
+                                        admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                                     except Exception as e:
                                         conn_write.rollback()
+                                        log_exception(logger, f"Error updating qty for item {item['id']}", e)
                                         admin_utils.show_feedback_dialog(f"Erro na operação: {e}", level="error")
                                     finally:
                                         cursor_write.close()
@@ -630,8 +668,13 @@ else:
                                                 {'quantity_produced': item.get('quantity_produced')}, {'quantity_produced': item.get('quantity_produced', 0) + amount})
                                             
                                             success = True
+                                        except sqlite3.Error as e:
+                                            conn_write.rollback()
+                                            log_exception(logger, f"Database error quick producing item {item['id']}", e)
+                                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                                         except Exception as e:
                                             conn_write.rollback()
+                                            log_exception(logger, f"Error quick producing item {item['id']}", e)
                                             admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                                         finally:
                                             cursor_write.close()
@@ -670,8 +713,13 @@ else:
                                             
                                             conn_write.commit()
                                             success = True
+                                        except sqlite3.Error as e:
+                                            conn_write.rollback()
+                                            log_exception(logger, f"Database error starting WIP for item {item['id']}", e)
+                                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                                         except Exception as e:
                                             conn_write.rollback()
+                                            log_exception(logger, f"Error starting WIP for item {item['id']}", e)
                                             admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                                         finally:
                                             cursor_write.close()
@@ -731,8 +779,13 @@ else:
                                 {'total_price': old_price}, {'total_price': old_price - deduction})
                             
                             success = True
+                        except sqlite3.Error as e:
+                            conn_write.rollback()
+                            log_exception(logger, f"Database error deleting item {item['id']}", e)
+                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                         except Exception as e:
                             conn_write.rollback()
+                            log_exception(logger, f"Error deleting item {item['id']}", e)
                             admin_utils.show_feedback_dialog(f"Erro ao excluir item: {e}", level="error")
                         finally:
                             cursor_write.close()
@@ -759,8 +812,13 @@ else:
                             st.session_state['expanded_order_id'] = order['id']
                             admin_utils.show_feedback_dialog("Status atualizado para Concluído!", level="success")
                             st.rerun()
+                        except sqlite3.Error as e:
+                            conn_write.rollback()
+                            log_exception(logger, f"Database error marking ready order {order['id']}", e)
+                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                         except Exception as e:
                             conn_write.rollback()
+                            log_exception(logger, f"Error marking ready order {order['id']}", e)
                             admin_utils.show_feedback_dialog(f"Erro ao atualizar status: {e}", level="error")
                         finally:
                             cursor_write.close()
@@ -833,8 +891,13 @@ else:
                         conn_write.commit()
                         audit.log_action(conn_write, 'UPDATE', 'commission_orders', order['id'], {'status': old_status}, {'status': 'Entregue'})
                         success = True
+                    except sqlite3.Error as e:
+                        conn_write.rollback()
+                        log_exception(logger, f"Database error delivering order {order['id']}", e)
+                        admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                     except Exception as e:
                         conn_write.rollback()
+                        log_exception(logger, f"Error delivering order {order['id']}", e)
                         admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                     finally:
                         cursor_write.close()

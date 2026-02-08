@@ -5,14 +5,21 @@ Provides consistent logging across all modules with file and console output.
 import logging
 import os
 from datetime import datetime
+try:
+    import config
+except ImportError:
+    # Fallback if config not found (e.g. running script directly)
+    import sys
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import config
 
 # --- Configuration ---
-LOG_FOLDER = "logs"
-LOG_FILE = os.path.join(LOG_FOLDER, "amicando.log")
-LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-MAX_LOG_SIZE_MB = 5
-BACKUP_COUNT = 3
+LOG_FOLDER = config.LOG_FOLDER
+LOG_FILE = config.LOG_FILE
+LOG_FORMAT = config.LOG_FORMAT
+DATE_FORMAT = config.DATE_FORMAT
+MAX_LOG_SIZE_MB = config.MAX_LOG_SIZE_MB
+BACKUP_COUNT = config.BACKUP_COUNT
 
 # Ensure log folder exists
 if not os.path.exists(LOG_FOLDER):

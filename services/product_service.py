@@ -2,6 +2,7 @@
 Product Service Module
 Handles business logic related to products, stock, and categories.
 """
+import streamlit as st
 import pandas as pd
 import ast
 import os
@@ -19,10 +20,11 @@ def get_valid_path(paths_str):
     except (ValueError, SyntaxError):
         return None
 
-def get_all_products(conn):
+@st.cache_data(ttl=60, show_spinner=False)
+def get_all_products(_conn):
     """Fetches all products for the catalog view."""
     query = "SELECT id, name, base_price, stock_quantity, image_paths, category FROM products"
-    df = pd.read_sql(query, conn)
+    df = pd.read_sql(query, _conn)
     
     # Pre-calculate thumb paths for UI efficiency
     if not df.empty:
@@ -32,19 +34,62 @@ def get_all_products(conn):
         
     return df
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_all_materials(_conn):
+    """Fetches all materials for reports/stock view."""
+    query = """
+        SELECT m.name as 'Nome', mc.name as 'Categoria', m.stock_level as 'Estoque',
+               m.unit as 'Unidade', m.price_per_unit as 'Preço Unit.',
+               (m.stock_level * m.price_per_unit) as 'Valor Total',
+               m.min_stock_alert, m.type, m.id
+        FROM materials m
+        LEFT JOIN material_categories mc ON m.category_id = mc.id
+        WHERE m.type = 'Material'
+        ORDER BY m.name
+    """
+    return pd.read_sql(query, _conn)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_wip_stock_value(_conn):
+    """Calculates WIP (Work In Process) value for reports."""
+    wip_query = """
+        SELECT 
+            'WIP: ' || p.name as 'Nome', 
+            'Em Produção' as 'Categoria',
+            w.quantity as 'Estoque',
+            'un' as 'Unidade',
+            SUM(pr.quantity * m.price_per_unit) as 'Preço Unit.',  -- Estimated Material Cost per Unit
+            (w.quantity * SUM(pr.quantity * m.price_per_unit)) as 'Valor Total',
+            w.product_id
+        FROM production_wip w
+        JOIN products p ON w.product_id = p.id
+        JOIN product_recipes pr ON p.id = pr.product_id
+        JOIN materials m ON pr.material_id = m.id
+        WHERE w.materials_deducted = 1
+        GROUP BY w.id
+    """
+    try:
+        df = pd.read_sql(wip_query, _conn)
+        if not df.empty:
+            df['Tipo'] = 'WIP (Em Processo)'
+        return df
+    except Exception:
+        return pd.DataFrame()
+
 def get_product_by_id(conn, product_id):
     """Fetches a single product by ID."""
     query = "SELECT * FROM products WHERE id = ?"
     df = pd.read_sql(query, conn, params=(product_id,))
     return df.iloc[0] if not df.empty else None
 
-def get_categories(conn, from_products_df=None):
+@st.cache_data(ttl=300, show_spinner=False)
+def get_categories(_conn, from_products_df=None):
     """
     Fetches categories. Prioritizes 'product_categories' table, 
     falls back to unique values in 'products' table.
     """
     try:
-        cats = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
+        cats = pd.read_sql("SELECT name FROM product_categories", _conn)['name'].tolist()
         if cats: return cats
     except (sqlite3.Error, pd.io.sql.DatabaseError):
         pass
@@ -55,7 +100,7 @@ def get_categories(conn, from_products_df=None):
     
     # DB Fallback
     try:
-        return pd.read_sql("SELECT DISTINCT category FROM products WHERE category IS NOT NULL", conn)['category'].tolist()
+        return pd.read_sql("SELECT DISTINCT category FROM products WHERE category IS NOT NULL", _conn)['category'].tolist()
     except (sqlite3.Error, pd.io.sql.DatabaseError):
         return []
 
@@ -175,6 +220,9 @@ def deduct_stock(cursor, product_id, quantity, check_kits=True, variant_id=None)
         else:
             # logs.append(f" - Deducted {quantity} from Product ID {product_id}")
             pass
+            
+    # Clear cache since stock changed
+    get_all_products.clear()
             
     return logs
 

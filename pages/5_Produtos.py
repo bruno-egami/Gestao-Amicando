@@ -48,6 +48,7 @@ with tab1:
                 try:
                     cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (new_cat_name,))
                     conn.commit()
+                    product_service.get_categories.clear()
                     admin_utils.show_feedback_dialog(f"Categoria '{new_cat_name}' adicionada!", level="success")
                 except sqlite3.Error as e:
                     log_exception(logger, "Error adding category", e)
@@ -67,6 +68,7 @@ with tab1:
                     def do_del_cat(name=del_cat):
                         cursor.execute("DELETE FROM product_categories WHERE name=?", (name,))
                         conn.commit()
+                        product_service.get_categories.clear()
                     
                     admin_utils.show_confirmation_dialog(
                         f"Deseja excluir a categoria '{del_cat}'? Isso não excluirá os produtos, mas eles ficarão sem categoria vinculada.",
@@ -446,6 +448,7 @@ with tab1:
                         conn.commit()
                         
                         st.session_state.editing_product_id = new_id # Switch to Edit Mode
+                        product_service.get_all_products.clear()
                         admin_utils.show_feedback_dialog(f"Produto '{new_name}' criado!", level="success")
                     except Exception as e:
                         admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
@@ -512,6 +515,7 @@ with tab1:
                     })
                     
                     st.session_state.editing_product_id = new_prod_id
+                    product_service.get_all_products.clear()
                     admin_utils.show_feedback_dialog(f"Produto '{new_name}' criado com sucesso!", level="success")
                 except Exception as e:
                     admin_utils.show_feedback_dialog(f"Erro ao duplicar: {e}", level="error")
@@ -595,6 +599,8 @@ with tab1:
                         {'name': curr_prod['name'], 'stock': curr_prod['stock_quantity']},
                         {'name': new_name, 'stock': new_stock}, commit=False)
                     conn.commit()
+                    product_service.get_all_products.clear()
+                    product_service.get_categories.clear()
                     admin_utils.show_feedback_dialog("Detalhes atualizados!", level="success")
 
         # TABS INTERFACE
@@ -843,6 +849,7 @@ with tab1:
                                 curr_imgs.pop(i)
                                 cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(curr_imgs), selected_prod_id))
                                 conn.commit()
+                                product_service.get_all_products.clear()
                                 st.rerun()
                         except Exception:
                             pass
@@ -858,6 +865,7 @@ with tab1:
                          curr_imgs.append(path)
                     cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(curr_imgs), selected_prod_id))
                     conn.commit()
+                    product_service.get_all_products.clear()
                     admin_utils.show_feedback_dialog("Salvo!", level="success")
                     st.rerun()
 
@@ -966,6 +974,7 @@ with tab1:
             if col_final.button("💾 Salvar", type="primary", use_container_width=True, help="Salvar Preço Base e Markup"):
                 cursor.execute("UPDATE products SET markup = ?, base_price = ? WHERE id = ?", (new_markup, new_price, selected_prod_id))
                 conn.commit()
+                product_service.get_all_products.clear()
                 admin_utils.show_feedback_dialog("Preço Base Salvo!", level="success")
             
             # 2. Variation Cost Analysis (NEW)
@@ -1095,6 +1104,7 @@ with tab1:
                     cursor.execute("DELETE FROM products WHERE id=?", (pid,))
                     audit.log_action(conn, 'DELETE', 'products', pid, {'name': pname}, commit=False)
                     conn.commit()
+                    product_service.get_all_products.clear()
                     st.session_state.editing_product_id = None
 
                 admin_utils.show_confirmation_dialog(
@@ -1197,6 +1207,7 @@ with tab2:
                             audit.log_action(conn, 'UPDATE', 'production_history', row['id'], 
                                 {'quantity': row['quantity']}, {'quantity': new_qty})
                             
+                            product_service.get_all_products.clear()
                             admin_utils.show_feedback_dialog("Atualizado!", level="success")
                             st.rerun()
                 
@@ -1208,6 +1219,7 @@ with tab2:
                             cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (qty, pid))
                             cursor.execute("DELETE FROM production_history WHERE id = ?", (rid,))
                             conn.commit()
+                            product_service.get_all_products.clear()
                             audit.log_action(conn, 'DELETE', 'production_history', rid, {'product_name': pname, 'quantity': qty}, None)
 
                         admin_utils.show_confirmation_dialog(

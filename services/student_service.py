@@ -183,7 +183,10 @@ def get_student_financial_summary(conn, student_id, month_year_filter=None):
     # Optional date filter logic could go here
     consumptions = pd.read_sql(c_query, conn)
     
-    total = tuitions['amount'].sum() + consumptions['total_value'].sum()
+    tuitions['amount_paid'] = tuitions['amount_paid'].fillna(0)
+    consumptions['amount_paid'] = consumptions['amount_paid'].fillna(0)
+    
+    total = (tuitions['amount'] - tuitions['amount_paid']).sum() + (consumptions['total_value'] - consumptions['amount_paid']).sum()
     
     return tuitions, consumptions, total
 
@@ -292,6 +295,74 @@ def confirm_payment_all_pending(conn, student_id):
     conn.commit()
     audit.log_action(conn, 'PAYMENT', 'finance', student_id, None, {'type': 'ALL_PENDING'}, commit=True)
 
+def process_partial_payment(conn, student_id, payment_amount):
+    """
+    Allocates a payment amount to the oldest pending debts first.
+    """
+    cursor = conn.cursor()
+    # Fetch all pending items (Tuitions and Consumptions) ordered by date ASC
+    # Tuitions: date = COALESCE(payment_date, created_at, 'YYYY-MM-01') ? No, use month_year logic
+    # We need a unified list with ID, TABLE, AMOUNT_DUE, DATE
+    
+    pending_items = []
+    
+    # 1. Tuitions
+    ts = pd.read_sql(f"SELECT id, amount, amount_paid, month_year FROM tuitions WHERE student_id={student_id} AND status='Pendente'", conn)
+    for _, row in ts.iterrows():
+        # Approx date from month_year for sorting
+        try:
+            d_str = f"{row['month_year'][3:]}-{row['month_year'][:2]}-01"
+        except: d_str = '9999-99-99'
+        pending_items.append({
+            'type': 'tuition',
+            'id': row['id'],
+            'due': row['amount'] - (row['amount_paid'] or 0),
+            'date': d_str
+        })
+        
+    # 2. Consumptions
+    cs = pd.read_sql(f"SELECT id, total_value, amount_paid, date FROM student_consumptions WHERE student_id={student_id} AND status='Pendente'", conn)
+    for _, row in cs.iterrows():
+        pending_items.append({
+            'type': 'consumption',
+            'id': row['id'],
+            'due': row['total_value'] - (row['amount_paid'] or 0),
+            'date': row['date']
+        })
+        
+    # Sort key: date
+    pending_items.sort(key=lambda x: x['date'])
+    
+    remaining_payment = float(payment_amount)
+    items_paid = []
+    
+    now_str = datetime.now().strftime('%Y-%m-%d')
+    
+    for item in pending_items:
+        if remaining_payment <= 0.009: # Float epsilon safety
+            break
+            
+        pay_this_item = min(remaining_payment, item['due'])
+        
+        # Update logic
+        if item['type'] == 'tuition':
+            cursor.execute("UPDATE tuitions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
+            # Check if fully paid
+            if abs(pay_this_item - item['due']) < 0.01:
+                cursor.execute("UPDATE tuitions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
+        else:
+            cursor.execute("UPDATE student_consumptions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
+            if abs(pay_this_item - item['due']) < 0.01:
+                cursor.execute("UPDATE student_consumptions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
+                
+        remaining_payment -= pay_this_item
+        items_paid.append(f"{item['type']} {item['id']} ({pay_this_item:.2f})")
+        
+    conn.commit()
+    audit.log_action(conn, 'PARTIAL_PAYMENT', 'finance', student_id, None, {'amount': payment_amount, 'items': items_paid}, commit=False)
+    
+    return True, f"Pagamento de R$ {payment_amount:.2f} registrado com sucesso!"
+
 def cancel_consumption(conn, consumption_id):
     """Cancels a consumption and restores stock if it was a material."""
     cursor = conn.cursor()
@@ -398,8 +469,8 @@ def get_debts_summary(conn):
     query = """
         SELECT id, name, total_due, oldest_month as months FROM (
             SELECT s.id, s.name, 
-                   COALESCE((SELECT SUM(amount) FROM tuitions WHERE student_id = s.id AND status = 'Pendente'), 0) +
-                   COALESCE((SELECT SUM(total_value) FROM student_consumptions WHERE student_id = s.id AND status = 'Pendente'), 0) as total_due,
+                   COALESCE((SELECT SUM(amount - COALESCE(amount_paid, 0)) FROM tuitions WHERE student_id = s.id AND status = 'Pendente'), 0) +
+                   COALESCE((SELECT SUM(total_value - COALESCE(amount_paid, 0)) FROM student_consumptions WHERE student_id = s.id AND status = 'Pendente'), 0) as total_due,
                    COALESCE(
                        (SELECT strftime('%m/%Y', MIN(d)) FROM (
                            SELECT SUBSTR(month_year, 4, 4) || '-' || SUBSTR(month_year, 1, 2) || '-01' as d FROM tuitions WHERE student_id = s.id AND status = 'Pendente'

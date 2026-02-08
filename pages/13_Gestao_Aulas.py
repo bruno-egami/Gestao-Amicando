@@ -339,7 +339,14 @@ with tab_finance:
                     if not tuit.empty or not cons.empty:
                         # Render Tuitions
                         for _, t in tuit.iterrows():
-                            with st.expander(f"💰 Mensalidade {t['month_year']} - R$ {t['amount']:.2f}", expanded=False):
+                            # Partial Logic
+                            paid = t.get('amount_paid', 0) or 0
+                            remaining = t['amount'] - paid
+                            label = f"💰 Mensalidade {t['month_year']} - Restante: R$ {remaining:.2f}"
+                            if paid > 0:
+                                label += f" (Total: {t['amount']:.2f})"
+                                
+                            with st.expander(label, expanded=False):
                                 ec1, ec2 = st.columns(2)
                                 if ec1.button("📝 Editar", key=f"edit_t_{t['id']}"):
                                     edit_tuition_dialog(t['id'], sname, t['month_year'], t['amount'])
@@ -351,9 +358,17 @@ with tab_finance:
 
                         # Render Consumptions
                         for _, c in cons.iterrows():
+                            paid = c.get('amount_paid', 0) or 0
+                            remaining = c['total_value'] - paid
+                            
                             desc_label = c['description']
                             if c.get('notes'): desc_label += f" ({c['notes']})"
-                            with st.expander(f"📦 {desc_label} - R$ {c['total_value']:.2f}", expanded=False):
+                            
+                            label = f"📦 {desc_label} - Restante: R$ {remaining:.2f}"
+                            if paid > 0:
+                                label += f" (Total: {c['total_value']:.2f})"
+                                
+                            with st.expander(label, expanded=False):
                                 ec1, ec2 = st.columns(2)
                                 if ec1.button("📝 Editar", key=f"edit_c_{c['id']}"):
                                     edit_consumption_dialog(c['id'], sname, c['description'], c['total_value'])
@@ -389,10 +404,14 @@ with tab_finance:
                         with st.expander("💬 Texto para WhatsApp", expanded=False):
                             st.text_area("Copiar", bill_txt, height=120, key=f"txt_{sid}")
                         
-                        if st.button("✅ Confirmar Pagamento Total", key=f"pay_{sid}", type="primary", use_container_width=True):
+                        # Partial Payment Input
+                        p_col1, p_col2 = st.columns([2, 1])
+                        pay_val = p_col1.number_input("Valor Pagamento (R$)", min_value=0.01, max_value=float(total), value=float(total), step=10.0, key=f"pay_input_{sid}")
+                        
+                        if p_col2.button("✅ Pagar", key=f"pay_{sid}", type="primary", use_container_width=True):
                             admin_utils.show_confirmation_dialog(
-                                f"Confirmar o pagamento de todas as pendências (R$ {total:.2f}) de {sname}?",
-                                on_confirm=lambda sid=sid: student_service.confirm_payment_all_pending(conn, sid)
+                                f"Confirmar pagamento de R$ {pay_val:.2f} para {sname}?",
+                                on_confirm=lambda s=sid, v=pay_val: student_service.process_partial_payment(conn, s, v)
                             )
                         
                         # PDF Download
