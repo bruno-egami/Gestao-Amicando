@@ -62,7 +62,7 @@ def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total
     # Load existing history
     try:
         history = json.loads(curr['stage_history']) if curr['stage_history'] else {}
-    except:
+    except Exception:
         history = {}
     
     # Add next stage timestamp
@@ -199,7 +199,7 @@ def register_loss(cursor, item, stage, qty_loss, reason_loss):
     # 2. Update Stage History
     try:
         history = json.loads(item['stage_history']) if item.get('stage_history') else {}
-    except:
+    except Exception:
         history = {}
     
     break_key = f"Quebra ({stage})"
@@ -330,7 +330,7 @@ def get_stage_duration_stats(conn):
                     if dt > today:
                         dt = dt.replace(year=today.year - 1)
                     entry_date_str = dt
-                except:
+                except Exception:
                     # Fallback or different format
                     entry_date_str = today 
             else:

@@ -31,6 +31,8 @@ assets/uploads/
 assets/firing_images/
 assets/product_images/
 assets/orders/
+assets/material_images/
+assets/maintenance_images/
 
 # Logs
 logs/

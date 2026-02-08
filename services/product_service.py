@@ -151,8 +151,9 @@ def get_product_images(conn, product_id):
     kit_children = get_kit_components(conn, product_id)
     comp_imgs = []
     if not kit_children.empty:
-        c_ids = ",".join(map(str, kit_children['child_product_id'].tolist()))
-        c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
+        ids_list = kit_children['child_product_id'].tolist()
+        placeholders = ','.join(['?'] * len(ids_list))
+        c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({placeholders})", conn, params=ids_list)
         
         for _, ci_row in c_imgs_df.iterrows():
             if ci_row['image_paths']:

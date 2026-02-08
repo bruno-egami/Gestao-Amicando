@@ -130,7 +130,7 @@ with tab1:
                     import ast
                     try:
                         imgs = ast.literal_eval(row['image_paths']) if row['image_paths'] else []
-                    except: imgs = []
+                    except Exception: imgs = []
                     
                     # Logic: Always fetch component images for Kits to ensure freshness
                     kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
@@ -142,7 +142,7 @@ with tab1:
                             try:
                                 import ast
                                 ci_list = ast.literal_eval(ci_row['image_paths']) if ci_row['image_paths'] else []
-                            except: ci_list = []
+                            except Exception: ci_list = []
                             if ci_list:
                                 comp_imgs.extend(ci_list)
                         
@@ -305,7 +305,7 @@ with tab1:
                                                      'id': vm['id'], 'name': vm['name'], 'stock_level': vm['stock_level'], 
                                                      'needed': needed_vm, 'unit': vm['unit'], 'type': vm['type']
                                                  })
-                                             except: pass # Material not found?
+                                             except Exception: pass # Material not found?
 
                                     # Check Stock (Physical only)
                                     # Base Recipe
@@ -837,7 +837,7 @@ with tab1:
             try:
                 import ast
                 curr_imgs = ast.literal_eval(curr_prod['image_paths']) if curr_prod['image_paths'] else []
-            except: curr_imgs = []
+            except Exception: curr_imgs = []
             
             if curr_imgs:
                 cols = st.columns(4)
@@ -884,7 +884,7 @@ with tab1:
                     try:
                         import ast
                         cp_imgs = ast.literal_eval(cp['image_paths']) if cp['image_paths'] else []
-                    except: cp_imgs = []
+                    except Exception: cp_imgs = []
                     if cp_imgs:
                         st.caption(f"De: **{cp['name']}**")
                         c_imgs = st.columns(6)
@@ -998,7 +998,7 @@ with tab1:
                             mat_p = pd.read_sql("SELECT price_per_unit, unit FROM materials WHERE id=?", conn, params=(v_row['material_id'],)).iloc[0]
                             extra_cost = v_row['material_quantity'] * mat_p['price_per_unit']
                             mat_info = f"{v_row['material_name']} ({v_row['material_quantity']} {mat_p['unit']})"
-                        except:
+                        except Exception:
                             pass
                             
                     total_var_cost = total_cost + extra_cost
@@ -1056,7 +1056,7 @@ with tab1:
                          try:
                              mp = pd.read_sql("SELECT price_per_unit FROM materials WHERE id=?", conn, params=(sel_var['material_id'],)).iloc[0]['price_per_unit']
                              v_mat_price = mp * sel_var['material_quantity']
-                         except: pass
+                         except Exception: pass
                     
                     v_total_cost = total_cost + v_mat_price
                     v_curr_price = (float(curr_prod['base_price']) if curr_prod['base_price'] else 0) + sel_var['price_adder']

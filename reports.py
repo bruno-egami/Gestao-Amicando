@@ -326,7 +326,7 @@ def generate_quote_pdf(quote_data):
             yymmdd = f"{dt_parts[2][-2:]}{dt_parts[1]}{dt_parts[0]}"
         else:
             yymmdd = "000000"
-    except:
+    except Exception:
         yymmdd = "000000"
         
     formatted_id = f"ORC-{yymmdd}-{quote_data.get('id')}"
@@ -433,7 +433,7 @@ def generate_quote_pdf(quote_data):
                      
                      pdf.image(img_p, x=x_img_curr, y=y_imgs, w=16, h=16)
                      x_img_curr += 18 # 16 + 2 gap
-                 except: pass
+                 except Exception: pass
 
         # Draw Border around Product Cell
         pdf.set_xy(x_start, y_start)
@@ -569,7 +569,7 @@ def generate_receipt_pdf(order_data):
                      if x_img_curr + 16 > x_start + w_prod: break 
                      pdf.image(img_p, x=x_img_curr, y=y_imgs, w=16, h=16)
                      x_img_curr += 18
-                 except: pass
+                 except Exception: pass
 
         # Draw Border
         pdf.set_xy(x_start, y_start)
@@ -702,10 +702,10 @@ def generate_student_statement(student_data, items, total_due=None):
         qty_val = item.get('quantity', 1)
         # Handle values safely
         try: val = float(item.get('value', 0) or 0)
-        except: val = 0.0
+        except (ValueError, TypeError): val = 0.0
         
         try: paid = float(item.get('paid', 0) or 0)
-        except: paid = 0.0
+        except (ValueError, TypeError): paid = 0.0
         
         # If item is marked 'Pago' but paid is 0, assume it was fully paid before tracking
         status = str(item.get('status', 'Pendente'))

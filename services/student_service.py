@@ -9,10 +9,12 @@ import audit
 def get_all_active_students(conn, class_id=None):
     """Returns DataFrame of all active students, optionally filtered by class."""
     query = "SELECT s.*, c.name as class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.active=1"
+    params = []
     if class_id:
-        query += f" AND s.class_id={class_id}"
+        query += " AND s.class_id=?"
+        params.append(class_id)
     query += " ORDER BY s.name"
-    return pd.read_sql(query, conn)
+    return pd.read_sql(query, conn, params=params)
 
 def get_all_inactive_students(conn):
     """Returns DataFrame of all inactive students."""
@@ -40,7 +42,7 @@ def create_class(conn, name, schedule, notes):
 
 def update_class(conn, class_id, name, schedule, notes):
     """Updates a class."""
-    old = pd.read_sql(f"SELECT * FROM classes WHERE id={class_id}", conn).iloc[0].to_dict()
+    old = pd.read_sql("SELECT * FROM classes WHERE id=?", conn, params=(class_id,)).iloc[0].to_dict()
     cursor = conn.cursor()
     cursor.execute("UPDATE classes SET name=?, schedule=?, notes=? WHERE id=?", (name, schedule, notes, class_id))
     audit.log_action(conn, 'UPDATE', 'classes', class_id, old, {'name': name}, commit=False)
@@ -62,7 +64,7 @@ def update_student(conn, student_id, name, phone, active):
     """Updates student info (Name, Phone, Active). Class is handled separately."""
     student_id = int(student_id)
     # Get old data
-    old = pd.read_sql(f"SELECT * FROM students WHERE id={student_id}", conn).iloc[0].to_dict()
+    old = pd.read_sql("SELECT * FROM students WHERE id=?", conn, params=(student_id,)).iloc[0].to_dict()
     
     cursor = conn.cursor()
     cursor.execute("UPDATE students SET name=?, phone=?, active=? WHERE id=?", 
@@ -72,14 +74,14 @@ def update_student(conn, student_id, name, phone, active):
     conn.commit()
     try:
         conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-    except: pass
+    except Exception: pass
 
 def update_student_class(conn, student_id, class_id):
     """Updates only the student's class."""
     # Get old data for audit
     try:
-        old = pd.read_sql(f"SELECT class_id FROM students WHERE id={student_id}", conn).iloc[0].to_dict()
-    except:
+        old = pd.read_sql("SELECT class_id FROM students WHERE id=?", conn, params=(student_id,)).iloc[0].to_dict()
+    except Exception:
         old = {}
         
     cursor = conn.cursor()
@@ -94,7 +96,7 @@ def update_student_class(conn, student_id, class_id):
     # Force Checkpoint to ensure visibility
     try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except: pass
+    except Exception: pass
     
     return True
 
@@ -130,7 +132,7 @@ def process_material_consumption(conn, student_id, material_id, quantity, date, 
     cursor = conn.cursor()
     
     # 1. Fetch Material
-    mat = pd.read_sql(f"SELECT name, price_per_unit, stock_level FROM materials WHERE id={material_id}", conn).iloc[0]
+    mat = pd.read_sql("SELECT name, price_per_unit, stock_level FROM materials WHERE id=?", conn, params=(material_id,)).iloc[0]
     base_price = mat['price_per_unit']
     
     # Calculate Marked-up price as a multiplier (Markup 2 = 200%)
@@ -173,15 +175,16 @@ def get_student_financial_summary(conn, student_id, month_year_filter=None):
     Returns tuple: (tuitions_df, consumptions_df, total_due)
     """
     # Tuitions
-    t_query = f"SELECT * FROM tuitions WHERE student_id={student_id} AND status='Pendente'"
+    t_query = "SELECT * FROM tuitions WHERE student_id=? AND status='Pendente'"
+    t_params = [student_id]
     if month_year_filter:
-        t_query += f" AND month_year='{month_year_filter}'"
-    tuitions = pd.read_sql(t_query, conn)
+        t_query += " AND month_year=?"
+        t_params.append(month_year_filter)
+    tuitions = pd.read_sql(t_query, conn, params=t_params)
     
     # Consumptions
-    c_query = f"SELECT * FROM student_consumptions WHERE student_id={student_id} AND status='Pendente'"
-    # Optional date filter logic could go here
-    consumptions = pd.read_sql(c_query, conn)
+    c_query = "SELECT * FROM student_consumptions WHERE student_id=? AND status='Pendente'"
+    consumptions = pd.read_sql(c_query, conn, params=(student_id,))
     
     tuitions['amount_paid'] = tuitions['amount_paid'].fillna(0)
     consumptions['amount_paid'] = consumptions['amount_paid'].fillna(0)
@@ -194,8 +197,8 @@ def get_student_payment_history(conn, student_id):
     """
     Returns tuple: (tuitions_df, consumptions_df) of paid items.
     """
-    tuitions = pd.read_sql(f"SELECT * FROM tuitions WHERE student_id={student_id} AND status='Pago' ORDER BY payment_date DESC", conn)
-    consumptions = pd.read_sql(f"SELECT * FROM student_consumptions WHERE student_id={student_id} AND status='Pago' ORDER BY payment_date DESC", conn)
+    tuitions = pd.read_sql("SELECT * FROM tuitions WHERE student_id=? AND status='Pago' ORDER BY payment_date DESC", conn, params=(student_id,))
+    consumptions = pd.read_sql("SELECT * FROM student_consumptions WHERE student_id=? AND status='Pago' ORDER BY payment_date DESC", conn, params=(student_id,))
     return tuitions, consumptions
 
 def get_payment_history(conn, start_date=None, end_date=None, student_id=None, payment_type=None, class_id=None, status_filter='Pago'):
@@ -307,12 +310,12 @@ def process_partial_payment(conn, student_id, payment_amount):
     pending_items = []
     
     # 1. Tuitions
-    ts = pd.read_sql(f"SELECT id, amount, amount_paid, month_year FROM tuitions WHERE student_id={student_id} AND status='Pendente'", conn)
+    ts = pd.read_sql("SELECT id, amount, amount_paid, month_year FROM tuitions WHERE student_id=? AND status='Pendente'", conn, params=(student_id,))
     for _, row in ts.iterrows():
         # Approx date from month_year for sorting
         try:
             d_str = f"{row['month_year'][3:]}-{row['month_year'][:2]}-01"
-        except: d_str = '9999-99-99'
+        except Exception: d_str = '9999-99-99'
         pending_items.append({
             'type': 'tuition',
             'id': row['id'],
@@ -321,7 +324,7 @@ def process_partial_payment(conn, student_id, payment_amount):
         })
         
     # 2. Consumptions
-    cs = pd.read_sql(f"SELECT id, total_value, amount_paid, date FROM student_consumptions WHERE student_id={student_id} AND status='Pendente'", conn)
+    cs = pd.read_sql("SELECT id, total_value, amount_paid, date FROM student_consumptions WHERE student_id=? AND status='Pendente'", conn, params=(student_id,))
     for _, row in cs.iterrows():
         pending_items.append({
             'type': 'consumption',
@@ -406,7 +409,7 @@ def cancel_tuition(conn, tuition_id):
 def update_tuition(conn, tuition_id, amount):
     """Updates tuition amount."""
     cursor = conn.cursor()
-    old = pd.read_sql(f"SELECT amount FROM tuitions WHERE id={tuition_id}", conn).iloc[0].to_dict()
+    old = pd.read_sql("SELECT amount FROM tuitions WHERE id=?", conn, params=(tuition_id,)).iloc[0].to_dict()
     cursor.execute("UPDATE tuitions SET amount=? WHERE id=?", (amount, tuition_id))
     audit.log_action(conn, 'UPDATE', 'tuitions', tuition_id, old, {'amount': amount}, commit=False)
     conn.commit()
@@ -417,7 +420,7 @@ def update_consumption(conn, consumption_id, description, total_value):
     # Note: Quantity/Unit Price changes are complex for materials due to stock. 
     # For now, we allow description and total value adjustments.
     cursor = conn.cursor()
-    old = pd.read_sql(f"SELECT description, total_value FROM student_consumptions WHERE id={consumption_id}", conn).iloc[0].to_dict()
+    old = pd.read_sql("SELECT description, total_value FROM student_consumptions WHERE id=?", conn, params=(consumption_id,)).iloc[0].to_dict()
     cursor.execute("UPDATE student_consumptions SET description=?, total_value=? WHERE id=?", (description, total_value, consumption_id))
     audit.log_action(conn, 'UPDATE', 'student_consumptions', consumption_id, old, {'description': description, 'total_value': total_value}, commit=False)
     conn.commit()
@@ -447,7 +450,7 @@ def get_module_summary_stats(conn):
     # Note: payment_date stores YYYY-MM-DD
     
     # Tuitions Paid this month
-    t_paid = pd.read_sql(f"SELECT sum(amount) as s FROM tuitions WHERE status='Pago' AND payment_date LIKE '{today}%'", conn).iloc[0]['s'] or 0
+    t_paid = pd.read_sql("SELECT sum(amount) as s FROM tuitions WHERE status='Pago' AND payment_date LIKE ?", conn, params=(f"{today}%",)).iloc[0]['s'] or 0
     
     # Consumption Paid this month (We need to ensure consumption query filters by something relevant, 
     # but schema didn't enforce payment_date on consumption update. 

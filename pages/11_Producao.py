@@ -87,7 +87,7 @@ with tab_kanban:
                         if days_in > 7:
                             title_prefix = "⚠️ "
                             days_msg = f" (:red[{days_in} dias])"
-                    except: pass
+                    except Exception: pass
 
                     st.markdown(f"**{title_prefix}{item['product_name']}**{days_msg}")
                     st.markdown(f"📦 {item['quantity']} un")
@@ -149,7 +149,7 @@ with tab_kanban:
                             with st.expander("🕒 Histórico", expanded=False):
                                 for s, dt in history.items():
                                     st.caption(f"📍 **{s}**: {dt}")
-                    except:
+                    except Exception:
                         pass
                         
                     # --- Actions ---
