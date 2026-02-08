@@ -674,13 +674,14 @@ def generate_student_statement(student_data, items, total_due=None):
     pdf.ln(5)
     
     # Table Header
-    # Cols: Data (25), Descrição (85), Qtd (20), Valor (30), Status (30)
-    headers = ["Data", "Descrição", "Qtd", "Valor (R$)", "Status"]
-    col_widths = [25, 85, 20, 30, 30]
+    # Cols: Data (20), Descrição (60), Qtd (15), Valor Original (25), Pago (25), Restante (25), Status (20)
+    # Total Width = 190 (A4 is 210, margins 10+10)
+    headers = ["Data", "Descrição", "Qtd", "Total", "Pago", "Restante", "Status"]
+    col_widths = [20, 60, 15, 25, 25, 25, 20]
     
     pdf.set_fill_color(51, 51, 51)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font('Helvetica', 'B', 9)
+    pdf.set_font('Helvetica', 'B', 8)
     
     for i, h in enumerate(headers):
         pdf.cell(col_widths[i], 8, h, border=1, fill=True, align='C')
@@ -688,40 +689,52 @@ def generate_student_statement(student_data, items, total_due=None):
     
     # Table Data
     pdf.set_text_color(0, 0, 0)
-    pdf.set_font('Helvetica', '', 9)
+    pdf.set_font('Helvetica', '', 8)
     
     fill = False
-    total_pago = 0
-    total_pendente = 0
+    
+    calc_total_due = 0.0
     
     for item in items:
         # Determine Fill
         pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
         
         qty_val = item.get('quantity', 1)
-        val = float(item.get('value', 0))
-        status = str(item.get('status', 'Pendente'))
+        # Handle values safely
+        try: val = float(item.get('value', 0) or 0)
+        except: val = 0.0
         
-        # Accumulate totals
+        try: paid = float(item.get('paid', 0) or 0)
+        except: paid = 0.0
+        
+        # If item is marked 'Pago' but paid is 0, assume it was fully paid before tracking
+        status = str(item.get('status', 'Pendente'))
         if status == 'Pago':
-            total_pago += val
-        elif status == 'Pendente':
-            total_pendente += val
-            
-        # Format Qty: Int if integer, else float
+             # If paid is 0 but status is 'Pago', we assume full payment unless paid is explicitly tracked
+             if paid == 0: paid = val
+        
+        remaining = val - paid
+        if remaining < 0: remaining = 0
+        
+        if status == 'Pendente':
+             calc_total_due += remaining
+        
+        # Format Qty
         qty_str = f"{int(qty_val)}" if qty_val == int(qty_val) else f"{qty_val:.2f}"
         
         row_data = [
             str(item.get('date', '-')),
-            str(item.get('description', '-'))[:45], # truncate
+            str(item.get('description', '-'))[:35], # truncated
             qty_str,
             f"{val:.2f}",
+            f"{paid:.2f}",
+            f"{remaining:.2f}",
             status
         ]
         
         for i, dh in enumerate(row_data):
-            align = 'R' if i in [2, 3] else 'L' # Qtd and Value right aligned
-            if i == 4: align = 'C' # Status centered
+            align = 'R' if i in [2, 3, 4, 5] else 'L' # Numbers right aligned
+            if i == 6: align = 'C' # Status centered
             pdf.cell(col_widths[i], 7, dh, border=1, fill=fill, align=align)
         
         pdf.ln()
@@ -729,20 +742,13 @@ def generate_student_statement(student_data, items, total_due=None):
     
     # Totals Section
     pdf.ln(5)
-    pdf.set_font('Helvetica', 'B', 10)
     
-    # If there are paid items, show total paid
-    if total_pago > 0:
-        pdf.cell(130, 8, "Total Pago:", align='R')
-        pdf.cell(60, 8, f"R$ {total_pago:.2f}", align='R', border=1)
-        pdf.ln()
-        
-    # Always show Total a Pagar for pending items (or use total_due override if provided)
-    # The user specifically requested that "Total a Pagar" only includes open values.
-    final_pending = total_due if total_due is not None else total_pendente
+    # Final Total to Pay
+    # Use total_due if provided, else calculated
+    final_total = total_due if total_due is not None else calc_total_due
     
     pdf.set_font('Helvetica', 'B', 12)
     pdf.cell(130, 10, "Total a Pagar:", align='R')
-    pdf.cell(60, 10, f"R$ {final_pending:.2f}", align='R', border=1)
+    pdf.cell(60, 10, f"R$ {float(final_total):.2f}", align='R', border=1)
     
     return io.BytesIO(pdf.output(dest='S'))

@@ -384,11 +384,13 @@ with tab_finance:
                         # Prepare list for PDF (unchanged logic for PDF generation)
                         items = []
                         for _, t in tuit.iterrows():
-                            items.append({"date": t['month_year'], "description": f"Mensalidade {t['month_year']}", "quantity": 1, "value": t['amount'], "status": t['status']})
+                            paid = t.get('amount_paid', 0) or 0
+                            items.append({"date": t['month_year'], "description": f"Mensalidade {t['month_year']}", "quantity": 1, "value": t['amount'], "paid": paid, "status": t['status']})
                         for _, c in cons.iterrows():
                             desc = c['description']
                             if c.get('notes'): desc += f" ({c['notes']})"
-                            items.append({"date": c['date'], "description": desc, "quantity": c['quantity'], "value": c['total_value'], "status": c['status']})
+                            paid = c.get('amount_paid', 0) or 0
+                            items.append({"date": c['date'], "description": desc, "quantity": c['quantity'], "value": c['total_value'], "paid": paid, "status": c['status']})
                     else:
                         st.success("Tudo pago! Nenhuma pendência encontrada. 🎉")
 
@@ -587,6 +589,7 @@ with tab_history:
                     "description": row['description'],
                     "quantity": 1,
                     "value": row['amount'],
+                    "paid": row.get('amount_paid', 0) or (row['amount'] if row['status'] == 'Pago' else 0), # Fallback if col missing in history view
                     "status": row['status']
                 })
             
