@@ -6,6 +6,7 @@ import streamlit as st
 import bcrypt
 import time
 import pandas as pd
+import sqlite3
 from datetime import datetime
 
 # Role definitions
@@ -275,10 +276,14 @@ def create_default_admin(conn):
     
     if count == 0:
         # Create default admin
-        cursor.execute("""
-            INSERT INTO users (username, password_hash, role, name, active, created_at)
-            VALUES (?, ?, ?, ?, 1, ?)
-        """, ('admin', hash_password('admin'), 'admin', 'Administrador', datetime.now().isoformat()))
-        conn.commit()
-        return True
+        try:
+            cursor.execute("""
+                INSERT INTO users (username, password_hash, role, name, active, created_at)
+                VALUES (?, ?, ?, ?, 1, ?)
+            """, ('admin', hash_password('admin'), 'admin', 'Administrador', datetime.now().isoformat()))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            # Race condition or user already exists despite count=0 check
+            pass
     return False
