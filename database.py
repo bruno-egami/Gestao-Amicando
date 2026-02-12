@@ -33,19 +33,23 @@ def run_migrations(conn):
     # 1. Materials: Add 'type', 'supplier_id', 'category_id', 'image_path'
     try:
         cursor.execute("ALTER TABLE materials ADD COLUMN type TEXT DEFAULT 'Material'")
-    except sqlite3.OperationalError: pass
+    except sqlite3.OperationalError as e:
+        logger.warning(f"Migration (materials.type): {e}")
         
     try:
         cursor.execute("ALTER TABLE materials ADD COLUMN supplier_id INTEGER")
-    except sqlite3.OperationalError: pass
+    except sqlite3.OperationalError as e:
+        logger.warning(f"Migration (materials.supplier_id): {e}")
 
     try:
         cursor.execute("ALTER TABLE materials ADD COLUMN category_id INTEGER")
-    except sqlite3.OperationalError: pass
+    except sqlite3.OperationalError as e:
+        logger.warning(f"Migration (materials.category_id): {e}")
 
     try:
         cursor.execute("ALTER TABLE materials ADD COLUMN image_path TEXT")
-    except sqlite3.OperationalError: pass
+    except sqlite3.OperationalError as e:
+        logger.warning(f"Migration (materials.image_path): {e}")
 
     # 2. Sales: Add 'client_id'
     try:

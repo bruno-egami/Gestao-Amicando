@@ -1,6 +1,6 @@
 import streamlit as st
 
-import time
+
 
 def check_password():
     # DEPRECATED: Use auth.require_role instead

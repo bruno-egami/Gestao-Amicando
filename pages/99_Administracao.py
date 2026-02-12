@@ -7,7 +7,7 @@ import audit
 import json
 import os
 import io
-import time
+
 from datetime import datetime
 import utils.backup_utils as backup_utils
 
