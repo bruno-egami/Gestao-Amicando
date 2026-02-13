@@ -8,6 +8,10 @@ import time
 
 st.set_page_config(page_title="Fornecedores", page_icon="🚚", layout="wide")
 
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
+
 admin_utils.render_sidebar_logo()
 
 # Auth Check

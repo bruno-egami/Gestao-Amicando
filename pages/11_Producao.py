@@ -3,11 +3,16 @@ import pandas as pd
 import database
 import auth
 import services.production_service as production_service
+import services.product_service as product_service
 import admin_utils
 from datetime import date, datetime
 import json
 
 st.set_page_config(page_title="Produção", layout="wide", page_icon="🏭")
+
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
 
 # Check Auth
 conn = database.get_connection()
@@ -174,13 +179,16 @@ with tab_kanban:
                             if stage == 'Biscoito' and next_s == 'Esmaltação':
                                 st.divider()
                                 st.markdown("🎨 **Esmaltação**")
-                                variants = pd.read_sql("SELECT id, variant_name FROM product_variants WHERE product_id=?", conn, params=(item['product_id'],))
+                                
+                                # Use product_service
+                                variants = product_service.get_product_variants(conn, item['product_id'])
                                 
                                 curr_idx = 0
-                                if not pd.isna(item['variant_id']) and item['variant_id'] in variants['id'].values:
+                                if not pd.isna(item['variant_id']) and not variants.empty and item['variant_id'] in variants['id'].values:
                                      curr_idx = list(variants['id'].values).index(item['variant_id'])
                                 
-                                sel_var_name = st.selectbox("Esmalte/Variação", ["Padrão"] + variants['variant_name'].tolist(), index=curr_idx, key=f"var_sel_{item['id']}")
+                                sel_var_name = st.selectbox("Esmalte/Variação", ["Padrão"] + variants['variant_name'].tolist() if not variants.empty else ["Padrão"], index=curr_idx if not variants.empty else 0, key=f"var_sel_{item['id']}")
+                                
                                 if not variants.empty and sel_var_name != "Padrão":
                                     selected_variant_id = variants[variants['variant_name'] == sel_var_name].iloc[0]['id']
                                 
@@ -254,23 +262,28 @@ with tab_new:
     st.header("Iniciar Produção para Estoque")
     
     # 1. Category Filter
-    cats_query = "SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND category != '' ORDER BY category"
-    cats_list = pd.read_sql(cats_query, conn)['category'].tolist()
-    sel_cat = st.selectbox("Filtrar por Categoria", ["Todas"] + cats_list)
+    cats_list = product_service.get_categories(conn)
+    sel_cat = st.selectbox("Filtrar por Categoria", ["Todas"] + sorted(cats_list))
     
     # 2. Product Selection
-    if sel_cat == "Todas":
-        products = pd.read_sql("SELECT id, name FROM products ORDER BY name", conn)
+    # Get all products and filter in Python
+    all_prods = product_service.get_all_products(conn)
+    if not all_prods.empty:
+        if sel_cat != "Todas":
+            products = all_prods[all_prods['category'] == sel_cat]
+        else:
+            products = all_prods
+        products = products.sort_values('name')
     else:
-        products = pd.read_sql("SELECT id, name FROM products WHERE category = ? ORDER BY name", conn, params=(sel_cat,))
+        products = pd.DataFrame()
         
-    sel_prod_name = st.selectbox("Produto", products['name'])
+    sel_prod_name = st.selectbox("Produto", products['name'] if not products.empty else [])
     
     if sel_prod_name:
         pid = products[products['name'] == sel_prod_name].iloc[0]['id']
         
         # Variants
-        variants = pd.read_sql("SELECT id, variant_name FROM product_variants WHERE product_id=?", conn, params=(pid,))
+        variants = product_service.get_product_variants(conn, pid)
         vid = None
         if not variants.empty:
             vname = st.selectbox("Variação (Opcional)", ["Padrão"] + variants['variant_name'].tolist())
@@ -304,23 +317,14 @@ with tab_hist:
     
     with sub_prod:
         st.subheader("Itens Finalizados")
-        # Simple table
-        hist = pd.read_sql("""
-            SELECT ph.timestamp as Data, ph.product_name as Produto, ph.quantity as Qtd, ph.username as Usuário, ph.order_id as Encomenda
-            FROM production_history ph
-            ORDER BY ph.timestamp DESC
-            LIMIT 100
-        """, conn)
+        # Use service
+        hist = production_service.get_recent_finished_items(conn, limit=100)
         st.dataframe(hist, use_container_width=True, hide_index=True)
         
     with sub_loss:
         st.subheader("Registro de Perdas")
-        losses = pd.read_sql("""
-            SELECT l.timestamp as Data, p.name as Produto, l.stage as Etapa, l.quantity as Qtd, l.reason as Motivo, l.order_id as Encomenda
-            FROM production_losses l
-            JOIN products p ON l.product_id = p.id
-            ORDER BY l.timestamp DESC
-        """, conn)
+        # Use service
+        losses = production_service.get_recent_loss_items(conn, limit=100)
         if not losses.empty:
             st.dataframe(losses, use_container_width=True, hide_index=True)
         else:
@@ -337,36 +341,29 @@ with tab_analysis:
             date_range = st.date_input("Período", value=[date(date.today().year, date.today().month, 1), date.today()])
         
         # Load options for filters
-        all_prods = pd.read_sql("SELECT id, name, category FROM products ORDER BY name", conn)
-        cats = sorted(all_prods['category'].unique().tolist()) if not all_prods.empty else []
+        all_prods = product_service.get_all_products(conn)
+        cats = sorted(all_prods['category'].dropna().unique().tolist()) if not all_prods.empty else []
         
         with f2:
             sel_cats = st.multiselect("Categorias", options=cats)
         with f3:
             # Filter product options based on categories if selected
-            prod_opts_df = all_prods[all_prods['category'].isin(sel_cats)] if sel_cats else all_prods
-            sel_prods = st.multiselect("Produtos", options=prod_opts_df['name'].tolist())
+            prod_opts_df = all_prods[all_prods['category'].isin(sel_cats)] if sel_cats and not all_prods.empty else all_prods
+            sel_prods = st.multiselect("Produtos", options=prod_opts_df['name'].tolist() if not prod_opts_df.empty else [])
             
     # --- DATA LOADING & FILTERING ---
-    # 1. Load All Relevant Data
-    losses_df = pd.read_sql("""
-        SELECT l.stage, l.quantity, p.name as product_name, p.category, l.timestamp, l.reason
-        FROM production_losses l
-        JOIN products p ON l.product_id = p.id
-    """, conn)
-    
-    finished_df = pd.read_sql("""
-        SELECT ph.timestamp, ph.product_name, ph.quantity, p.category
-        FROM production_history ph
-        JOIN products p ON ph.product_id = p.id
-    """, conn)
+    if len(date_range) == 2:
+        start_d, end_d = date_range
+    else:
+        start_d, end_d = date.today(), date.today()
+
+    # Use service to get raw data
+    losses_df, finished_df = production_service.get_yield_analysis_data(conn, start_d, end_d)
     
     # 2. Apply Filters to Dataframes
     def apply_filters(df):
         if df.empty: return df
-        # Date filter
-        df['dt'] = pd.to_datetime(df['timestamp']).dt.date
-        df = df[(df['dt'] >= date_range[0]) & (df['dt'] <= date_range[1])]
+        # Date filter is already applied by service query optimization, but redundant check is fine
         # Category filter
         if sel_cats:
             df = df[df['category'].isin(sel_cats)]

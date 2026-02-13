@@ -9,10 +9,15 @@ import auth
 import audit
 from services import product_service
 from utils.logging_config import get_logger, log_exception
+import utils.styles as styles
 
 logger = get_logger(__name__)
 
 st.set_page_config(page_title="Produtos", page_icon="🏺", layout="wide")
+
+# Apply Global Styles
+styles.apply_custom_style()
+
 admin_utils.render_sidebar_logo()
 
 # Database Connection

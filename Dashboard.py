@@ -11,11 +11,10 @@ import utils.backup_utils as backup_utils
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 # Hide default sidebar immediately to prevent flicker
-st.markdown("""
-    <style>
-    [data-testid="stSidebarNav"] {display: none;}
-    </style>
-""", unsafe_allow_html=True)
+import utils.styles as styles
+
+# Apply Global Styles (Premium/Glassmorphism)
+styles.apply_custom_style()
 
 @st.cache_resource
 def startup_db():
@@ -92,31 +91,33 @@ try:
     """, conn, params=(month_start,))
     month_total = month_production.iloc[0]['total'] or 0
 
-    prod_c1, prod_c2, prod_c3, prod_c4 = st.columns(4)
-    prod_c1.metric("🔨 Hoje", f"{int(today_total)} un")
-    prod_c2.metric("📅 Últimos 7 dias", f"{int(week_total)} un")
-    prod_c3.metric("📆 Este mês", f"{int(month_total)} un")
-    
-    # Calculate Yield (Month)
-    month_losses = pd.read_sql("SELECT SUM(quantity) as total FROM production_losses WHERE timestamp >= ?", conn, params=(month_start,))
-    month_broken = month_losses.iloc[0]['total'] or 0
-    month_yield = (month_total / (month_total + month_broken) * 100) if (month_total + month_broken) > 0 else 100
-    prod_c4.metric("📈 Rendimento (Mês)", f"{month_yield:.1f}%")
+    with st.container(border=True):
+        prod_c1, prod_c2, prod_c3, prod_c4 = st.columns(4)
+        prod_c1.metric("🔨 Hoje", f"{int(today_total)} un")
+        prod_c2.metric("📅 Últimos 7 dias", f"{int(week_total)} un")
+        prod_c3.metric("📆 Este mês", f"{int(month_total)} un")
+        
+        # Calculate Yield (Month)
+        month_losses = pd.read_sql("SELECT SUM(quantity) as total FROM production_losses WHERE timestamp >= ?", conn, params=(month_start,))
+        month_broken = month_losses.iloc[0]['total'] or 0
+        month_yield = (month_total / (month_total + month_broken) * 100) if (month_total + month_broken) > 0 else 100
+        prod_c4.metric("📈 Rendimento (Mês)", f"{month_yield:.1f}%")
 
     # WIP Status Bar
     st.write("📍 **Status Atual da Produção (Kanban):**")
-    wip_data = pd.read_sql("SELECT stage, SUM(quantity) as total FROM production_wip GROUP BY stage", conn)
-    stage_order = ["Fila de Espera", "Modelagem", "Secagem", "Biscoito", "Esmaltação", "Queima de Alta"]
-    
-    if not wip_data.empty:
-        wip_counts = wip_data.set_index('stage')['total'].reindex(stage_order).fillna(0)
-        # Display as a small bar chart or colorful columns
-        w_cols = st.columns(len(stage_order))
-        for i, s in enumerate(stage_order):
-            w_cols[i].caption(f"**{s}**")
-            w_cols[i].write(f"{int(wip_counts[s])} un")
-    else:
-        st.info("Nenhum item em produção no momento.")
+    with st.container(border=True):
+        wip_data = pd.read_sql("SELECT stage, SUM(quantity) as total FROM production_wip GROUP BY stage", conn)
+        stage_order = ["Fila de Espera", "Modelagem", "Secagem", "Biscoito", "Esmaltação", "Queima de Alta"]
+        
+        if not wip_data.empty:
+            wip_counts = wip_data.set_index('stage')['total'].reindex(stage_order).fillna(0)
+            # Display as a small bar chart or colorful columns
+            w_cols = st.columns(len(stage_order))
+            for i, s in enumerate(stage_order):
+                w_cols[i].caption(f"**{s}**")
+                w_cols[i].write(f"{int(wip_counts[s])} un")
+        else:
+            st.info("Nenhum item em produção no momento.")
     
     # Recent production history
     recent_prod = pd.read_sql("""
@@ -178,16 +179,17 @@ try:
     debts_df = student_service.get_debts_summary(conn)
 
     # --- METRICS ROW ---
-    c1, c2, c3, c4 = st.columns(4)
-    
-    pending_count = len(orders_df)
-    low_stock_count = len(low_stock_materials)
-    total_products = products_df['stock_quantity'].sum()
-    
-    c1.metric("📦 Encomendas Pendentes", pending_count)
-    c2.metric("⚠️ Insumos em Alerta", low_stock_count, delta_color="inverse")
-    c3.metric("🏺 Peças em Estoque", int(total_products))
-    c4.metric("💰 Valor em Estoque", f"R$ {inventory_val:,.2f}")
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        
+        pending_count = len(orders_df)
+        low_stock_count = len(low_stock_materials)
+        total_products = products_df['stock_quantity'].sum()
+        
+        c1.metric("📦 Encomendas Pendentes", pending_count)
+        c2.metric("⚠️ Insumos em Alerta", low_stock_count, delta_color="inverse")
+        c3.metric("🏺 Peças em Estoque", int(total_products))
+        c4.metric("💰 Valor em Estoque", f"R$ {inventory_val:,.2f}")
 
     # Second Metrics Row: Classes
     st.markdown("#### 🎓 Gestão de Aulas")

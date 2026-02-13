@@ -10,6 +10,10 @@ import reports
 
 st.set_page_config(page_title="Gestão de Aulas", page_icon="🎓", layout="wide")
 
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
+
 # Database Connection
 conn = database.get_connection()
 

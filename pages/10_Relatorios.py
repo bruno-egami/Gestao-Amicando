@@ -102,6 +102,10 @@ def get_cached_material_consumption(_conn, start_date, end_date, cat_filter):
 
 st.set_page_config(page_title="Relatórios", page_icon="📊", layout="wide")
 
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
+
 admin_utils.render_sidebar_logo()
 conn = database.get_connection()
 

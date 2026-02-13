@@ -1,39 +1,34 @@
-
 """
-UI Components Utility
-Standardized UI elements for the application.
+Reusable UI Components conforming to the new Design System.
 """
 import streamlit as st
-import pandas as pd
 
-def render_product_grid(df, selection_mode='single'):
+def card_metric(label, value, delta=None, icon=None, help_text=None, color=None):
     """
-    Renders a standardized product grid with search.
-    Expects df to have columns: id, name, thumb_path, base_price, stock_quantity
+    Renders a styled metric card.
+    Note: Standard st.metric is already styled by styles.py, but this allows custom HTML if needed.
     """
-    st.dataframe(
-        df,
-        column_config={
-            "thumb_path": st.column_config.ImageColumn("Img", width="small"),
-            "name": st.column_config.TextColumn("Produto", width="medium"),
-            "base_price": st.column_config.NumberColumn("Preço", format="R$ %.2f"),
-            "stock_quantity": st.column_config.NumberColumn("Est.", format="%d"),
-            "id": None # Hide ID
-        },
-        use_container_width=True,
-        hide_index=True,
-        selection_mode=selection_mode,
-        on_select="rerun"
-    )
+    st.metric(label=label, value=value, delta=delta, help=help_text)
 
-def render_styled_dataframe(df, column_config=None, key=None):
+def section_header(title, subtitle=None):
     """
-    Renders a consistently styled dataframe.
+    Renders a standard section header with gradient text.
     """
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config=column_config,
-        key=key
-    )
+    st.markdown(f"## {title}")
+    if subtitle:
+        st.caption(subtitle)
+    st.markdown("---")
+
+def status_badge(status):
+    """
+    Returns HTML for a status badge.
+    """
+    colors = {
+        "Pendente": "#f59e0b", # Amber
+        "Aprovado": "#10b981", # Emerald
+        "Finalizada": "#3b82f6", # Blue
+        "Cancelado": "#ef4444", # Red
+        "Entregue": "#8b5cf6" # Violet
+    }
+    c = colors.get(status, "#6b7280")
+    return f"<span style='background-color: {c}33; color: {c}; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 600; border: 1px solid {c}'>{status}</span>"

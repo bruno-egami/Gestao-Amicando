@@ -1,15 +1,18 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import os
-import time
 import database
 import auth
 import audit
 import admin_utils
-from datetime import datetime
+from datetime import datetime, date
+import services.material_service as material_service
 
 st.set_page_config(page_title="Insumos", page_icon="🧱", layout="wide")
+
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
 
 conn = database.get_connection()
 
@@ -26,16 +29,13 @@ st.title("Gestão de Insumos (Matérias-Primas)")
 tab_cat, tab_hist_global = st.tabs(["Catálogo", "Movimentações (Histórico)"])
 
 with tab_cat:
-    cursor = conn.cursor()
-    
     # --- 1. Top Bar: Controls & Filters ---
-    # Create Categories if needed
-    cats_df = pd.read_sql("SELECT id, name FROM material_categories ORDER BY name", conn)
+    cats_df = material_service.get_all_categories(conn)
     cat_map = {row['name']: row['id'] for _, row in cats_df.iterrows()}
     cat_options = ["Todas"] + list(cat_map.keys())
 
     # Suppliers
-    sup_df = pd.read_sql("SELECT id, name FROM suppliers ORDER BY name", conn)
+    sup_df = material_service.get_all_suppliers(conn)
     sup_map = {row['name']: row['id'] for _, row in sup_df.iterrows()}
     sup_options = ["Todos"] + list(sup_map.keys())
 
@@ -68,46 +68,35 @@ with tab_cat:
         if c2.button("Adicionar Categoria"):
             if new_cat_name:
                 try:
-                    cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (new_cat_name,))
-                    conn.commit()
+                    material_service.create_category(conn, new_cat_name)
                     admin_utils.show_feedback_dialog(f"Categoria '{new_cat_name}' criada!", level="success")
-                except sqlite3.IntegrityError:
-                    admin_utils.show_feedback_dialog("Categoria já existe.", level="error")
+                    st.rerun()
+                except Exception as e:
+                    if "UNIQUE constraint failed" in str(e):
+                        admin_utils.show_feedback_dialog("Categoria já existe.", level="error")
+                    else:
+                        admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
             else:
                 admin_utils.show_feedback_dialog("Digite um nome.", level="warning")
                 
         # List Existing (small editor)
         if not cats_df.empty:
             st.write("Categorias Existentes:")
-            # Simple list for now, maybe add delete later if simple
             st.dataframe(cats_df, hide_index=True)
 
     st.divider()
 
     # --- 3. Main Data Fetch ---
-    query = """
-        SELECT m.id, m.name, m.price_per_unit, m.unit, m.stock_level, m.min_stock_alert, m.type, 
-               m.image_path, s.name as supplier_name, c.name as category_name, m.category_id, m.supplier_id
-        FROM materials m
-        LEFT JOIN suppliers s ON m.supplier_id = s.id
-        LEFT JOIN material_categories c ON m.category_id = c.id
-        WHERE 1=1
-    """
-    params = []
+    df_materials = material_service.get_all_materials(conn)
 
-    if f_cat != "Todas":
-        query += " AND c.name = ?"
-        params.append(f_cat)
-    if f_sup != "Todos":
-        query += " AND s.name = ?"
-        params.append(f_sup)
-    if f_search:
-        query += " AND m.name LIKE ?"
-        params.append(f"%{f_search}%")
-
-    query += " ORDER BY m.name"
-
-    df_materials = pd.read_sql(query, conn, params=params)
+    # In-memory filtering
+    if not df_materials.empty:
+        if f_cat != "Todas":
+            df_materials = df_materials[df_materials['category_name'] == f_cat]
+        if f_sup != "Todos":
+            df_materials = df_materials[df_materials['supplier_name'] == f_sup]
+        if f_search:
+            df_materials = df_materials[df_materials['name'].str.contains(f_search, case=False, na=False)]
 
     # --- 4. Logic: Detail View OR Grid View ---
 
@@ -120,11 +109,11 @@ with tab_cat:
         target_data = {}
         if not is_new:
             # Get fresh data
-            try:
-                target_data = df_materials[df_materials['id'] == st.session_state.insumo_edit_id].iloc[0]
-            except IndexError:
+            target_data = material_service.get_material_by_id(conn, st.session_state.insumo_edit_id)
+            if not target_data:
                 admin_utils.show_feedback_dialog("Insumo não encontrado.", level="error")
                 st.session_state.insumo_edit_id = None
+                st.rerun()
         
         # Header
         c_back, c_tit = st.columns([1, 5])
@@ -208,49 +197,41 @@ with tab_cat:
                             final_img_path = file_path
                         
                         if is_new:
-                            cursor.execute("""
-                                INSERT INTO materials (name, price_per_unit, unit, stock_level, min_stock_alert, type, supplier_id, category_id, image_path)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (name, price, unit, stock, min_alert, m_type, sup_id, cat_id, final_img_path))
-                            new_id = cursor.lastrowid
-                            conn.commit()
-                            audit.log_action(conn, 'CREATE', 'materials', new_id, None, {
-                                'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
-                            })
-                            st.session_state.insumo_edit_id = None
-                            admin_utils.show_feedback_dialog("Criado com sucesso!", level="success")
+                            try:
+                                new_id = material_service.create_material(conn, name, cat_id, sup_id, price, unit, stock, min_alert, m_type, final_img_path)
+                                audit.log_action(conn, 'CREATE', 'materials', new_id, None, {
+                                    'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
+                                })
+                                st.session_state.insumo_edit_id = None
+                                admin_utils.show_feedback_dialog("Criado com sucesso!", level="success")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao criar: {e}")
                         else:
                             target_id = st.session_state.insumo_edit_id
-                            # Get old data for audit
-                            old_mat = pd.read_sql("SELECT name, price_per_unit, unit, stock_level, min_stock_alert, type FROM materials WHERE id=?", conn, params=(target_id,))
-                            old_data = old_mat.iloc[0].to_dict() if not old_mat.empty else {}
+                            old_data = target_data
                             
-                            # Logic to detect manual stock change
                             old_stock = float(target_data.get('stock_level', 0.0))
                             new_stock = float(stock)
                             
-                            cursor.execute("""
-                                UPDATE materials 
-                                SET name=?, category_id=?, supplier_id=?, type=?, price_per_unit=?, unit=?, stock_level=?, min_stock_alert=?, image_path=?
-                                WHERE id=?
-                            """, (name, cat_id, sup_id, m_type, price, unit, new_stock, min_alert, final_img_path, target_id))
-                            
-                            # Log if stock changed manually
-                            if abs(new_stock - old_stock) > 0.001: # Use a small epsilon for float comparison
-                                 diff = new_stock - old_stock
-                                 current_u = auth.get_current_user()
-                                 u_id = int(current_u['id']) if current_u else 1
-                                 
-                                 cursor.execute("""
-                                    INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                                """, (int(target_id), datetime.now().isoformat(), 'AJUSTE', abs(diff), 0.0, "Ajuste Manual na Edição", u_id))
-                            
-                            conn.commit()
-                            audit.log_action(conn, 'UPDATE', 'materials', target_id, old_data, {
-                                'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
-                            })
-                            admin_utils.show_feedback_dialog("Atualizado com sucesso!", level="success")
+                            try:
+                                material_service.update_material(conn, target_id, name, cat_id, sup_id, price, unit, new_stock, min_alert, m_type, final_img_path)
+                                
+                                # Log if stock changed manually
+                                if abs(new_stock - old_stock) > 0.001:
+                                     diff = new_stock - old_stock
+                                     current_u = auth.get_current_user()
+                                     u_id = int(current_u['id']) if current_u else 1
+                                     
+                                     material_service.log_transaction(conn, int(target_id), datetime.now().isoformat(), 'AJUSTE', abs(diff), 0.0, "Ajuste Manual na Edição", u_id)
+                                
+                                audit.log_action(conn, 'UPDATE', 'materials', target_id, old_data, {
+                                    'name': name, 'price_per_unit': price, 'unit': unit, 'stock_level': stock, 'type': m_type
+                                })
+                                admin_utils.show_feedback_dialog("Atualizado com sucesso!", level="success")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao atualizar: {e}")
 
             # Delete Option (Only for Edit)
             if not is_new:
@@ -259,13 +240,9 @@ with tab_cat:
                     if st.button("EXCLUIR INSUMO", type="primary", use_container_width=True):
                         def do_delete(mid=st.session_state.insumo_edit_id, mname=target_data.get('name')):
                             try:
-                                # Get old data for audit
-                                old_mat = pd.read_sql("SELECT name, price_per_unit, unit, stock_level, type FROM materials WHERE id=?", conn, params=(mid,))
-                                old_data = old_mat.iloc[0].to_dict() if not old_mat.empty else {}
-                                
-                                cursor.execute("DELETE FROM materials WHERE id=?", (mid,))
-                                conn.commit()
-                                audit.log_action(conn, 'DELETE', 'materials', mid, old_data, None)
+                                original = material_service.get_material_by_id(conn, mid)
+                                material_service.delete_material(conn, mid)
+                                audit.log_action(conn, 'DELETE', 'materials', mid, original, None)
                                 st.session_state.insumo_edit_id = None
                             except Exception as e:
                                 st.error(f"Erro ao excluir: {e}")
@@ -299,62 +276,34 @@ with tab_cat:
                         if t_qtd is None or t_qtd <= 0:
                             st.error("Informe uma quantidade válida.")
                         else:
-                            # Logic
-                            current_stock = target_data.get('stock_level', 0.0)
-                            new_rec_stock = current_stock
-                            
                             clean_type = t_type.split(" ")[0] # ENTRADA, SAIDA
-                            
-                            curr_price = float(target_data.get('price_per_unit', 0.0))
-                            new_calc_price = curr_price
-                            
-                            if clean_type == "ENTRADA":
-                                new_rec_stock += t_qtd
-                                # Weighted Average Price Calculation
-                                if t_cost > 0:
-                                    pur_price = float(t_cost / t_qtd)
-                                    if current_stock > 0:
-                                        new_calc_price = ((current_stock * curr_price) + t_cost) / (current_stock + t_qtd)
-                                    else:
-                                        new_calc_price = pur_price
-                            elif clean_type == "SAIDA":
-                                new_rec_stock -= t_qtd
-
                             current_u = auth.get_current_user()
                             u_id = int(current_u['id']) if current_u else 1
                             
-                            # Explicit casting
-                            mat_id_py = int(target_data['id'])
-                            t_qtd_py = float(t_qtd)
-                            new_rec_stock_py = float(new_rec_stock)
-                            
-                            cursor.execute("""
-                                INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """, (mat_id_py, t_date.isoformat(), clean_type, t_qtd_py, float(t_cost), t_obs, u_id))
-                            
-                            # Update Material Stock & Price
-                            cursor.execute("UPDATE materials SET stock_level = ?, price_per_unit = ? WHERE id = ?", (new_rec_stock_py, float(new_calc_price), mat_id_py))
-                            conn.commit()
-                            
-                            # Persistent feedback
-                            details = f"Qtd: {t_qtd} {target_data['unit']}\n\nNovo Preço Médio: R$ {new_calc_price:.2f}\n\nNovo Saldo: {new_rec_stock:.2f}"
-                            admin_utils.show_feedback_dialog("Movimentação registrada!", level="success", sub_message=details)
+                            try:
+                                if clean_type == "ENTRADA":
+                                    new_stock, new_price = material_service.register_entry(
+                                        conn, int(target_data['id']), float(t_qtd), float(t_cost), t_obs, u_id
+                                    )
+                                    details = f"Qtd: {t_qtd} {target_data['unit']}\n\nNovo Preço Médio: R$ {new_price:.2f}\n\nNovo Saldo: {new_stock:.2f}"
+                                    admin_utils.show_feedback_dialog("Movimentação registrada!", level="success", sub_message=details)
+                                
+                                elif clean_type == "SAIDA":
+                                    new_stock = material_service.register_exit(
+                                        conn, int(target_data['id']), float(t_qtd), t_obs, u_id
+                                    )
+                                    details = f"Qtd: {t_qtd} {target_data['unit']}\n\nNovo Saldo: {new_stock:.2f}"
+                                    admin_utils.show_feedback_dialog("Saída registrada!", level="success", sub_message=details)
+                                
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao registrar: {e}")
 
                 st.divider()
                 st.subheader("Extrato de Movimentações")
                 
-                # Fetch History
-                # Cast to int to ensure SQLite matches INTEGER column (not BLOB)
-                m_id_query = int(target_data['id'])
-                
-                hist_df = pd.read_sql("""
-                    SELECT date, type, quantity, notes, username 
-                    FROM inventory_transactions t
-                    LEFT JOIN users u ON t.user_id = u.id
-                    WHERE material_id = ?
-                    ORDER BY t.id DESC
-                """, conn, params=(m_id_query,))
+                # Fetch History via Service
+                hist_df = material_service.get_material_history(conn, int(target_data['id']))
                 
                 if not hist_df.empty:
                     st.dataframe(hist_df, use_container_width=True)
@@ -413,37 +362,16 @@ with tab_cat:
                                     st.error("Informe uma quantidade válida.")
                                 else:
                                     try:
-                                        cursor_entry = conn.cursor()
-                                        curr_stock = float(row['stock_level'])
                                         curr_price = float(row['price_per_unit'])
-                                        
-                                        # Use provided price or fallback to current
                                         purchase_price = float(q_price) if q_price is not None else curr_price
+                                        total_cost = purchase_price * float(q_qty)
                                         
-                                        # Weighted Average Logic
-                                        if curr_stock > 0:
-                                            new_avg_price = ((curr_stock * curr_price) + (q_qty * purchase_price)) / (curr_stock + q_qty)
-                                        else:
-                                            new_avg_price = purchase_price
-                                        
-                                        new_stock_entry = curr_stock + q_qty
                                         current_u = auth.get_current_user()
                                         u_id_entry = int(current_u['id']) if current_u else 1
                                         
-                                        # 1. Log Transaction
-                                        cursor_entry.execute("""
-                                            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
-                                            VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?)
-                                        """, (int(row['id']), q_date.isoformat(), float(q_qty), float(purchase_price * q_qty), q_obs, u_id_entry))
-                                        
-                                        # 2. Update Material (Stock and Price)
-                                        cursor_entry.execute("""
-                                            UPDATE materials 
-                                            SET stock_level = ?, price_per_unit = ? 
-                                            WHERE id = ?
-                                        """, (float(new_stock_entry), float(new_avg_price), int(row['id'])))
-                                        
-                                        conn.commit()
+                                        new_stock_entry, new_avg_price = material_service.register_entry(
+                                            conn, int(row['id']), float(q_qty), total_cost, q_obs, u_id_entry
+                                        )
                                         
                                         # Persistent feedback
                                         details = f"Qtd Adicionada: {q_qty} {row['unit']}\n\nNovo Preço Médio: R$ {new_avg_price:.2f}/{row['unit']}\n\nNovo Saldo: {new_stock_entry:.2f} {row['unit']}"
@@ -452,6 +380,7 @@ with tab_cat:
                                             level="success",
                                             sub_message=details
                                         )
+                                        st.rerun()
                                     except Exception as e:
                                         st.error(f"Erro: {e}")
 
@@ -469,67 +398,51 @@ with tab_hist_global:
     hf1, hf2, hf3, hf4 = st.columns(4)
     
     with hf1:
-        from datetime import timedelta, date as dt_date
-        h_period = st.selectbox("Período", ["Hoje", "Últimos 7 dias", "Últimos 30 dias", "Todo o Sempre"], index=1)
+        h_period_ui = st.selectbox("Período", ["Hoje", "Últimos 7 dias", "Últimos 30 dias", "Todo o Sempre"], index=1)
+        # Map to service inputs
+        period_map = {
+            "Hoje": "Hoje",
+            "Últimos 7 dias": "7d",
+            "Últimos 30 dias": "30d",
+            "Todo o Sempre": "all"
+        }
+        h_period = period_map[h_period_ui]
     
     with hf2:
-        # Fetch materials for filter
-        m_names = pd.read_sql("SELECT name FROM materials ORDER BY name", conn)
-        h_mat_opts = ["Todos"] + m_names['name'].tolist()
+        m_names = material_service.get_all_materials(conn)
+        h_mat_opts = ["Todos"] + sorted(m_names['name'].unique().tolist())
         h_mat = st.selectbox("Material", h_mat_opts)
         
     with hf3:
         h_type = st.selectbox("Tipo de Movimento", ["Todos", "ENTRADA", "SAIDA", "AJUSTE"])
         
     with hf4:
-        # Fetch users
+        # We need a user list service method or direct query (User Service exists?)
+        # For now, let's just use what we have in material_service helper or direct if needed?
+        # material_service doesn't have get_all_users.
+        # But we previously used direct SQL.
+        # I should add get_all_users to auth or admin_utils?
+        # Or just use direct SQL for users list as it's minor?
+        # I'll use direct SQL for now to avoid creating User Service right now.
+        # Wait, I removed sqlite3 import.
+        # I can use pd.read_sql since pandas is imported.
         u_names = pd.read_sql("SELECT username FROM users ORDER BY username", conn)
         h_user_opts = ["Todos"] + u_names['username'].tolist()
         h_user = st.selectbox("Usuário", h_user_opts)
         
-    # Build Query
-    hq = """
-        SELECT 
-            t.id, t.date, m.name as material_name, t.type, t.quantity, m.unit, t.cost, t.notes, u.username
-        FROM inventory_transactions t
-        JOIN materials m ON t.material_id = m.id
-        LEFT JOIN users u ON t.user_id = u.id
-        WHERE 1=1
-    """
-    hp = []
+    # Fetch History
+    filters = {
+        'period': h_period,
+        'material_name': h_mat,
+        'type': h_type,
+        'user_name': h_user
+    }
     
-    if h_period == "Hoje":
-        hq += " AND t.date LIKE ?"
-        hp.append(dt_date.today().isoformat() + '%')
-    elif h_period == "Últimos 7 dias":
-        start = (dt_date.today() - timedelta(days=7)).isoformat()
-        hq += " AND t.date >= ?"
-        hp.append(start)
-    elif h_period == "Últimos 30 dias":
-        start = (dt_date.today() - timedelta(days=30)).isoformat()
-        hq += " AND t.date >= ?"
-        hp.append(start)
-        
-    if h_mat != "Todos":
-        hq += " AND m.name = ?"
-        hp.append(h_mat)
-        
-    if h_type != "Todos":
-        hq += " AND t.type = ?"
-        hp.append(h_type)
-        
-    if h_user != "Todos":
-        hq += " AND u.username = ?"
-        hp.append(h_user)
-        
-    hq += " ORDER BY t.date DESC LIMIT 200"
-    
-    hdf = pd.read_sql(hq, conn, params=hp)
+    hdf = material_service.get_global_history(conn, filters)
     
     # Stats
     if not hdf.empty:
         total_entradas = hdf[hdf['type'] == 'ENTRADA']['cost'].sum()
-        count_saidas = hdf[hdf['type'] == 'SAIDA']['quantity'].count()
         
         st.caption(f"Exibindo {len(hdf)} registros. Custo Total de Entradas (no período): **R$ {total_entradas:.2f}**")
         
@@ -552,3 +465,4 @@ with tab_hist_global:
         st.info("Nenhuma movimentação encontrada para os filtros selecionados.")
 
 conn.close()
+

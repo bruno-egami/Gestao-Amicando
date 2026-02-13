@@ -377,3 +377,52 @@ def get_production_log_report(conn, start_date, end_date):
         ORDER BY ph.timestamp DESC
     """
     return pd.read_sql(query, conn, params=[start_date, end_date])
+
+def get_recent_finished_items(conn, limit=100):
+    """
+    Fetches the most recent finished production items.
+    """
+    query = """
+        SELECT ph.timestamp as Data, ph.product_name as Produto, ph.quantity as Qtd, ph.username as Usuário, ph.order_id as Encomenda
+        FROM production_history ph
+        ORDER BY ph.timestamp DESC
+        LIMIT ?
+    """
+    return pd.read_sql(query, conn, params=(limit,))
+
+def get_recent_loss_items(conn, limit=100):
+    """
+    Fetches the most recent production losses.
+    """
+    query = """
+        SELECT l.timestamp as Data, p.name as Produto, l.stage as Etapa, l.quantity as Qtd, l.reason as Motivo, l.order_id as Encomenda
+        FROM production_losses l
+        JOIN products p ON l.product_id = p.id
+        ORDER BY l.timestamp DESC
+        LIMIT ?
+    """
+    return pd.read_sql(query, conn, params=(limit,))
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_yield_analysis_data(_conn, start_date, end_date):
+    """
+    Fetches raw data for Production Yield Analysis within a date range.
+    Returns two DataFrames: losses and finished items.
+    """
+    # 1. Losses
+    losses_df = pd.read_sql("""
+        SELECT l.stage, l.quantity, p.name as product_name, p.category, l.timestamp, l.reason
+        FROM production_losses l
+        JOIN products p ON l.product_id = p.id
+        WHERE DATE(l.timestamp) BETWEEN ? AND ?
+    """, _conn, params=(start_date, end_date))
+    
+    # 2. Finished
+    finished_df = pd.read_sql("""
+        SELECT ph.timestamp, ph.product_name, ph.quantity, p.category
+        FROM production_history ph
+        JOIN products p ON ph.product_id = p.id
+        WHERE DATE(ph.timestamp) BETWEEN ? AND ?
+    """, _conn, params=(start_date, end_date))
+    
+    return losses_df, finished_df

@@ -8,6 +8,10 @@ import time
 
 st.set_page_config(page_title="Clientes", page_icon="👥", layout="wide")
 
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
+
 conn = database.get_connection()
 
 if not auth.require_login(conn):

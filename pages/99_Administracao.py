@@ -14,6 +14,10 @@ import utils.backup_utils as backup_utils
 
 st.set_page_config(page_title="Administração", page_icon="⚙️", layout="wide")
 
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
+
 conn = database.get_connection()
 
 # Ensure default admin exists

@@ -366,6 +366,15 @@ def init_db():
         cursor.execute("ALTER TABLE sales ADD COLUMN order_id TEXT")
     except sqlite3.OperationalError: pass
 
+    # 6. Sales & Commission Items: Add 'variant_id'
+    try:
+        cursor.execute("ALTER TABLE sales ADD COLUMN variant_id INTEGER REFERENCES product_variants(id)")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE commission_items ADD COLUMN variant_id INTEGER REFERENCES product_variants(id)")
+    except sqlite3.OperationalError: pass
+
     # 7. Create product_kits table (Migration)
     # 7. Create product_kits table (Migration) - Handled in init_db bottom section or consolidated
     # Removing duplicate create here if it exists below.

@@ -7,9 +7,13 @@ import audit
 from datetime import datetime, date, timedelta
 import plotly.express as px
 import io
-from services import finance_service
+import services.finance_service as finance_service
 
 st.set_page_config(page_title="Gestão Financeira", page_icon="💰", layout="wide")
+
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
 
 admin_utils.render_sidebar_logo()
 conn = database.get_connection()
@@ -47,9 +51,8 @@ with tab_gestao:
     sup_map = {row['name']: row['id'] for _, row in suppliers.iterrows()}
     sup_options = [""] + list(sup_map.keys())
 
-    # Fetch Categories
-    cat_df = pd.read_sql("SELECT name FROM expense_categories ORDER BY name", conn)
-    expense_categories = cat_df['name'].tolist()
+    # Fetch Categories via Service
+    expense_categories = finance_service.get_expense_categories(conn)
     periodicities = ["Mensal", "Anual", "Semanal", "Trimestral"]
 
     # Ensure critical categories exist in list even if DB is empty (fallback)
@@ -72,23 +75,30 @@ with tab_gestao:
         end_month = date(sel_year, sel_month + 1, 1)
 
     # 1. Realized Expenses (Lançamentos)
-    df_realized = pd.read_sql("""
-        SELECT category, amount, date, description FROM expenses 
-        WHERE date >= ? AND date < ?
-    """, conn, params=(start_month, end_month))
-    df_realized['type'] = 'Realizado'
+    filters_realized = {
+        'start_date': start_month,
+        'end_date': end_month
+    }
+    df_realized = finance_service.get_expenses(conn, filters_realized)
+    if not df_realized.empty:
+        df_realized['type'] = 'Realizado'
 
     # 2. Fixed Costs (Definitions)
-    df_fixed_def = pd.read_sql("SELECT category, value as amount, description FROM fixed_costs", conn)
+    df_fixed_def = finance_service.get_fixed_costs(conn)
+    df_fixed_def.rename(columns={'value': 'amount'}, inplace=True)
 
     # Filter: Exclude definitions if already present in realized (by description)
     # This prevents double counting if the month was already consolidated
-    realized_descs = set(df_realized['description'].tolist())
+    realized_descs = set(df_realized['description'].tolist()) if not df_realized.empty else set()
     df_fixed_pending = df_fixed_def[~df_fixed_def['description'].isin(realized_descs)].copy()
     df_fixed_pending['type'] = 'Fixo (Previsto)'
 
     # Combined Data
-    df_final_chart = pd.concat([df_realized[['category', 'amount']], df_fixed_pending[['category', 'amount']]], ignore_index=True)
+    to_concat = []
+    if not df_realized.empty: to_concat.append(df_realized[['category', 'amount']])
+    if not df_fixed_pending.empty: to_concat.append(df_fixed_pending[['category', 'amount']])
+    
+    df_final_chart = pd.concat(to_concat, ignore_index=True) if to_concat else pd.DataFrame()
 
     col_d1, col_d2 = st.columns(2)
 
@@ -99,8 +109,8 @@ with tab_gestao:
             total_period = df_final_chart['amount'].sum()
             
             # Breakdown
-            tot_real = df_realized['amount'].sum()
-            tot_fix_pending = df_fixed_pending['amount'].sum()
+            tot_real = df_realized['amount'].sum() if not df_realized.empty else 0.0
+            tot_fix_pending = df_fixed_pending['amount'].sum() if not df_fixed_pending.empty else 0.0
             
             st.metric("Total Geral (Realizado + Pendente)", f"R$ {total_period:.2f}", 
                      help=f"Realizado: R$ {tot_real:.2f} | Fixo Pendente: R$ {tot_fix_pending:.2f}")
@@ -115,7 +125,12 @@ with tab_gestao:
         st.write("**Evolução dos Lançamentos (Últimos 12 meses)**")
         st.caption("*Considera apenas despesas lançadas/pagas")
         
-        df_hist_chart = pd.read_sql("SELECT date, amount FROM expenses", conn)
+        # We can implement a specific history summary in service later, 
+        # for now let's reuse get_expenses generally or use direct SQL for just this chart optimization?
+        # Let's use get_expenses for last 12 months.
+        last_year_start = date.today() - timedelta(days=365)
+        df_hist_chart = finance_service.get_expenses(conn, {'start_date': last_year_start, 'end_date': date.today()})
+        
         if not df_hist_chart.empty:
             df_hist_chart['date'] = pd.to_datetime(df_hist_chart['date'])
             df_hist_chart['month'] = df_hist_chart['date'].dt.strftime('%Y-%m')
@@ -138,9 +153,9 @@ with tab_gestao:
             if st.button("Adicionar Categoria"):
                 if new_cat:
                     try:
-                        cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (new_cat,))
-                        conn.commit()
+                        finance_service.create_expense_category(conn, new_cat)
                         admin_utils.show_feedback_dialog(f"Categoria '{new_cat}' adicionada!", level="success")
+                        st.rerun()
                     except Exception:
                         admin_utils.show_feedback_dialog("Categoria já existe.", level="error")
         with c_cat2:
@@ -150,8 +165,8 @@ with tab_gestao:
                 cc1.text(cat)
                 if cc2.button("🗑️", key=f"del_cat_{cat}"):
                     def do_del_cat(name=cat):
-                        cursor.execute("DELETE FROM expense_categories WHERE name=?", (name,))
-                        conn.commit()
+                        finance_service.delete_expense_category(conn, name)
+                        st.rerun()
                     
                     admin_utils.show_confirmation_dialog(
                         f"Deseja excluir a categoria de despesa '{cat}'?",
@@ -163,6 +178,9 @@ with tab_gestao:
     # Nested Tabs for Expenses
     subtab1, subtab2 = st.tabs(["🛒 Despesas eventuais", "📌 Despesas recorrentes"])
 
+    # ==========================================
+    # SUBTAB 1: Despesas
+    # ==========================================
     # ==========================================
     # SUBTAB 1: Despesas
     # ==========================================
@@ -182,17 +200,17 @@ with tab_gestao:
             def_val = 0.0
             
             if is_edit:
-                try:
-                    row_edit = pd.read_sql("SELECT * FROM expenses WHERE id=?", conn, params=(st.session_state.exp_edit_id,)).iloc[0]
-                    def_date = datetime.strptime(row_edit['date'], '%Y-%m-%d').date()
-                    def_desc = row_edit['description']
-                    def_val = float(row_edit['amount'])
-                    if row_edit['category'] in expense_categories:
-                        idx_cat = expense_categories.index(row_edit['category'])
-                    if row_edit['supplier_id']:
-                        s_name = next((k for k, v in sup_map.items() if v == row_edit['supplier_id']), None)
+                target_data = finance_service.get_expense_by_id(conn, st.session_state.exp_edit_id)
+                if target_data:
+                    def_date = datetime.strptime(target_data['date'], '%Y-%m-%d').date()
+                    def_desc = target_data['description']
+                    def_val = float(target_data['amount'])
+                    if target_data['category'] in expense_categories:
+                        idx_cat = expense_categories.index(target_data['category'])
+                    if target_data['supplier_id']:
+                        s_name = next((k for k, v in sup_map.items() if v == target_data['supplier_id']), None)
                         if s_name in sup_options: idx_sup = sup_options.index(s_name)
-                except Exception:
+                else:
                     st.session_state.exp_edit_id = None
                     st.rerun()
                     
@@ -222,25 +240,28 @@ with tab_gestao:
                 if st.form_submit_button("Salvar Despesa"):
                     sup_id = sup_map[e_sup] if e_sup else None
                     if is_edit:
-                        # Get old data for audit
-                        old_exp = pd.read_sql("SELECT date, description, amount, category FROM expenses WHERE id=?", conn, params=(st.session_state.exp_edit_id,))
-                        old_data = old_exp.iloc[0].to_dict() if not old_exp.empty else {}
-                        
-                        cursor.execute("UPDATE expenses SET date=?, description=?, amount=?, category=?, supplier_id=? WHERE id=?", (e_date, e_desc, e_val, e_cat, sup_id, st.session_state.exp_edit_id))
-                        conn.commit()
-                        audit.log_action(conn, 'UPDATE', 'expenses', st.session_state.exp_edit_id, old_data, 
-                            {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
-                        st.session_state.exp_edit_id = None
-                        admin_utils.show_feedback_dialog("Atualizado!", level="success")
+                        try:
+                            old_data = finance_service.update_expense(
+                                conn, st.session_state.exp_edit_id, e_date, e_desc, e_val, e_cat, sup_id
+                            )
+                            audit.log_action(conn, 'UPDATE', 'expenses', st.session_state.exp_edit_id, old_data, 
+                                {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
+                            st.session_state.exp_edit_id = None
+                            admin_utils.show_feedback_dialog("Atualizado!", level="success")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar: {e}")
                     else:
-                        cursor.execute("INSERT INTO expenses (date, description, amount, category, supplier_id, linked_material_id) VALUES (?, ?, ?, ?, ?, ?)", (e_date, e_desc, e_val, e_cat, sup_id, material_to_stock))
-                        new_id = cursor.lastrowid
-                        if material_to_stock and qty_bought > 0:
-                            cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id = ?", (qty_bought, material_to_stock))
-                        conn.commit()
-                        audit.log_action(conn, 'CREATE', 'expenses', new_id, None,
-                            {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
-                        admin_utils.show_feedback_dialog("Salvo!", level="success")
+                        try:
+                            new_id = finance_service.create_expense(
+                                conn, e_date, e_desc, e_val, e_cat, sup_id, material_to_stock, qty_bought
+                            )
+                            audit.log_action(conn, 'CREATE', 'expenses', new_id, None,
+                                {'date': str(e_date), 'description': e_desc, 'amount': e_val, 'category': e_cat})
+                            admin_utils.show_feedback_dialog("Salvo!", level="success")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao criar: {e}")
 
         with c_list:
             st.subheader("Histórico")
@@ -254,30 +275,18 @@ with tab_gestao:
             date_def = [today.replace(day=1), today]
             fil_date = f2.date_input("Intervalo", date_def, key="fil_d_exp", format="DD/MM/YYYY")
             
-            query = """
-                SELECT e.id, e.date, e.description, e.amount, e.category, s.name as supplier
-                FROM expenses e
-                LEFT JOIN suppliers s ON e.supplier_id = s.id
-                WHERE 1=1
-            """
-            params = []
-            if fil_cat != "Todas":
-                query += " AND e.category = ?"
-                params.append(fil_cat)
-            if len(fil_date) == 2:
-                query += " AND e.date BETWEEN ? AND ?"
-                params.append(fil_date[0])
-                params.append(fil_date[1])
-                
-            query += " ORDER BY e.date DESC"
-            
-            df_hist = pd.read_sql(query, conn, params=params)
-            
             # Search filter
             search_exp = st.text_input("🔍 Buscar", placeholder="Descrição, fornecedor...", key="search_exp")
-            if search_exp and not df_hist.empty:
-                mask = df_hist.apply(lambda row: search_exp.lower() in str(row).lower(), axis=1)
-                df_hist = df_hist[mask]
+            
+            filters = {
+                'category': fil_cat,
+                'search_term': search_exp
+            }
+            if len(fil_date) == 2:
+                filters['start_date'] = fil_date[0]
+                filters['end_date'] = fil_date[1]
+            
+            df_hist = finance_service.get_expenses(conn, filters)
             
             st.caption(f"{len(df_hist)} registro(s) | Total: R$ {df_hist['amount'].sum():.2f}")
             
@@ -288,9 +297,13 @@ with tab_gestao:
                         
                         with c1:
                             st.markdown(f"**{row['description']}**")
-                            st.write(f"📅 {row['date']} | 📁 {row['category']}")
-                            if row['supplier']:
-                                st.caption(f"🏢 {row['supplier']}")
+                            # Handle date which might be string or datetime depending on pandas version/sqlite
+                            d_str = row['date']
+                            if isinstance(d_str, (pd.Timestamp, datetime)):
+                                d_str = d_str.strftime('%d/%m/%Y')
+                            st.write(f"📅 {d_str} | 📁 {row['category']}")
+                            if row['supplier_name']:
+                                st.caption(f"🏢 {row['supplier_name']}")
                         
                         with c2:
                             st.metric("Valor", f"R$ {row['amount']:.2f}")
@@ -300,10 +313,10 @@ with tab_gestao:
                                 st.session_state.exp_edit_id = row['id']
                                 st.rerun()
                             if st.button("🗑️", key=f"d_e_{row['id']}", help="Excluir"):
-                                def do_del_exp(eid=row['id'], desc=row['description'], amt=row['amount'], cat=row['category']):
-                                    cursor.execute("DELETE FROM expenses WHERE id=?", (eid,))
-                                    conn.commit()
-                                    audit.log_action(conn, 'DELETE', 'expenses', eid, {'description': desc, 'amount': amt, 'category': cat}, None)
+                                def do_del_exp(eid=row['id']):
+                                    old_data = finance_service.delete_expense(conn, eid)
+                                    audit.log_action(conn, 'DELETE', 'expenses', eid, old_data, None)
+                                    st.rerun()
 
                                 admin_utils.show_confirmation_dialog(
                                     f"Excluir a despesa '{row['description']}' de R$ {row['amount']:.2f}?",
@@ -316,47 +329,10 @@ with tab_gestao:
     # AUTO-CONSOLIDATION LOGIC
     # ==========================================
     # Check if we need to generate fixed costs for THIS month
-    today = date.today()
-    curr_m = today.month
-    curr_y = today.year
-    start_m_date = date(curr_y, curr_m, 1)
-    if curr_m == 12: end_m_date = date(curr_y + 1, 1, 1)
-    else: end_m_date = date(curr_y, curr_m + 1, 1)
-
-    fcs = pd.read_sql("SELECT * FROM fixed_costs", conn)
-    if not fcs.empty:
-        ex_month = pd.read_sql("""
-            SELECT description FROM expenses 
-            WHERE date >= ? AND date < ?
-        """, conn, params=(start_m_date, end_m_date))
-        existing_set = set(ex_month['description'].tolist())
-        
-        added_count = 0
-        import calendar
-        
-        for _, fc in fcs.iterrows():
-            if fc['description'] in existing_set:
-                continue
-                
-            try:
-                d_day = int(fc['due_day']) if fc['due_day'] else 1
-                last_day = calendar.monthrange(curr_y, curr_m)[1]
-                eff_day = min(d_day, last_day) 
-                due_date_obj = date(curr_y, curr_m, eff_day)
-                
-                if today >= due_date_obj:
-                    cursor.execute("""
-                        INSERT INTO expenses (date, description, amount, category)
-                        VALUES (?, ?, ?, ?)
-                    """, (due_date_obj, fc['description'], fc['value'], fc['category']))
-                    added_count += 1
-            except Exception:
-                pass
-                
-        if added_count > 0:
-            conn.commit()
-            st.toast(f"✅ {added_count} custos fixos do mês foram lançados automaticamente!", icon="🤖")
-            st.rerun()
+    added_count = finance_service.auto_process_monthly_fixed_costs(conn)
+    if added_count > 0:
+        st.toast(f"✅ {added_count} custos fixos do mês foram lançados automaticamente!", icon="🤖")
+        st.rerun()
 
     # ==========================================
     # SUBTAB 2: Gastos Recorrentes
@@ -378,14 +354,14 @@ with tab_gestao:
             fd_cat_idx = 0
             
             if is_f_edit:
-                try:
-                    frow = pd.read_sql("SELECT * FROM fixed_costs WHERE id=?", conn, params=(st.session_state.fix_edit_id,)).iloc[0]
+                frow = finance_service.get_fixed_cost_by_id(conn, st.session_state.fix_edit_id)
+                if frow:
                     fd_desc = frow['description']
                     fd_val = float(frow['value'])
                     fd_day = int(frow['due_day']) if frow['due_day'] else 5
                     if frow['periodicity'] in periodicities: fd_per_idx = periodicities.index(frow['periodicity'])
                     if frow['category'] in expense_categories: fd_cat_idx = expense_categories.index(frow['category'])
-                except Exception:
+                else:
                     st.session_state.fix_edit_id = None
                     st.rerun()
             
@@ -402,22 +378,26 @@ with tab_gestao:
                 
                 if st.form_submit_button("Salvar Definição"):
                     if is_f_edit:
-                        old_fc = pd.read_sql("SELECT description, value, due_day, category FROM fixed_costs WHERE id=?", conn, params=(st.session_state.fix_edit_id,))
-                        old_data = old_fc.iloc[0].to_dict() if not old_fc.empty else {}
-                        cursor.execute("UPDATE fixed_costs SET description=?, value=?, due_day=?, periodicity=?, category=? WHERE id=?", (f_desc, f_val, f_day, f_per, f_cat, st.session_state.fix_edit_id))
-                        conn.commit()
-                        audit.log_action(conn, 'UPDATE', 'fixed_costs', st.session_state.fix_edit_id, old_data,
-                            {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
-                        st.session_state.fix_edit_id = None
-                        admin_utils.show_feedback_dialog("Atualizado!", level="success")
+                        try:
+                            old_data = finance_service.update_fixed_cost(
+                                conn, st.session_state.fix_edit_id, f_desc, f_val, f_day, f_per, f_cat
+                            )
+                            audit.log_action(conn, 'UPDATE', 'fixed_costs', st.session_state.fix_edit_id, old_data,
+                                {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
+                            st.session_state.fix_edit_id = None
+                            admin_utils.show_feedback_dialog("Atualizado!", level="success")
+                            st.rerun()
+                        except Exception as e:
+                             st.error(f"Erro ao atualizar: {e}")
                     else:
                         try:
-                            cursor.execute("INSERT INTO fixed_costs (description, value, due_day, periodicity, category) VALUES (?, ?, ?, ?, ?)", (f_desc, f_val, f_day, f_per, f_cat))
-                            new_id = cursor.lastrowid
-                            conn.commit()
+                            new_id = finance_service.create_fixed_cost(
+                                conn, f_desc, f_val, f_day, f_per, f_cat
+                            )
                             audit.log_action(conn, 'CREATE', 'fixed_costs', new_id, None,
                                 {'description': f_desc, 'value': f_val, 'due_day': f_day, 'category': f_cat})
                             admin_utils.show_feedback_dialog("Criado!", level="success")
+                            st.rerun()
                         except Exception:
                             admin_utils.show_feedback_dialog("Erro: Descrição deve ser única.", level="error")
                     
@@ -428,20 +408,12 @@ with tab_gestao:
             fil_f_cat = ff1.selectbox("Filtrar Categoria", ["Todas"] + expense_categories, key="fil_f_cat")
             fil_f_per = ff2.selectbox("Filtrar Periodicidade", ["Todas", "Mensal", "Anual", "Semanal", "Trimestral"], key="fil_f_per")
             
-            q_fix = "SELECT * FROM fixed_costs WHERE 1=1"
-            p_fix = []
+            filters_fc = {
+                'category': fil_f_cat,
+                'periodicity': fil_f_per
+            }
             
-            if fil_f_cat != "Todas":
-                q_fix += " AND category = ?"
-                p_fix.append(fil_f_cat)
-            
-            if fil_f_per != "Todas":
-                q_fix += " AND periodicity = ?"
-                p_fix.append(fil_f_per)
-                
-            q_fix += " ORDER BY due_day"
-            
-            df_fix = pd.read_sql(q_fix, conn, params=p_fix)
+            df_fix = finance_service.get_fixed_costs(conn, filters_fc)
             
             if not df_fix.empty:
                 st.metric("Total Estimado (Mensal)", f"R$ {df_fix['value'].sum():.2f}")
@@ -453,10 +425,10 @@ with tab_gestao:
                             st.session_state.fix_edit_id = row['id']
                             st.rerun()
                         if fc_del.button("🗑️ Excluir", key=f"d_f_{row['id']}"):
-                            def do_del_fix(fid=row['id'], desc=row['description'], val=row['value'], cat=row['category']):
-                                cursor.execute("DELETE FROM fixed_costs WHERE id=?", (fid,))
-                                conn.commit()
-                                audit.log_action(conn, 'DELETE', 'fixed_costs', fid, {'description': desc, 'value': val, 'category': cat}, None)
+                            def do_del_fix(fid=row['id']):
+                                old_data = finance_service.delete_fixed_cost(conn, fid)
+                                audit.log_action(conn, 'DELETE', 'fixed_costs', fid, old_data, None)
+                                st.rerun()
 
                             admin_utils.show_confirmation_dialog(
                                 f"Excluir a definição de custo fixo: '{row['description']}'?",
@@ -510,33 +482,23 @@ with tab_relatorios:
     st.divider()
 
     # --- DETAILED DATA QUERIES (Used for Excel & Details) ---
-    sales_df = pd.read_sql("""
-        SELECT s.id, s.date, s.total_price, s.discount, s.payment_method, s.salesperson,
-               p.name as product_name, p.category as product_category, c.name as client_name
-        FROM sales s
-        LEFT JOIN products p ON s.product_id = p.id
-        LEFT JOIN clients c ON s.client_id = c.id
-        WHERE s.date BETWEEN ? AND ?
-    """, conn, params=(start_date, end_date))
-
-    expenses_df = pd.read_sql("""
-        SELECT e.id, e.date, e.description, e.amount, e.category, s.name as supplier_name
-        FROM expenses e
-        LEFT JOIN suppliers s ON e.supplier_id = s.id
-        WHERE e.date BETWEEN ? AND ?
-    """, conn, params=(start_date, end_date))
-
-    # --- UNIFIED FINANCE SUMMARY ---
-    # Use centralized finance_service
-    fin_summary = finance_service.get_financial_summary(conn, start_date, end_date)
+    # Use centralized finance_service for all data
+    fin_data = finance_service.get_financial_summary(conn, start_date, end_date)
     
-    gross_revenue = fin_summary['gross_revenue']
-    total_expenses = fin_summary['total_expenses']
-    net_profit = fin_summary['net_profit']
-    total_discounts = fin_summary['total_discounts']
-    rev_details = fin_summary['revenue_details']
-    exp_details = fin_summary['expense_details']
-
+    # Extract DataFrames from service result
+    sales_df = fin_data['revenue_details']
+    expenses_df = fin_data['expense_details']
+    
+    # Metrics
+    gross_revenue = fin_data['gross_revenue']
+    total_expenses = fin_data['total_expenses']
+    net_profit = fin_data['net_profit']
+    total_discounts = fin_data['total_discounts']
+    
+    # NOTE: The service returns 'revenue_details' and 'expense_details'. 
+    # The original code expected 'sales_df' and 'expenses_df' with specific columns.
+    # The service ensures these columns exist.
+    
     # --- MAIN METRICS ---
     st.subheader("📊 Resumo do Período")
 
@@ -556,6 +518,8 @@ with tab_relatorios:
     with exp_col1:
         if not sales_df.empty:
             output_sales = io.BytesIO()
+            # Drop the 'source' column added by service if not needed for specific export
+            # but it is fine to keep.
             sales_df.to_excel(output_sales, index=False, engine='openpyxl')
             st.download_button(
                 "📥 Exportar Vendas (Excel)",
@@ -577,13 +541,13 @@ with tab_relatorios:
 
     with exp_col3:
         # Combined Report
-        if not rev_details.empty or not exp_details.empty:
+        if not sales_df.empty or not expenses_df.empty:
             output_all = io.BytesIO()
             with pd.ExcelWriter(output_all, engine='openpyxl') as writer:
-                if not rev_details.empty:
-                    rev_details.to_excel(writer, sheet_name='Receitas_Unificadas', index=False)
-                if not exp_details.empty:
-                    exp_details.to_excel(writer, sheet_name='Despesas', index=False)
+                if not sales_df.empty:
+                    sales_df.to_excel(writer, sheet_name='Receitas_Unificadas', index=False)
+                if not expenses_df.empty:
+                    expenses_df.to_excel(writer, sheet_name='Despesas', index=False)
                 # Keep original sales/orders sheets if they have data for backward compatibility or detail
                 if not sales_df.empty:
                     sales_df.to_excel(writer, sheet_name='Vendas_Detalhe', index=False)
@@ -707,6 +671,9 @@ with tab_relatorios:
     # ======================
     # SUBTAB: GRÁFICOS
     # ======================
+    # ======================
+    # SUBTAB: GRÁFICOS
+    # ======================
     with subtab_charts:
         chart_col1, chart_col2 = st.columns(2)
         
@@ -727,14 +694,15 @@ with tab_relatorios:
         with chart_col2:
             st.markdown("### Evolução Diária")
             
-            if not rev_details.empty:
-                daily_sales = rev_details.groupby(rev_details['date'].dt.date)['amount'].sum().reset_index()
+            # Use sales_df and expenses_df from service
+            if not sales_df.empty:
+                daily_sales = sales_df.groupby(sales_df['date'].dt.date)['amount'].sum().reset_index()
                 daily_sales.columns = ['Data', 'Receita']
             else:
                 daily_sales = pd.DataFrame({'Data': [], 'Receita': []})
             
-            if not exp_details.empty:
-                daily_expenses = exp_details.groupby(exp_details['date'].dt.date)['amount'].sum().reset_index()
+            if not expenses_df.empty:
+                daily_expenses = expenses_df.groupby(expenses_df['date'].dt.date)['amount'].sum().reset_index()
                 daily_expenses.columns = ['Data', 'Despesas']
             else:
                 daily_expenses = pd.DataFrame({'Data': [], 'Despesas': []})
@@ -755,15 +723,25 @@ with tab_relatorios:
         # Monthly Trend (if enough data)
         st.markdown("### Tendência Mensal")
         
-        if not rev_details.empty or not exp_details.empty:
+        if not sales_df.empty or not expenses_df.empty:
             # Monthly Trend
-            rev_details['month'] = rev_details['date'].dt.to_period('M').astype(str)
-            monthly_sales = rev_details.groupby('month')['amount'].sum().reset_index()
-            monthly_sales.columns = ['Mês', 'Receita']
+            # Need to copy to avoid SettingWithCopy if slice
+            rev_c = sales_df.copy() if not sales_df.empty else pd.DataFrame(columns=['date', 'amount'])
+            exp_c = expenses_df.copy() if not expenses_df.empty else pd.DataFrame(columns=['date', 'amount'])
             
-            exp_details['month'] = exp_details['date'].dt.to_period('M').astype(str)
-            monthly_expenses = exp_details.groupby('month')['amount'].sum().reset_index()
-            monthly_expenses.columns = ['Mês', 'Despesas']
+            if not rev_c.empty:
+                rev_c['month'] = rev_c['date'].dt.to_period('M').astype(str)
+                monthly_sales = rev_c.groupby('month')['amount'].sum().reset_index()
+                monthly_sales.columns = ['Mês', 'Receita']
+            else:
+                monthly_sales = pd.DataFrame(columns=['Mês', 'Receita'])
+            
+            if not exp_c.empty:
+                exp_c['month'] = exp_c['date'].dt.to_period('M').astype(str)
+                monthly_expenses = exp_c.groupby('month')['amount'].sum().reset_index()
+                monthly_expenses.columns = ['Mês', 'Despesas']
+            else:
+                monthly_expenses = pd.DataFrame(columns=['Mês', 'Despesas'])
             
             monthly_all = pd.merge(monthly_sales, monthly_expenses, on='Mês', how='outer').fillna(0)
             monthly_all = monthly_all.sort_values('Mês')
@@ -775,11 +753,12 @@ with tab_relatorios:
             st.plotly_chart(fig_bar, use_container_width=True)
             
             # Additional Breakdown: Revenue by Source
-            st.markdown("### Composição do Faturamento")
-            source_breakdown = rev_details.groupby('source')['amount'].sum().reset_index()
-            fig_source = px.bar(source_breakdown, x='source', y='amount', color='source',
-                                labels={'amount': 'Total (R$)', 'source': 'Origem'})
-            st.plotly_chart(fig_source, use_container_width=True)
+            if 'source' in sales_df.columns:
+                 st.markdown("### Composição do Faturamento")
+                 source_breakdown = sales_df.groupby('source')['amount'].sum().reset_index()
+                 fig_source = px.bar(source_breakdown, x='source', y='amount', color='source',
+                                     labels={'amount': 'Total (R$)', 'source': 'Origem'})
+                 st.plotly_chart(fig_source, use_container_width=True)
         else:
             st.info("Sem dados para a tendência mensal.")
 

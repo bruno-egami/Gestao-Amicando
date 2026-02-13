@@ -19,6 +19,10 @@ logger = get_logger(__name__)
 
 st.set_page_config(page_title="Encomendas", page_icon="📦")
 
+# Apply Global Styles
+import utils.styles as styles
+styles.apply_custom_style()
+
 admin_utils.render_sidebar_logo()
 conn = database.get_connection()
 
