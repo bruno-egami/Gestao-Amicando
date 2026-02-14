@@ -83,21 +83,26 @@ def create_expense(conn: sqlite3.Connection, date_obj: date, description: str, a
                   supplier_id: Optional[int], linked_material_id: Optional[int] = None, 
                   qty_bought: float = 0.0) -> int:
     """Creates a new expense and optionally updates material stock."""
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        INSERT INTO expenses (date, description, amount, category, supplier_id, linked_material_id) 
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (date_obj, description, amount, category, supplier_id, linked_material_id))
-    
-    new_id = cursor.lastrowid
-    
-    # Simple Stock Update Logic (mirrors original UI logic)
-    if linked_material_id and qty_bought > 0:
-        cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id = ?", (qty_bought, linked_material_id))
+    try:
+        cursor = conn.cursor()
         
-    conn.commit()
-    return new_id
+        cursor.execute("""
+            INSERT INTO expenses (date, description, amount, category, supplier_id, linked_material_id) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (date_obj, description, amount, category, supplier_id, linked_material_id))
+        
+        new_id = cursor.lastrowid
+        
+        # Simple Stock Update Logic (mirrors original UI logic)
+        if linked_material_id and qty_bought > 0:
+            cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id = ?", (qty_bought, linked_material_id))
+            
+        conn.commit()
+        return new_id
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar despesa '{description}': {e}")
+        raise
 
 def update_expense(conn: sqlite3.Connection, expense_id: int, date_obj: date, description: str, 
                   amount: float, category: str, supplier_id: Optional[int]) -> Dict[str, Any]:
@@ -195,7 +200,6 @@ def auto_process_monthly_fixed_costs(conn: sqlite3.Connection) -> int:
         return 0
         
     # 2. Get expenses already created this month (to prevent duplicates)
-    # We match by exact description for now, as per original logic
     ex_month = pd.read_sql("""
         SELECT description FROM expenses 
         WHERE date >= ? AND date < ?
@@ -205,28 +209,33 @@ def auto_process_monthly_fixed_costs(conn: sqlite3.Connection) -> int:
     added_count = 0
     cursor = conn.cursor()
     
-    for _, fc in fcs.iterrows():
-        if fc['description'] in existing_set:
-            continue
-            
-        try:
-            d_day = int(fc['due_day']) if fc['due_day'] else 1
-            last_day = calendar.monthrange(curr_y, curr_m)[1]
-            eff_day = min(d_day, last_day) 
-            due_date_obj = date(curr_y, curr_m, eff_day)
-            
-            # Auto-insert if due date has passed or is today
-            if today >= due_date_obj:
-                cursor.execute("""
-                    INSERT INTO expenses (date, description, amount, category)
-                    VALUES (?, ?, ?, ?)
-                """, (due_date_obj, fc['description'], fc['value'], fc['category']))
-                added_count += 1
-        except Exception as e:
-            logger.error(f"Error processing fixed cost {fc['description']}: {e}")
-            
-    if added_count > 0:
-        conn.commit()
+    try:
+        for _, fc in fcs.iterrows():
+            if fc['description'] in existing_set:
+                continue
+                
+            try:
+                d_day = int(fc['due_day']) if fc['due_day'] else 1
+                last_day = calendar.monthrange(curr_y, curr_m)[1]
+                eff_day = min(d_day, last_day) 
+                due_date_obj = date(curr_y, curr_m, eff_day)
+                
+                # Auto-insert if due date has passed or is today
+                if today >= due_date_obj:
+                    cursor.execute("""
+                        INSERT INTO expenses (date, description, amount, category)
+                        VALUES (?, ?, ?, ?)
+                    """, (due_date_obj, fc['description'], fc['value'], fc['category']))
+                    added_count += 1
+            except Exception as e:
+                logger.error(f"Error processing fixed cost {fc['description']}: {e}")
+                
+        if added_count > 0:
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao processar custos fixos: {e}")
+        raise
         
     return added_count
 

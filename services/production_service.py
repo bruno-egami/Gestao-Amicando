@@ -227,8 +227,6 @@ def register_loss(cursor, item, stage, qty_loss, reason_loss):
         """, (product_id, variant_id, order_id, order_item_id, qty_loss, date.today().isoformat(), rep_history_json, f"Reposição após quebra em {stage}"))
         replenished = True
         
-        replenished = True
-        
     # Clear cache
     get_loss_statistics.clear()
         
@@ -242,7 +240,7 @@ def update_priority(cursor, item_id, increment):
     return True
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_loss_statistics(conn, start_date, end_date):
+def get_loss_statistics(_conn, start_date, end_date):
     """
     Retrieves loss statistics grouped by reason and stage.
     Uses 'production_losses' table.
@@ -257,10 +255,10 @@ def get_loss_statistics(conn, start_date, end_date):
         WHERE DATE(pl.timestamp) BETWEEN ? AND ?
         GROUP BY stage, reason, p.name
     """
-    return pd.read_sql(query, conn, params=[start_date, end_date])
+    return pd.read_sql(query, _conn, params=[start_date, end_date])
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_production_history_stats(conn, days=180):
+def get_production_history_stats(_conn, days=180):
     """
     Retrieves production history statistics for trend analysis.
     Groups by Month.
@@ -275,10 +273,10 @@ def get_production_history_stats(conn, days=180):
         GROUP BY strftime('%Y-%m', timestamp)
         ORDER BY Mes ASC
     """
-    return pd.read_sql(query, conn, params=[start_date])
+    return pd.read_sql(query, _conn, params=[start_date])
 
 @st.cache_data(ttl=60, show_spinner=False)
-def get_stage_duration_stats(conn):
+def get_stage_duration_stats(_conn):
     """
     Fetches all active WIP items and calculates duration in current stage.
     Returns a DataFrame with item details and 'days_in_stage'.
@@ -295,7 +293,7 @@ def get_stage_duration_stats(conn):
         JOIN products p ON w.product_id = p.id
         WHERE w.stage != 'Finalizado'
     """
-    df = pd.read_sql(query, conn)
+    df = pd.read_sql(query, _conn)
     
     if df.empty:
         return pd.DataFrame(columns=['Produto', 'Estágio', 'Quantidade', 'Dias no Estágio', 'Data Entrada'])
@@ -360,7 +358,7 @@ def get_stage_duration_stats(conn):
     return pd.DataFrame(results)
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_production_log_report(conn, start_date, end_date):
+def get_production_log_report(_conn, start_date, end_date):
     """
     Retrieves production history logs for report.
     """
@@ -376,7 +374,7 @@ def get_production_log_report(conn, start_date, end_date):
         GROUP BY DATE(ph.timestamp), ph.product_id, ph.username
         ORDER BY ph.timestamp DESC
     """
-    return pd.read_sql(query, conn, params=[start_date, end_date])
+    return pd.read_sql(query, _conn, params=[start_date, end_date])
 
 def get_recent_finished_items(conn, limit=100):
     """

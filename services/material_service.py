@@ -1,6 +1,9 @@
 import sqlite3
 import pandas as pd
+import logging
 from typing import List, Optional, Tuple, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 def get_all_materials(conn: sqlite3.Connection) -> pd.DataFrame:
     """
@@ -68,23 +71,28 @@ def update_stock(conn: sqlite3.Connection, material_id: int, quantity_change: fl
     Updates stock level and logs the movement.
     Positive quantity_change adds to stock, negative removes.
     """
-    cursor = conn.cursor()
-    
-    # Get current stock
-    current_stock = cursor.execute("SELECT stock_level FROM materials WHERE id = ?", (material_id,)).fetchone()[0]
-    new_stock = current_stock + quantity_change
-    
-    # Update stock
-    cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
-    
-    # Log movement
-    movement_type = "Entrada" if quantity_change > 0 else "Saída"
-    cursor.execute("""
-        INSERT INTO stock_movements (material_id, quantity, movement_type, date, reason)
-        VALUES (?, ?, ?, DATE('now'), ?)
-    """, (material_id, abs(quantity_change), movement_type, reason))
-    
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        
+        # Get current stock
+        current_stock = cursor.execute("SELECT stock_level FROM materials WHERE id = ?", (material_id,)).fetchone()[0]
+        new_stock = current_stock + quantity_change
+        
+        # Update stock
+        cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
+        
+        # Log movement
+        movement_type = "Entrada" if quantity_change > 0 else "Saída"
+        cursor.execute("""
+            INSERT INTO stock_movements (material_id, quantity, movement_type, date, reason)
+            VALUES (?, ?, ?, DATE('now'), ?)
+        """, (material_id, abs(quantity_change), movement_type, reason))
+        
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar estoque (material_id={material_id}): {e}")
+        raise
 
 # --- Categories ---
 
@@ -195,58 +203,68 @@ def register_entry(conn: sqlite3.Connection, material_id: int, quantity: float, 
     Registers a material entry, updates stock, and recalculates weighted average price.
     Returns (new_stock, new_avg_price).
     """
-    cursor = conn.cursor()
-    
-    # Get current state
-    mat = get_material_by_id(conn, material_id)
-    if not mat:
-        raise ValueError("Material not found")
+    try:
+        cursor = conn.cursor()
         
-    current_stock = mat['stock_level']
-    current_price = mat['price_per_unit']
-    
-    # Calculate new weighted average price
-    purchase_price_per_unit = total_cost / quantity if quantity > 0 else 0
-    
-    if current_stock > 0:
-        new_avg_price = ((current_stock * current_price) + total_cost) / (current_stock + quantity)
-    else:
-        new_avg_price = purchase_price_per_unit
+        # Get current state
+        mat = get_material_by_id(conn, material_id)
+        if not mat:
+            raise ValueError("Material not found")
+            
+        current_stock = mat['stock_level']
+        current_price = mat['price_per_unit']
         
-    new_stock = current_stock + quantity
-    
-    # Log Transaction
-    log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'ENTRADA', quantity, total_cost, notes, user_id)
-    
-    # Update Material
-    cursor.execute("""
-        UPDATE materials 
-        SET stock_level = ?, price_per_unit = ? 
-        WHERE id = ?
-    """, (new_stock, new_avg_price, material_id))
-    conn.commit()
-    
-    return new_stock, new_avg_price
+        # Calculate new weighted average price
+        purchase_price_per_unit = total_cost / quantity if quantity > 0 else 0
+        
+        if current_stock > 0:
+            new_avg_price = ((current_stock * current_price) + total_cost) / (current_stock + quantity)
+        else:
+            new_avg_price = purchase_price_per_unit
+            
+        new_stock = current_stock + quantity
+        
+        # Log Transaction
+        log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'ENTRADA', quantity, total_cost, notes, user_id)
+        
+        # Update Material
+        cursor.execute("""
+            UPDATE materials 
+            SET stock_level = ?, price_per_unit = ? 
+            WHERE id = ?
+        """, (new_stock, new_avg_price, material_id))
+        conn.commit()
+        
+        return new_stock, new_avg_price
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao registrar entrada (material_id={material_id}): {e}")
+        raise
 
 def register_exit(conn: sqlite3.Connection, material_id: int, quantity: float, notes: str, user_id: int) -> float:
     """
     Registers a material exit (usage/loss) and updates stock.
     Returns new_stock.
     """
-    cursor = conn.cursor()
-    
-    mat = get_material_by_id(conn, material_id)
-    if not mat:
-        raise ValueError("Material not found")
+    try:
+        cursor = conn.cursor()
         
-    current_stock = mat['stock_level']
-    new_stock = current_stock - quantity
-    
-    # Log Transaction
-    log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'SAIDA', quantity, 0.0, notes, user_id)
-    
-    # Update Material
-    cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
-    conn.commit()
-    
-    return new_stock
+        mat = get_material_by_id(conn, material_id)
+        if not mat:
+            raise ValueError("Material not found")
+            
+        current_stock = mat['stock_level']
+        new_stock = current_stock - quantity
+        
+        # Log Transaction
+        log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'SAIDA', quantity, 0.0, notes, user_id)
+        
+        # Update Material
+        cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
+        conn.commit()
+        
+        return new_stock
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao registrar saída (material_id={material_id}): {e}")
+        raise

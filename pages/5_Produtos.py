@@ -29,7 +29,7 @@ if not auth.require_login(conn):
 if not auth.check_page_access("Produtos"):
     st.stop()
 
-cursor = conn.cursor()
+# cursor removed — all writes go through product_service
 
 auth.render_custom_sidebar()
 st.title("📦 Produtos e Fichas Técnicas")
@@ -39,11 +39,7 @@ tab1, tab2 = st.tabs(["Catálogo & Produção", "Histórico de Produção"])
 # --- Tab 1: Catálogo & Produção ---
 with tab1:
     # Load Categories
-    try:
-        cat_df = pd.read_sql("SELECT name FROM product_categories", conn)
-        cat_opts = cat_df['name'].tolist()
-    except (sqlite3.Error, pd.io.sql.DatabaseError):
-        cat_opts = ["Utilitário", "Decorativo", "Outros"]
+    cat_opts = product_service.get_category_list(conn)
 
     with st.expander("Gerenciar Categorias", expanded=False):
         c_cat1, c_cat2 = st.columns([2, 1])
@@ -51,11 +47,10 @@ with tab1:
         if c_cat2.button("Adicionar Categoria"):
             if new_cat_name and new_cat_name not in cat_opts:
                 try:
-                    cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (new_cat_name,))
-                    conn.commit()
+                    product_service.add_category(conn, new_cat_name)
                     product_service.get_categories.clear()
                     admin_utils.show_feedback_dialog(f"Categoria '{new_cat_name}' adicionada!", level="success")
-                except sqlite3.Error as e:
+                except Exception as e:
                     log_exception(logger, "Error adding category", e)
                     admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
             elif new_cat_name in cat_opts:
@@ -71,8 +66,7 @@ with tab1:
             if st.button("Excluir Categoria Selecionada", use_container_width=True):
                  if del_cat:
                     def do_del_cat(name=del_cat):
-                        cursor.execute("DELETE FROM product_categories WHERE name=?", (name,))
-                        conn.commit()
+                        product_service.delete_category(conn, name)
                         product_service.get_categories.clear()
                     
                     admin_utils.show_confirmation_dialog(
@@ -82,7 +76,7 @@ with tab1:
 
     # --- SHARED DATA FETCH ---
     try:
-        products = pd.read_sql("SELECT * FROM products", conn)
+        products = product_service.get_all_products(conn)
     except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
         logger.error(f"Database read error: {e}")
         st.error(f"Erro ao ler banco de dados: {e}")
@@ -138,10 +132,11 @@ with tab1:
                     except Exception: imgs = []
                     
                     # Logic: Always fetch component images for Kits to ensure freshness
-                    kit_children = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
+                    kit_children = product_service.get_kit_components(conn, row['id'])
                     if not kit_children.empty:
-                        c_ids = ",".join(map(str, kit_children['child_product_id'].tolist()))
-                        c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({c_ids})", conn)
+                        child_ids = kit_children['child_product_id'].tolist()
+                        placeholders = ",".join(["?"] * len(child_ids))
+                        c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({placeholders})", conn, params=child_ids)
                         comp_imgs = []
                         for _, ci_row in c_imgs_df.iterrows():
                             try:
@@ -185,12 +180,7 @@ with tab1:
                         # Check kit components to min-max stock
                         # Optimization: We already checked product_kits above for images, but let's re-query specifically for qty
                         # Or safer: just query valid components
-                        kit_stock_df = pd.read_sql("""
-                            SELECT pk.quantity, p.stock_quantity as child_stock, p.name
-                            FROM product_kits pk
-                            JOIN products p ON pk.child_product_id = p.id
-                            WHERE pk.parent_product_id = ?
-                        """, conn, params=(row['id'],))
+                        kit_stock_df = product_service.get_kit_detail_for_edit(conn, row['id'])
                         
                         breakdown_str = ""
                         if not kit_stock_df.empty:
@@ -219,13 +209,7 @@ with tab1:
                             st.caption(f"🔎 Kit: {breakdown_str}")
                             
                         # --- NEW: Product Recipe Summary ---
-                        recipe_df = pd.read_sql("""
-                            SELECT m.name, pr.quantity, m.unit
-                            FROM product_recipes pr
-                            JOIN materials m ON pr.material_id = m.id
-                            WHERE pr.product_id = ?
-                            ORDER BY pr.id ASC
-                        """, conn, params=(row['id'],))
+                        recipe_df = product_service.get_pricing_recipe_items(conn, row['id'])
                         
                         if not recipe_df.empty:
                             mats = []
@@ -285,132 +269,60 @@ with tab1:
                             if st.button("Confirmar", key=f"btn_make_{row['id']}", type="primary"):
                                 try:
                                     # Fetch Recipe (Base)
-                                    recipe = pd.read_sql(f"""
-                                        SELECT m.id, m.name, m.stock_level, (pr.quantity * {qty_make}) as needed, m.unit, m.type
-                                        FROM product_recipes pr
-                                        JOIN materials m ON pr.material_id = m.id
-                                        WHERE pr.product_id = {row['id']}
-                                    """, conn)
+                                    recipe = product_service.get_recipe_for_production(conn, row['id'], qty_make)
                                     
                                     # Variation specific material?
                                     extra_mat_needed = []
                                     if target_variant_id:
-                                        # Get variant info specific
-                                        # Optimization: We have vars_df but need to be sure.
                                         var_info = vars_df[vars_df['id'] == target_variant_id].iloc[0]
                                         if var_info['material_id'] and var_info['material_quantity'] > 0:
-                                             # Fetch that material current stock
                                              try:
-                                                 vm = pd.read_sql("SELECT id, name, stock_level, unit, type FROM materials WHERE id=?", conn, params=(var_info['material_id'],)).iloc[0]
+                                                 vm = product_service.get_material_for_variant(conn, var_info['material_id']).iloc[0]
                                                  needed_vm = var_info['material_quantity'] * qty_make
-                                                 
-                                                 # Add to recipe dataframe or handle separately?
-                                                 # Let's add to a separate list to check check logic
                                                  extra_mat_needed.append({
                                                      'id': vm['id'], 'name': vm['name'], 'stock_level': vm['stock_level'], 
                                                      'needed': needed_vm, 'unit': vm['unit'], 'type': vm['type']
                                                  })
-                                             except Exception: pass # Material not found?
+                                             except Exception as e: logger.warning(f"Variação: material {var_info.get('material_id', '?')} não encontrado: {e}")
 
                                     # Check Stock (Physical only)
-                                    # Base Recipe
                                     is_burning = (recipe['unit'] == 'fornada') | (recipe['name'].str.startswith('Queima')) | (recipe['type'] == 'Queima')
                                     is_labor = (recipe['type'] == 'Mão de Obra') | (recipe['unit'] == 'hora (mão de obra)')
                                     is_physical = ~(is_burning | is_labor)
-                                    
                                     insufficient = recipe[is_physical & (recipe['stock_level'] < recipe['needed'])]
                                     
-                                    # Check Extra Materials
-                                    missing_extras = []
-                                    for em in extra_mat_needed:
-                                        # Skip labor/firing checks for extra (usually glaze which is physical)
-                                        if em['stock_level'] < em['needed']:
-                                            missing_extras.append(em['name'])
+                                    missing_extras = [em['name'] for em in extra_mat_needed if em['stock_level'] < em['needed']]
                                     
                                     if not insufficient.empty or missing_extras:
                                         admin_utils.show_feedback_dialog(f"Estoque insuficiente! {', '.join(insufficient['name'].tolist() + missing_extras)}", level="error")
                                     else:
-                                        # Execute Production
-                                        from datetime import datetime as dt
                                         user_id, username = None, 'system'
                                         if 'current_user' in st.session_state and st.session_state.current_user:
                                             user_id = int(st.session_state.current_user.get('id'))
                                             username = st.session_state.current_user.get('username', 'unknown')
                                             
-                                        # LOGIC: Check if it's a KIT (has entries in product_kits)
-                                        # Note: Kits usually don't have variants in this model yet. If they do, logic is complex.
-                                        # We proceed with Kit logic if it's a kit, ignoring variants for now unless user selected one?
-                                        # User request implies specific variation production.
-                                        
-                                        kits = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn, params=(row['id'],))
+                                        kits = product_service.get_kit_components(conn, row['id'])
                                         
                                         if not kits.empty:
-                                            # ... Existing Kit Logic (Assumed no variants for kits for now) ...
-                                            # Same as before
-                                            can_make_kit = True
-                                            miss_msg = []
-                                            for _, kit_item in kits.iterrows():
-                                                needed_total = kit_item['quantity'] * qty_make
-                                                child_stock = pd.read_sql("SELECT stock_quantity, name FROM products WHERE id=?", conn, params=(kit_item['child_product_id'],)).iloc[0]
-                                                if child_stock['stock_quantity'] < needed_total:
-                                                    can_make_kit = False
-                                                    miss_msg.append(f"{child_stock['name']}: Precisa {needed_total}, Tem {child_stock['stock_quantity']}")
-                                            
-                                            if not can_make_kit:
-                                                admin_utils.show_feedback_dialog(f"Estoque insuficiente de componentes: {', '.join(miss_msg)}", level="error")
-                                            else:
-                                                # Deduct
-                                                for _, kit_item in kits.iterrows():
-                                                     needed_total = kit_item['quantity'] * qty_make
-                                                     cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (needed_total, kit_item['child_product_id']))
-                                                
-                                                # Add Stock
-                                                if target_variant_id:
-                                                    cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, int(target_variant_id)))
-                                                else:
-                                                    cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, row['id']))
-                                                
-                                                # Log
-                                                cursor.execute("INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                                               (dt.now().isoformat(), row['id'], f"{row['name']} ({prod_target})", qty_make, user_id, username, 'Produção de Kit (Variação)' if target_variant_id else 'Produção de Kit'))
-                                                conn.commit()
+                                            try:
+                                                product_service.produce_from_kit(
+                                                    conn, row['id'], row['name'], qty_make,
+                                                    target_variant_id, prod_target, user_id, username
+                                                )
                                                 admin_utils.show_feedback_dialog(f"Kit Montado: {qty_make}x {row['name']}!", level="success")
                                                 st.rerun()
-
+                                            except ValueError as ve:
+                                                admin_utils.show_feedback_dialog(f"Estoque insuficiente de componentes: {ve}", level="error")
                                         else:
                                             # === REGULAR PRODUCTION ===
-                                            
-                                            # 1. Deduct Base Recipe
                                             if recipe.empty and not extra_mat_needed:
                                                 admin_utils.show_feedback_dialog("Sem receita. Ajustando apenas estoque.", level="warning", title="Aviso de Receita")
                                             
-                                            # Deduct Base
-                                            for _, mat in recipe.iterrows():
-                                                if not ((mat['unit'] == 'fornada') or (str(mat['name']).startswith('Queima')) or (mat['type'] == 'Queima') or (mat['type'] == 'Mão de Obra') or (mat['unit'] == 'hora (mão de obra)')):
-                                                     needed_py = float(mat['needed'])
-                                                     cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (needed_py, int(mat['id'])))
-                                                     # Log
-                                                     cursor.execute("INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)", 
-                                                                    (int(mat['id']), dt.now().isoformat(), 'SAIDA', needed_py, f"Prod: {qty_make}x {row['name']}", user_id))
-
-                                            # Deduct Extras (Variant specific)
-                                            for em in extra_mat_needed:
-                                                needed_py = float(em['needed'])
-                                                cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id = ?", (needed_py, int(em['id'])))
-                                                cursor.execute("INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)", 
-                                                               (int(em['id']), dt.now().isoformat(), 'SAIDA', needed_py, f"Prod Var: {qty_make}x {row['name']}", user_id))
-
-                                            # Update Stock (Target)
-                                            if target_variant_id:
-                                                cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, int(target_variant_id)))
-                                            else:
-                                                cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty_make, row['id']))
-                                                
-                                            cursor.execute("INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                                           (dt.now().isoformat(), row['id'], f"{row['name']} ({prod_target})", qty_make, user_id, username, 'Produção Geral'))
-                                            
-                                            audit.log_action(conn, 'CREATE', 'production_history', cursor.lastrowid, None, {'product_id': row['id'], 'quantity': qty_make, 'variant_id': target_variant_id})
-                                            conn.commit()
+                                            product_service.produce_regular(
+                                                conn, row['id'], row['name'], qty_make, recipe,
+                                                extra_mat_needed, target_variant_id, prod_target,
+                                                user_id, username
+                                            )
                                             admin_utils.show_feedback_dialog(f"Produzido: {qty_make}x {row['name']} ({prod_target})!", level="success")
                                             st.rerun()
  
@@ -444,14 +356,7 @@ with tab1:
             if st.form_submit_button("Criar Produto"):
                 if new_name:
                     try:
-                        cursor.execute("""
-                            INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
-                            VALUES (?, ?, ?, ?, ?, 0, 0)
-                        """, (new_name, new_desc, new_cat, new_markup, "[]"))
-                        new_id = cursor.lastrowid
-                        audit.log_action(conn, 'CREATE', 'products', new_id, None, {'name': new_name}, commit=False)
-                        conn.commit()
-                        
+                        new_id = product_service.create_product(conn, new_name, new_desc, new_cat, new_markup)
                         st.session_state.editing_product_id = new_id # Switch to Edit Mode
                         product_service.get_all_products.clear()
                         admin_utils.show_feedback_dialog(f"Produto '{new_name}' criado!", level="success")
@@ -466,7 +371,7 @@ with tab1:
         
         # Ensure product exists (fetch fresh data)
         try:
-            curr_prod = pd.read_sql(f"SELECT * FROM products WHERE id={selected_prod_id}", conn).iloc[0]
+            curr_prod = product_service.get_product_by_id(conn, selected_prod_id).iloc[0]
         except IndexError:
             st.warning("Produto não encontrado (talvez excluído).")
             st.session_state.editing_product_id = None
@@ -483,45 +388,10 @@ with tab1:
         with c_dup:
             if st.button("📋 Duplicar", help="Criar cópia deste produto com receitas e componentes"):
                 try:
-                    # 1. Create new product with copied data
-                    new_name = f"{curr_prod['name']} (Cópia)"
-                    cursor.execute("""
-                        INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
-                        VALUES (?, ?, ?, ?, '[]', 0, 0)
-                    """, (new_name, curr_prod['description'], curr_prod['category'], curr_prod['markup']))
-                    conn.commit()
-                    new_prod_id = cursor.lastrowid
-                    
-                    # 2. Copy recipes (product_recipes)
-                    recipes = pd.read_sql("""
-                        SELECT material_id, quantity FROM product_recipes WHERE product_id = ?
-                    """, conn, params=(selected_prod_id,))
-                    for _, rec in recipes.iterrows():
-                        cursor.execute("""
-                            INSERT INTO product_recipes (product_id, material_id, quantity)
-                            VALUES (?, ?, ?)
-                        """, (new_prod_id, rec['material_id'], rec['quantity']))
-                    
-                    # 3. Copy kit components (product_kits)
-                    kits = pd.read_sql("""
-                        SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id = ?
-                    """, conn, params=(selected_prod_id,))
-                    for _, kit in kits.iterrows():
-                        cursor.execute("""
-                            INSERT INTO product_kits (parent_product_id, child_product_id, quantity)
-                            VALUES (?, ?, ?)
-                        """, (new_prod_id, kit['child_product_id'], kit['quantity']))
-                    
-                    conn.commit()
-                    
-                    # Log audit
-                    audit.log_action(conn, 'CREATE', 'products', new_prod_id, None, {
-                        'name': new_name, 'duplicated_from': selected_prod_id
-                    })
-                    
+                    new_prod_id = product_service.duplicate_product(conn, selected_prod_id, curr_prod)
                     st.session_state.editing_product_id = new_prod_id
                     product_service.get_all_products.clear()
-                    admin_utils.show_feedback_dialog(f"Produto '{new_name}' criado com sucesso!", level="success")
+                    admin_utils.show_feedback_dialog(f"Produto '{curr_prod['name']} (Cópia)' criado com sucesso!", level="success")
                 except Exception as e:
                     admin_utils.show_feedback_dialog(f"Erro ao duplicar: {e}", level="error")
         
@@ -535,12 +405,7 @@ with tab1:
                 # Check if it is a KIT
                 is_kit_edit = False
                 kit_stock_calc = 0
-                check_kit = pd.read_sql("""
-                    SELECT pk.quantity, p.stock_quantity as child_stock, p.name 
-                    FROM product_kits pk
-                    JOIN products p ON pk.child_product_id = p.id
-                    WHERE pk.parent_product_id = ?
-                """, conn, params=(selected_prod_id,))
+                check_kit = product_service.get_kit_detail_for_edit(conn, selected_prod_id)
                 
                 kit_info_text = ""
                 if not check_kit.empty:
@@ -549,7 +414,6 @@ with tab1:
                     kit_stock_calc = int(check_kit['max'].min())
                     if kit_stock_calc < 0: kit_stock_calc = 0
                     
-                    # Debug info
                     kit_info_text = "Estoque calculado pelos componentes: " + ", ".join([f"{r['name']}: {int(r['child_stock'])} (Precisa {r['quantity']})" for _, r in check_kit.iterrows()])
 
                 if is_kit_edit:
@@ -560,12 +424,7 @@ with tab1:
                     curr_stock = int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0
                     new_stock = st.number_input("Estoque Atual", value=curr_stock, step=1, help="Alterar este valor registrará um ajuste manual no histórico.")
                 
-                # Safe category index logic
-                # Ensure cat_opts available (fetched at top of tab)
-                if 'cat_opts' not in locals():
-                     try: cat_opts = pd.read_sql("SELECT name FROM product_categories", conn)['name'].tolist()
-                     except Exception:
-                         cat_opts = ["Utilitário", "Decorativo", "Outros"]
+                # cat_opts already fetched at top of tab
 
                 curr_cat = curr_prod['category']
                 cat_idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 0
@@ -582,28 +441,16 @@ with tab1:
                     if not is_kit_edit:
                          if new_stock != (int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0):
                             diff = new_stock - (int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0)
-                            # Log adjustment
-                            from datetime import datetime as dt
-                            # Get user
                             user_id, username = None, 'system'
                             if 'current_user' in st.session_state and st.session_state.current_user:
                                 user_id = int(st.session_state.current_user.get('id'))
                                 username = st.session_state.current_user.get('username', 'unknown')
-                                
-                            cursor.execute("""
-                                INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """, (dt.now().isoformat(), selected_prod_id, new_name, diff, user_id, username, "Ajuste Manual"))
+                            product_service.log_stock_adjustment(conn, selected_prod_id, new_name, diff, user_id, username)
 
-                    if not is_kit_edit:
-                         if new_stock != (int(curr_prod['stock_quantity']) if curr_prod['stock_quantity'] else 0):
-                            pass # History log already handles this differently above
-
-                    cursor.execute("UPDATE products SET name=?, category=?, description=?, stock_quantity=? WHERE id=?", (new_name, new_cat, new_desc, new_stock, selected_prod_id))
-                    audit.log_action(conn, 'UPDATE', 'products', selected_prod_id, 
-                        {'name': curr_prod['name'], 'stock': curr_prod['stock_quantity']},
-                        {'name': new_name, 'stock': new_stock}, commit=False)
-                    conn.commit()
+                    product_service.update_product_details(
+                        conn, selected_prod_id, new_name, new_cat, new_desc, new_stock,
+                        old_name=curr_prod['name'], old_stock=curr_prod['stock_quantity']
+                    )
                     product_service.get_all_products.clear()
                     product_service.get_categories.clear()
                     admin_utils.show_feedback_dialog("Detalhes atualizados!", level="success")
@@ -616,7 +463,7 @@ with tab1:
             st.caption("Adicione matérias-primas (argila, esmaltes) usadas para criar este produto.")
             with st.form("add_ingredient"):
                 c1, c2 = st.columns([3, 1])
-                materials = pd.read_sql("SELECT id, name, unit, price_per_unit FROM materials ORDER BY name", conn)
+                materials = product_service.get_materials_list(conn)
                 mat_dict = {f"{row['name']} ({row['unit']}) - R$ {row['price_per_unit']:.2f}": row['id'] for _, row in materials.iterrows()}
                 
                 mat_choice = c1.selectbox("Material/Mão de Obra", [""] + list(mat_dict.keys()))
@@ -625,18 +472,11 @@ with tab1:
                 if st.form_submit_button("➕ Adicionar Insumo"):
                     if qty_needed > 0 and mat_choice:
                         mat_id = mat_dict[mat_choice]
-                        cursor.execute("INSERT INTO product_recipes (product_id, material_id, quantity) VALUES (?, ?, ?)",
-                                       (selected_prod_id, mat_id, qty_needed))
-                        conn.commit()
+                        product_service.add_recipe_item(conn, selected_prod_id, mat_id, qty_needed)
                         st.rerun()
 
             # List Ingredients
-            current_recipe = pd.read_sql("""
-                SELECT pr.id, m.name, pr.quantity, m.unit, m.price_per_unit
-                FROM product_recipes pr
-                JOIN materials m ON pr.material_id = m.id
-                WHERE pr.product_id = ?
-            """, conn, params=(selected_prod_id,))
+            current_recipe = product_service.get_product_recipe(conn, selected_prod_id)
             
             if not current_recipe.empty:
                 st.dataframe(current_recipe, hide_index=True, use_container_width=True)
@@ -645,8 +485,7 @@ with tab1:
                 if st.button("🗑️ Remover Insumo selecionado", use_container_width=True):
                     if del_id:
                         def do_del_rec(rid=del_id):
-                            cursor.execute("DELETE FROM product_recipes WHERE id=?", (rid,))
-                            conn.commit()
+                            product_service.delete_recipe_item(conn, rid)
                         
                         admin_utils.show_confirmation_dialog(
                             "Remover este insumo da receita do produto?",
@@ -669,7 +508,7 @@ with tab1:
                 # Name input moved down to be dynamic
                 
                 # Material Link (Optional) - Glazes
-                materials_df = pd.read_sql("SELECT id, name, unit, price_per_unit FROM materials WHERE type != 'Mão de Obra' ORDER BY name", conn)
+                materials_df = product_service.get_materials_for_variants(conn)
                 mat_opts = {f"{row['name']} ({row['unit']})": row['id'] for _, row in materials_df.iterrows()}
                 v_mat_keys = [""] + list(mat_opts.keys())
                 
@@ -796,7 +635,7 @@ with tab1:
             with st.form("add_kit_item"):
                 c1, c2 = st.columns([3, 1])
                 # Filter out self
-                prods = pd.read_sql("SELECT id, name FROM products WHERE id != ? ORDER BY name", conn, params=(selected_prod_id,))
+                prods = product_service.get_products_for_kit(conn, selected_prod_id)
                 prod_dict = {row['name']: row['id'] for _, row in prods.iterrows()}
                 
                 prod_choice = c1.selectbox("Produto Componente", [""] + list(prod_dict.keys()))
@@ -805,19 +644,12 @@ with tab1:
                 if st.form_submit_button("➕ Adicionar Componente"):
                     if prod_choice:
                         child_id = prod_dict[prod_choice]
-                        cursor.execute("INSERT INTO product_kits (parent_product_id, child_product_id, quantity) VALUES (?, ?, ?)",
-                                       (selected_prod_id, child_id, k_qty))
-                        conn.commit()
+                        product_service.add_kit_item(conn, selected_prod_id, child_id, k_qty)
                         st.toast("Componente adicionado!")
                         st.rerun()
             
             # List Kit Items
-            kit_items = pd.read_sql("""
-                SELECT pk.id, p.name as component_name, pk.quantity
-                FROM product_kits pk
-                JOIN products p ON pk.child_product_id = p.id
-                WHERE pk.parent_product_id = ?
-            """, conn, params=(selected_prod_id,))
+            kit_items = product_service.get_kit_items_detail(conn, selected_prod_id)
             
             if not kit_items.empty:
                 st.warning("⚠️ Nota: Ao produzir este KIT, o estoque dos componentes abaixo será descontado.")
@@ -827,8 +659,7 @@ with tab1:
                 if st.button("🗑️ Remover Componente selecionado", use_container_width=True):
                      if del_kit_id:
                         def do_del_kit(kid=del_kit_id):
-                            cursor.execute("DELETE FROM product_kits WHERE id=?", (kid,))
-                            conn.commit()
+                            product_service.delete_kit_item(conn, kid)
 
                         admin_utils.show_confirmation_dialog(
                             "Remover este componente do kit?",
@@ -852,8 +683,7 @@ with tab1:
                             st.image(img_path, width=150)
                             if st.button("🗑️", key=f"del_img_t_{i}"):
                                 curr_imgs.pop(i)
-                                cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(curr_imgs), selected_prod_id))
-                                conn.commit()
+                                product_service.update_product_images(conn, selected_prod_id, curr_imgs)
                                 product_service.get_all_products.clear()
                                 st.rerun()
                         except Exception:
@@ -868,22 +698,16 @@ with tab1:
                          path = os.path.join(save_dir, uf.name)
                          with open(path, "wb") as f: f.write(uf.getbuffer())
                          curr_imgs.append(path)
-                    cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(curr_imgs), selected_prod_id))
-                    conn.commit()
+                    product_service.update_product_images(conn, selected_prod_id, curr_imgs)
                     product_service.get_all_products.clear()
                     admin_utils.show_feedback_dialog("Salvo!", level="success")
                     st.rerun()
 
             # --- NEW: Auto-Display Component Images (Kits) ---
-            comps = pd.read_sql("SELECT child_product_id FROM product_kits WHERE parent_product_id=?", conn, params=(selected_prod_id,))
-            if not comps.empty:
+            comp_prods = product_service.get_kit_component_images(conn, selected_prod_id)
+            if not comp_prods.empty:
                 st.markdown("---")
                 st.info("ℹ️ Abaixo são exibidas automaticamente as imagens dos produtos que compõem este kit.")
-                
-                comp_ids = comps['child_product_id'].tolist()
-                id_list = ",".join(map(str, comp_ids))
-                
-                comp_prods = pd.read_sql(f"SELECT name, image_paths FROM products WHERE id IN ({id_list})", conn)
                 
                 for _, cp in comp_prods.iterrows():
                     try:
@@ -909,12 +733,7 @@ with tab1:
             cost_breakdown = []
             
             # Check Kit
-            kit_components = pd.read_sql("""
-                SELECT pk.quantity, p.name, p.base_price 
-                FROM product_kits pk
-                JOIN products p ON pk.child_product_id = p.id
-                WHERE pk.parent_product_id = ?
-            """, conn, params=(selected_prod_id,))
+            kit_components = product_service.get_pricing_kit_components(conn, selected_prod_id)
             
             if not kit_components.empty:
                 st.info("ℹ️ Custo baseado na soma dos produtos componentes (Kit).")
@@ -924,12 +743,7 @@ with tab1:
                     cost_breakdown.append({"Item": row['name'], "Qtd": row['quantity'], "Unit": f"R$ {row['base_price']:.2f}", "Total": f"R$ {subtotal:.2f}"})
             else:
                 # Check Recipe
-                recipe_items = pd.read_sql("""
-                    SELECT m.name, pr.quantity, m.price_per_unit, m.unit
-                    FROM product_recipes pr
-                    JOIN materials m ON pr.material_id = m.id
-                    WHERE pr.product_id = ?
-                """, conn, params=(selected_prod_id,))
+                recipe_items = product_service.get_pricing_recipe_items(conn, selected_prod_id)
                 
                 if not recipe_items.empty:
                     st.info("ℹ️ Custo baseado na receita de insumos.")
@@ -977,8 +791,7 @@ with tab1:
             
             # Save Button (Top)
             if col_final.button("💾 Salvar", type="primary", use_container_width=True, help="Salvar Preço Base e Markup"):
-                cursor.execute("UPDATE products SET markup = ?, base_price = ? WHERE id = ?", (new_markup, new_price, selected_prod_id))
-                conn.commit()
+                product_service.save_product_pricing(conn, selected_prod_id, new_markup, new_price)
                 product_service.get_all_products.clear()
                 admin_utils.show_feedback_dialog("Preço Base Salvo!", level="success")
             
@@ -1000,7 +813,7 @@ with tab1:
                         # Fetch material price
                         try:
                             # Optimization: Could cache materials price, but single query per row is acceptable for small scale
-                            mat_p = pd.read_sql("SELECT price_per_unit, unit FROM materials WHERE id=?", conn, params=(v_row['material_id'],)).iloc[0]
+                            mat_p = product_service.get_material_price(conn, v_row['material_id']).iloc[0]
                             extra_cost = v_row['material_quantity'] * mat_p['price_per_unit']
                             mat_info = f"{v_row['material_name']} ({v_row['material_quantity']} {mat_p['unit']})"
                         except Exception:
@@ -1059,9 +872,9 @@ with tab1:
                     v_mat_price = 0.0
                     if sel_var['material_id']:
                          try:
-                             mp = pd.read_sql("SELECT price_per_unit FROM materials WHERE id=?", conn, params=(sel_var['material_id'],)).iloc[0]['price_per_unit']
+                             mp = product_service.get_material_price(conn, sel_var['material_id']).iloc[0]['price_per_unit']
                              v_mat_price = mp * sel_var['material_quantity']
-                         except Exception: pass
+                         except Exception as e: logger.warning(f"Erro ao buscar preço do material da variação: {e}")
                     
                     v_total_cost = total_cost + v_mat_price
                     v_curr_price = (float(curr_prod['base_price']) if curr_prod['base_price'] else 0) + sel_var['price_adder']
@@ -1104,11 +917,7 @@ with tab1:
         with st.expander("🚫 Zona de Perigo"):
             if st.button("EXCLUIR PRODUTO", type="primary", use_container_width=True):
                 def do_delete_prod(pid=selected_prod_id, pname=curr_prod['name']):
-                    cursor.execute("DELETE FROM product_recipes WHERE product_id=?", (pid,))
-                    cursor.execute("DELETE FROM product_kits WHERE parent_product_id=?", (pid,))
-                    cursor.execute("DELETE FROM products WHERE id=?", (pid,))
-                    audit.log_action(conn, 'DELETE', 'products', pid, {'name': pname}, commit=False)
-                    conn.commit()
+                    product_service.delete_product(conn, pid, pname)
                     product_service.get_all_products.clear()
                     st.session_state.editing_product_id = None
 
@@ -1132,13 +941,13 @@ with tab2:
     
     with fh2:
         # Product filter
-        prod_names = pd.read_sql("SELECT DISTINCT product_name FROM production_history ORDER BY product_name", conn)
+        prod_names = product_service.get_production_history_product_names(conn)
         prod_filter_opts = ["Todos"] + (prod_names['product_name'].tolist() if not prod_names.empty else [])
         filter_prod = st.selectbox("Produto", prod_filter_opts)
     
     with fh3:
         # User filter
-        user_names = pd.read_sql("SELECT DISTINCT username FROM production_history ORDER BY username", conn)
+        user_names = product_service.get_production_history_usernames(conn)
         user_filter_opts = ["Todos"] + (user_names['username'].tolist() if not user_names.empty else [])
         filter_user = st.selectbox("Usuário", user_filter_opts)
     
@@ -1169,7 +978,7 @@ with tab2:
     
     query_parts.append("ORDER BY timestamp DESC LIMIT 100")
     
-    history_df = pd.read_sql(" ".join(query_parts), conn, params=params)
+    history_df = product_service.get_production_history_filtered(conn, " ".join(query_parts), params)
     
     # Statistics
     if not history_df.empty:
@@ -1200,17 +1009,9 @@ with tab2:
                         if st.button("💾 Salvar", key=f"save_qty_{row['id']}"):
                             diff = new_qty - row['quantity']
                             
-                            # Update production history
-                            cursor.execute("UPDATE production_history SET quantity = ? WHERE id = ?", (new_qty, row['id']))
-                            
-                            # Adjust product stock accordingly
-                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (diff, row['product_id']))
-                            
-                            conn.commit()
-                            
-                            # Audit log
-                            audit.log_action(conn, 'UPDATE', 'production_history', row['id'], 
-                                {'quantity': row['quantity']}, {'quantity': new_qty})
+                            product_service.update_production_history_qty(
+                                conn, row['id'], new_qty, row['quantity'], row['product_id']
+                            )
                             
                             product_service.get_all_products.clear()
                             admin_utils.show_feedback_dialog("Atualizado!", level="success")
@@ -1220,12 +1021,8 @@ with tab2:
                     # Delete button
                     if st.button("🗑️", key=f"del_prod_{row['id']}", help="Excluir registro"):
                         def do_delete_hist(rid=row['id'], pid=row['product_id'], qty=row['quantity'], pname=row['product_name']):
-                            # Revert stock: subtract the quantity that was recorded
-                            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (qty, pid))
-                            cursor.execute("DELETE FROM production_history WHERE id = ?", (rid,))
-                            conn.commit()
+                            product_service.delete_production_history(conn, rid, pid, qty, pname)
                             product_service.get_all_products.clear()
-                            audit.log_action(conn, 'DELETE', 'production_history', rid, {'product_name': pname, 'quantity': qty}, None)
 
                         admin_utils.show_confirmation_dialog(
                             f"Excluir este registro de produção? O estoque de '{row['product_name']}' será revertido (subtraído em {int(row['quantity'])}).",

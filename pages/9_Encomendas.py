@@ -4,6 +4,7 @@ import database
 from datetime import date, datetime, timedelta
 import admin_utils
 import services.product_service as product_service
+import services.order_service as order_service
 import audit
 import reports
 import time
@@ -60,54 +61,15 @@ st.subheader("Gerenciar Pedidos")
     
 # Logic to Delete Order (and restore stock)
 def delete_order(oid):
-    # Use discrete connection for deletion
     conn_del = database.get_connection()
-    cursor_del = conn_del.cursor()
     try:
-        # 1. Get reserved items to restore
-        items = pd.read_sql("SELECT product_id, quantity_from_stock, variant_id FROM commission_items WHERE order_id=?", conn_del, params=(oid,))
-        
-        def clean_bin(val):
-            if isinstance(val, bytes): return int.from_bytes(val, 'little')
-            return val
-
-        items['quantity_from_stock'] = items['quantity_from_stock'].apply(clean_bin)
-        items['product_id'] = items['product_id'].apply(clean_bin)
-        
-        # Get order data for audit
-        order_data = pd.read_sql("SELECT client_id, total_price, status FROM commission_orders WHERE id=?", conn_del, params=(oid,))
-        old_data = order_data.iloc[0].to_dict() if not order_data.empty else {}
-        
-        cursor_del.execute("BEGIN TRANSACTION")
-        for _, it in items.iterrows():
-            qty_rest = int(it['quantity_from_stock'])
-            if qty_rest > 0:
-                if pd.notna(it['variant_id']) and it['variant_id'] > 0:
-                     cursor_del.execute("UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                                  (qty_rest, int(it['variant_id'])))
-                else:
-                     cursor_del.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                                  (qty_rest, int(it['product_id'])))
-        
-        cursor_del.execute("DELETE FROM commission_items WHERE order_id=?", (oid,))
-        cursor_del.execute("DELETE FROM commission_orders WHERE id=?", (oid,))
-        conn_del.commit()
-        
-        # Audit log (needs a connection, using global for simplicity as it's a read-then-write but better to use del or its own)
-        audit.log_action(conn_del, 'DELETE', 'commission_orders', oid, old_data, None)
+        order_service.delete_commission_order(conn_del, oid)
         return True
-    except sqlite3.Error as e:
-        conn_del.rollback()
-        log_exception(logger, f"Database error deleting order {oid}", e)
-        admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
-        return False
     except Exception as e:
-        conn_del.rollback()
-        log_exception(logger, f"Unexpected error deleting order {oid}", e)
-        admin_utils.show_feedback_dialog(f"Erro inesperado: {e}", level="error")
+        log_exception(logger, f"Error deleting order {oid}", e)
+        admin_utils.show_feedback_dialog(f"Erro ao excluir encomenda: {e}", level="error")
         return False
     finally:
-        cursor_del.close()
         conn_del.close()
 
 # --- Filters ---
@@ -119,7 +81,7 @@ with kf1:
 
 with kf2:
     # Client Filter
-    cli_opts = ["Todos"] + pd.read_sql("SELECT name FROM clients ORDER BY name", conn)['name'].tolist()
+    cli_opts = ["Todos"] + order_service.get_all_clients(conn)['name'].tolist()
     sel_client = st.selectbox("Cliente", cli_opts)
 
 with kf3:
@@ -128,13 +90,7 @@ with kf3:
     d_end = st.date_input("Até", value=None, format="DD/MM/YYYY")
 
 # Fetch Orders
-orders = pd.read_sql("""
-    SELECT o.id, c.name as client, o.date_due, o.status, o.total_price, o.notes, o.client_id,
-           o.manual_discount, o.deposit_amount, o.date_created, o.image_paths
-    FROM commission_orders o
-    JOIN clients c ON o.client_id = c.id
-    ORDER BY o.date_due ASC
-""", conn)
+orders = order_service.get_orders_for_management(conn)
 
 # Apply Filters
 if not orders.empty:
@@ -193,21 +149,7 @@ else:
         with st.expander(f"📦 {fmt_id} - {order['client']} (Prazo: {due_date.strftime('%d/%m/%Y')}) - {status_text}", expanded=is_expanded):
             
             # Fetch Items
-            # Fetch Items
-            items = pd.read_sql("""
-                SELECT ci.id, p.name, ci.quantity, ci.quantity_from_stock, ci.quantity_produced, ci.product_id, ci.unit_price, ci.notes, p.image_paths,
-                       ci.variant_id, pv.variant_name
-                FROM commission_items ci
-                LEFT JOIN products p ON ci.product_id = p.id
-                LEFT JOIN product_variants pv ON ci.variant_id = pv.id
-                WHERE ci.order_id = ?
-            """, conn, params=(order['id'],))
-            
-            # Helper for binary data cleanup
-            def clean_numeric(val):
-                if isinstance(val, bytes):
-                    return int.from_bytes(val, 'little')
-                return val
+            items = order_service.get_order_items_detail(conn, order['id'])
             
             # Helper for images from product
             def get_prod_imgs(p_str):
@@ -217,15 +159,6 @@ else:
                     return l if l and isinstance(l, list) else []
                 except: return []
             
-            # Apply cleanup
-            for col in ['quantity', 'quantity_from_stock', 'quantity_produced', 'product_id']:
-                items[col] = items[col].apply(clean_numeric)
-
-            items['quantity'] = items['quantity'].fillna(0).astype(int)
-            items['quantity_from_stock'] = items['quantity_from_stock'].fillna(0).astype(int)
-            items['quantity_produced'] = items['quantity_produced'].fillna(0).astype(int)
-            items['name'] = items['name'].fillna("Produto Desconhecido")
-            items['notes'] = items['notes'].fillna("")
             items['image_paths'] = items['image_paths'].apply(get_prod_imgs)
             
             # Financials & Dates Highlighting
@@ -268,23 +201,13 @@ else:
                                 if st.button("🗑️", key=f"del_img_{order['id']}_{idx}"):
                                     order_images.pop(idx)
                                     conn_write = database.get_connection()
-                                    cursor_write = conn_write.cursor()
                                     try:
-                                        cursor_write.execute("BEGIN TRANSACTION")
-                                        cursor_write.execute("UPDATE commission_orders SET image_paths=? WHERE id=?", 
-                                                       (str(order_images), order['id']))
-                                        conn_write.commit()
+                                        order_service.update_order_images(conn_write, order['id'], order_images)
                                         st.rerun()
-                                    except sqlite3.Error as e:
-                                        conn_write.rollback()
-                                        log_exception(logger, f"Database error deleting image for order {order['id']}", e)
-                                        st.error(f"Erro de Banco de Dados: {e}")
                                     except Exception as e:
-                                        conn_write.rollback()
                                         log_exception(logger, f"Error deleting image for order {order['id']}", e)
                                         st.error(f"Erro ao excluir imagem: {e}")
                                     finally:
-                                        cursor_write.close()
                                         conn_write.close()
                 else:
                     st.caption("Nenhuma foto anexada")
@@ -313,23 +236,13 @@ else:
                             
                             # Save to database
                             conn_write = database.get_connection()
-                            cursor_write = conn_write.cursor()
                             try:
-                                cursor_write.execute("BEGIN TRANSACTION")
-                                cursor_write.execute("UPDATE commission_orders SET image_paths=? WHERE id=?", 
-                                               (str(order_images), order['id']))
-                                conn_write.commit()
+                                order_service.update_order_images(conn_write, order['id'], order_images)
                                 admin_utils.show_feedback_dialog(f"{len(new_photos)} foto(s) salva(s)!", level="success")
-                            except sqlite3.Error as e:
-                                conn_write.rollback()
-                                log_exception(logger, f"Database error uploading photos for order {order['id']}", e)
-                                admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                             except Exception as e:
-                                conn_write.rollback()
                                 log_exception(logger, f"Error uploading photos for order {order['id']}", e)
                                 admin_utils.show_feedback_dialog(f"Erro ao salvar fotos: {e}", level="error")
                             finally:
-                                cursor_write.close()
                                 conn_write.close()
                         else:
                             admin_utils.show_feedback_dialog("Selecione pelo menos uma foto.", level="warning")
@@ -345,7 +258,7 @@ else:
                     with st.form(f"add_item_{order['id']}"):
                         # Load Products
                         try:
-                            prods_df = pd.read_sql("SELECT id, name, stock_quantity, base_price FROM products ORDER BY name", conn)
+                            prods_df = order_service.get_products_for_selection(conn)
                             prod_opts = [f"{r['name']} (R$ {r['base_price']:.2f})" for _, r in prods_df.iterrows()]
                         except Exception:
                             prod_opts = []
@@ -359,7 +272,7 @@ else:
                         if sel_new_prod:
                             p_name_core = sel_new_prod.split(' (')[0]
                             p_row_sel = prods_df[prods_df['name'] == p_name_core].iloc[0]
-                            vars_df = pd.read_sql("SELECT id, variant_name, price_adder, stock_quantity FROM product_variants WHERE product_id=?", conn, params=(p_row_sel['id'],))
+                            vars_df = order_service.get_product_variants(conn, p_row_sel['id'])
                             
                             if not vars_df.empty:
                                 v_opts = {f"{r['variant_name']} (+{r['price_adder']})": r['id'] for _, r in vars_df.iterrows()}
@@ -380,9 +293,11 @@ else:
                             # Check stock source (Variant vs Product)
                             stock_av = p_row['stock_quantity']
                             if sel_variant_id:
-                                # Discrete connection for stock check and write
                                 with database.db_session() as conn_check:
-                                    stock_av = pd.read_sql("SELECT stock_quantity FROM product_variants WHERE id=?", conn_check, params=(sel_variant_id,)).iloc[0]['stock_quantity']
+                                    v_stock = order_service.get_product_variants(conn_check, p_row['id'])
+                                    v_match = v_stock[v_stock['id'] == sel_variant_id]
+                                    if not v_match.empty:
+                                        stock_av = v_match.iloc[0]['stock_quantity']
                             
                             qty_res_new = min(stock_av, new_qty) if use_stock_new else 0
                             
@@ -393,45 +308,18 @@ else:
                                 price = p_row['base_price'] + price_mod
                                 
                                 conn_write = database.get_connection()
-                                cursor_write = conn_write.cursor()
                                 try:
-                                    cursor_write.execute("BEGIN TRANSACTION")
-                                    # Insert Item
-                                    cursor_write.execute("""
-                                        INSERT INTO commission_items (order_id, product_id, quantity, quantity_from_stock, quantity_produced, unit_price, variant_id)
-                                        VALUES (?, ?, ?, ?, 0, ?, ?)
-                                    """, (order['id'], int(p_row['id']), new_qty, int(qty_res_new), float(price), int(sel_variant_id) if sel_variant_id else None))
-                                    
-                                    # Reserve Stock (Handle Kits)
-                                    if qty_res_new > 0:
-                                        if sel_variant_id:
-                                             cursor_write.execute("UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(sel_variant_id)))
-                                        else:
-                                            kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn_write, params=(int(p_row['id']),))
-                                            if not kit_comps.empty:
-                                                for _, kc in kit_comps.iterrows():
-                                                    deduct_res = qty_res_new * kc['quantity']
-                                                    cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_res), int(kc['child_product_id'])))
-                                            else:
-                                                cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(qty_res_new), int(p_row['id'])))
-                                    
-                                    # Update Order Total
-                                    cursor_write.execute("UPDATE commission_orders SET total_price = total_price + ? WHERE id=?", (price * new_qty, order['id']))
-                                    
-                                    success = True
-                                    conn_write.commit()
+                                    order_service.add_commission_item_with_stock(
+                                        conn_write, order['id'], int(p_row['id']), new_qty, 
+                                        int(qty_res_new), float(price), 
+                                        int(sel_variant_id) if sel_variant_id else None
+                                    )
                                     admin_utils.show_feedback_dialog("Item adicionado!", level="success")
                                     st.rerun()
-                                except sqlite3.Error as e:
-                                    conn_write.rollback()
-                                    log_exception(logger, f"Database error adding item to order {order['id']}", e)
-                                    admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                                 except Exception as e:
-                                    conn_write.rollback()
                                     log_exception(logger, f"Error adding item to order {order['id']}", e)
                                     admin_utils.show_feedback_dialog(f"Erro ao adicionar item: {e}", level="error")
                                 finally:
-                                    cursor_write.close()
                                     conn_write.close()
             # Edit Order Button
             with c_act2:
@@ -445,7 +333,7 @@ else:
                         # Client Edit (Advanced)
                         current_cli_index = 0
                         try:
-                            all_clients = pd.read_sql("SELECT id, name FROM clients", conn)
+                            all_clients = order_service.get_all_clients(conn)
                             cli_list = all_clients['name'].tolist()
                             if order['client'] in cli_list:
                                 current_cli_index = cli_list.index(order['client'])
@@ -460,20 +348,12 @@ else:
                             
                             # Update Order
                             try:
-                                cursor.execute("""
-                                    UPDATE commission_orders 
-                                    SET date_due=?, notes=?, manual_discount=?, deposit_amount=?, client_id=? 
-                                    WHERE id=?
-                                """, (new_date, new_notes, new_discount, new_deposit, int(new_client_id), order['id']))
-                                conn.commit()
+                                order_service.update_order_details(conn, order['id'], new_date, new_notes, new_discount, new_deposit, new_client_id)
                                 admin_utils.show_feedback_dialog("Atualizado!", level="success")
                                 st.rerun()
-                            except sqlite3.Error as e:
-                                log_exception(logger, f"Database error updating order {order['id']}", e)
-                                admin_utils.show_feedback_dialog(f"Erro ao atualizar: {e}", level="error")
                             except Exception as e:
                                 log_exception(logger, f"Error updating order {order['id']}", e)
-                                admin_utils.show_feedback_dialog(f"Erro inesperado: {e}", level="error")
+                                admin_utils.show_feedback_dialog(f"Erro ao atualizar: {e}", level="error")
 
             # Delete Order
             if c_act3.button("🗑️ Excluir", key=f"del_ord_{order['id']}"):
@@ -556,48 +436,25 @@ else:
                                 diff = qty_edit - old_qty
                                 
                                 if diff != 0:
-                                    success = False
                                     conn_write = database.get_connection()
-                                    cursor_write = conn_write.cursor()
                                     try:
-                                        cursor_write.execute("BEGIN TRANSACTION")
-                                        # Update Item
-                                        cursor_write.execute("UPDATE commission_items SET quantity=? WHERE id=?", (qty_edit, item['id']))
-                                        
-                                        # Update Order Total
-                                        cost_diff = diff * item['unit_price']
-                                        cursor_write.execute("UPDATE commission_orders SET total_price = total_price + ? WHERE id=?", (cost_diff, order['id']))
-                                        
-                                        if qty_edit < item['quantity_from_stock']:
-                                            # Return difference to stock
-                                            to_return = item['quantity_from_stock'] - qty_edit
-                                            cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (to_return, item['product_id']))
-                                            cursor_write.execute("UPDATE commission_items SET quantity_from_stock=? WHERE id=?", (qty_edit, item['id']))
-                                        
-                                        conn_write.commit()
-                                        success = True
-                                    except sqlite3.Error as e:
-                                        conn_write.rollback()
-                                        log_exception(logger, f"Database error updating qty for item {item['id']}", e)
-                                        admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
+                                        order_service.update_item_quantity(
+                                            conn_write, order['id'], item['id'], qty_edit, old_qty,
+                                            item['quantity_from_stock'], item['unit_price'], item['product_id']
+                                        )
+                                        st.rerun()
                                     except Exception as e:
-                                        conn_write.rollback()
                                         log_exception(logger, f"Error updating qty for item {item['id']}", e)
                                         admin_utils.show_feedback_dialog(f"Erro na operação: {e}", level="error")
                                     finally:
-                                        cursor_write.close()
                                         conn_write.close()
-                                    
-                                    if success:
-                                        st.rerun()
 
                     st.caption(f"Reservado: {item['quantity_from_stock']} | A Produzir: {target_prod}")
                 
                 with ci2:
                     produced = item['quantity_produced']
                     # WIP Qty
-                    wip_res = pd.read_sql("SELECT SUM(quantity) as qty FROM production_wip WHERE order_item_id=?", conn, params=(item['id'],))
-                    wip_qty = wip_res.iloc[0]['qty'] if not wip_res.empty and pd.notna(wip_res.iloc[0]['qty']) else 0
+                    wip_qty = order_service.get_wip_quantity(conn, item['id'])
                     
                     total_acc = produced + wip_qty
                     remaining = max(0, target_prod - total_acc)
@@ -618,76 +475,31 @@ else:
                                     st.caption("Baixa estoque e finaliza imediatamente")
                                     amount = st.number_input("Qtd", min_value=1, max_value=remaining, key=f"prod_in_{item['id']}")
                                     if st.button("Confirmar", key=f"conf_{item['id']}", type="primary"):
-                                        success = False
                                         old_order_status = order['status']
-                                        conn_write = database.get_connection()
-                                        cursor_write = conn_write.cursor()
-                                        try:
-                                            cursor_write.execute("BEGIN TRANSACTION")
-                                            # Use centralized deduction
-                                            glaze_id = item.get('variant_id') if item.get('variant_id') and item['variant_id'] > 0 else None
-                                            product_service.deduct_production_materials_central(cursor_write, item['product_id'], amount, note_suffix=f"Produção Rápida Encomenda #{fmt_id}")
-                                            
-                                            # Update Item
-                                            cursor_write.execute("UPDATE commission_items SET quantity_produced = quantity_produced + ? WHERE id=?", (amount, item['id']))
-                                            
-                                            # Check pending items
-                                            cursor_write.execute("""
-                                                SELECT COUNT(*) FROM commission_items 
-                                                WHERE order_id=? AND quantity_produced < (quantity - quantity_from_stock)
-                                            """, (order['id'],))
-                                            pending_count = cursor_write.fetchone()[0]
-                                            
-                                            new_status = 'Concluída' if pending_count == 0 else 'Em Produção'
-                                            cursor_write.execute("UPDATE commission_orders SET status=? WHERE id=?", (new_status, order['id']))
-                                            
-                                            # Log status change
-                                            if old_order_status != new_status:
-                                                audit.log_action(conn_write, 'UPDATE', 'commission_orders', order['id'], 
-                                                    {'status': old_order_status}, {'status': new_status})
-                                            
-                                            # Log production history
-                                            from datetime import datetime as dt
-                                            user_id, username = None, 'system'
-                                            if 'current_user' in st.session_state and st.session_state.current_user:
-                                                user_id = st.session_state.current_user.get('id')
-                                                username = st.session_state.current_user.get('username', 'unknown')
-                                            
-                                            prod_name_row = pd.read_sql("SELECT name FROM products WHERE id=?", conn_write, params=(item['product_id'],))
-                                            prod_name = prod_name_row.iloc[0]['name'] if not prod_name_row.empty else 'Produto'
-                                            
-                                            cursor_write.execute("""
-                                                INSERT INTO production_history (timestamp, product_id, product_name, quantity, order_id, user_id, username)
-                                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                                            """, (dt.now().isoformat(), item['product_id'], prod_name, amount, order['id'], user_id, username))
-                                            new_hist_id = cursor_write.lastrowid
-                                            
-                                            conn_write.commit()
-                                            
-                                            # Audit Logs
-                                            audit.log_action(conn_write, 'CREATE', 'production_history', new_hist_id, None, {
-                                                'product_id': item.get('product_id'), 'product_name': prod_name, 'quantity': amount, 'order_id': order.get('id')
-                                            })
-                                            audit.log_action(conn_write, 'UPDATE', 'commission_items', item.get('id'), 
-                                                {'quantity_produced': item.get('quantity_produced')}, {'quantity_produced': item.get('quantity_produced', 0) + amount})
-                                            
-                                            success = True
-                                        except sqlite3.Error as e:
-                                            conn_write.rollback()
-                                            log_exception(logger, f"Database error quick producing item {item['id']}", e)
-                                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
-                                        except Exception as e:
-                                            conn_write.rollback()
-                                            log_exception(logger, f"Error quick producing item {item['id']}", e)
-                                            admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
-                                        finally:
-                                            cursor_write.close()
-                                            conn_write.close()
+                                        user_id, username = None, 'system'
+                                        if 'current_user' in st.session_state and st.session_state.current_user:
+                                            user_id = st.session_state.current_user.get('id')
+                                            username = st.session_state.current_user.get('username', 'unknown')
                                         
-                                        if success:
+                                        conn_write = database.get_connection()
+                                        try:
+                                            def _deduct_mats(cursor, pid, amt):
+                                                product_service.deduct_production_materials_central(cursor, pid, amt, note_suffix=f"Produção Rápida Encomenda #{fmt_id}")
+                                            
+                                            order_service.quick_produce_item(
+                                                conn_write, order['id'], item['id'], item['product_id'], amount,
+                                                old_order_status, item['quantity_produced'],
+                                                deduct_materials_fn=_deduct_mats,
+                                                user_id=user_id, username=username
+                                            )
                                             st.session_state['expanded_order_id'] = order['id']
                                             admin_utils.show_feedback_dialog("Produção lançada!", level="success")
                                             st.rerun()
+                                        except Exception as e:
+                                            log_exception(logger, f"Error quick producing item {item['id']}", e)
+                                            admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
+                                        finally:
+                                            conn_write.close()
 
                             with b_wip:
                                 with st.popover("⏳ Iniciar Produção", use_container_width=True):
@@ -696,108 +508,40 @@ else:
                                     wip_date = st.date_input("Data Início", value=date.today(), key=f"wip_date_{item['id']}")
                                     
                                     if st.button("Iniciar", key=f"wip_go_{item['id']}", type="primary"):
-                                        success = False
                                         conn_write = database.get_connection()
-                                        cursor_write = conn_write.cursor()
                                         try:
-                                            cursor_write.execute("BEGIN TRANSACTION")
-                                            # Insert into WIP (materials_deducted = 0)
-                                            history = {"Iniciado": datetime.now().strftime("%d/%m %H:%M"), "Fila de Espera": datetime.now().strftime("%d/%m %H:%M")}
-                                            history_json = json.dumps(history)
-
-                                            cursor_write.execute("""
-                                                INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
-                                                VALUES (?, ?, ?, ?, 'Fila de Espera', ?, ?, 0, ?, ?)
-                                            """, (item['product_id'], item['variant_id'], order['id'], item['id'], wip_amount, wip_date.isoformat(), history_json, item.get('notes')))
-                                            
-                                            # Update Order Status to "Em Produção" if not already
-                                            if order['status'] == 'Pendente':
-                                                cursor_write.execute("UPDATE commission_orders SET status='Em Produção' WHERE id=?", (order['id'],))
-                                                audit.log_action(conn_write, 'UPDATE', 'commission_orders', order['id'], {'status': 'Pendente'}, {'status': 'Em Produção'})
-                                            
-                                            conn_write.commit()
-                                            success = True
-                                        except sqlite3.Error as e:
-                                            conn_write.rollback()
-                                            log_exception(logger, f"Database error starting WIP for item {item['id']}", e)
-                                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
-                                        except Exception as e:
-                                            conn_write.rollback()
-                                            log_exception(logger, f"Error starting WIP for item {item['id']}", e)
-                                            admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
-                                        finally:
-                                            cursor_write.close()
-                                            conn_write.close()
-                                            
-                                        if success:
+                                            order_service.start_wip_production(
+                                                conn_write, order['id'], item['id'], item['product_id'], 
+                                                item['variant_id'], wip_amount, wip_date.isoformat(),
+                                                notes=item.get('notes'), old_order_status=order['status']
+                                            )
                                             st.session_state['expanded_order_id'] = order['id']
                                             admin_utils.show_feedback_dialog("Enviado para Fluxo de Produção!", level="success")
                                             st.rerun()
+                                        except Exception as e:
+                                            log_exception(logger, f"Error starting WIP for item {item['id']}", e)
+                                            admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
+                                        finally:
+                                            conn_write.close()
                     else:
                         st.info("✅ Produção Concluída (ou Totalmente Reservado)")
 
                 # Delete Item Button
                 with ci3:
-                     if st.button("❌", key=f"del_item_{item['id']}", help="Remover item da encomenda"):
-                        # Restore Stock if reserved
-                        # Restore Stock if reserved
-                        rest_qty = item['quantity_from_stock']
-                        success = False
+                    if st.button("❌", key=f"del_item_{item['id']}", help="Remover item da encomenda"):
                         conn_write = database.get_connection()
-                        cursor_write = conn_write.cursor()
                         try:
-                            cursor_write.execute("BEGIN TRANSACTION")
-                            if rest_qty > 0:
-                                old_stock = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn_write, params=(item['product_id'],)).iloc[0]['stock_quantity']
-                                
-                                # Check Kit Restore
-                                kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn_write, params=(item['product_id'],))
-                                if not kit_comps.empty:
-                                    for _, kc in kit_comps.iterrows():
-                                        restore_amt = rest_qty * kc['quantity']
-                                        cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(restore_amt), int(kc['child_product_id'])))
-                                else:
-                                    cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                                                 (rest_qty, item['product_id']))
-
-                                # Audit log logic simplified (logging parent change even if virtual? actually audit is tricky for kits. Let's keep parent audit generic or skip detail for components to avoid complexity)
-                                audit.log_action(conn_write, 'UPDATE', 'products', item['product_id'], 
-                                    {'stock_quantity': old_stock}, {'stock_quantity': old_stock + rest_qty})
-                            
-                            cursor_write.execute("DELETE FROM commission_items WHERE id=?", (item['id'],))
-                            
-                            # Recalc Total Price of Order
-                            deduction = item['unit_price'] * item['quantity']
-                            old_price = order['total_price']
-                            cursor_write.execute("UPDATE commission_orders SET total_price = total_price - ? WHERE id=?", 
-                                         (deduction, order['id']))
-                            
-                            # Capture old data for audit
-                            old_data = {'id': item['id'], 'product_id': item['product_id'], 'quantity': item['quantity']}
-                            
-                            conn_write.commit()
-                            
-                            # Audit Logs
-                            audit.log_action(conn_write, 'DELETE', 'commission_items', item['id'], old_data, None)
-                            audit.log_action(conn_write, 'UPDATE', 'commission_orders', order['id'], 
-                                {'total_price': old_price}, {'total_price': old_price - deduction})
-                            
-                            success = True
-                        except sqlite3.Error as e:
-                            conn_write.rollback()
-                            log_exception(logger, f"Database error deleting item {item['id']}", e)
-                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
+                            order_service.delete_commission_item(
+                                conn_write, order['id'], item['id'], item['product_id'],
+                                item['quantity'], item['quantity_from_stock'], item['unit_price']
+                            )
+                            st.session_state['expanded_order_id'] = order['id']
+                            st.rerun()
                         except Exception as e:
-                            conn_write.rollback()
                             log_exception(logger, f"Error deleting item {item['id']}", e)
                             admin_utils.show_feedback_dialog(f"Erro ao excluir item: {e}", level="error")
                         finally:
-                            cursor_write.close()
                             conn_write.close()
-                        
-                        if success:
-                            st.session_state['expanded_order_id'] = order['id']
-                            st.rerun()
 
             st.divider()
             
@@ -807,107 +551,28 @@ else:
                 if order['status'] != 'Concluída':
                     if st.button("🏁 Marcar como Pronto", key=f"ready_{order['id']}", help="Marcar produção como finalizada e aguardando retirada"):
                         conn_write = database.get_connection()
-                        cursor_write = conn_write.cursor()
                         try:
-                            cursor_write.execute("BEGIN TRANSACTION")
-                            cursor_write.execute("UPDATE commission_orders SET status='Concluída' WHERE id=?", (order['id'],))
-                            audit.log_action(conn_write, 'UPDATE', 'commission_orders', order['id'], {'status': order['status']}, {'status': 'Concluída'})
-                            conn_write.commit()
+                            order_service.update_order_status(conn_write, order['id'], 'Concluída', old_status=order['status'])
                             st.session_state['expanded_order_id'] = order['id']
                             admin_utils.show_feedback_dialog("Status atualizado para Concluído!", level="success")
                             st.rerun()
-                        except sqlite3.Error as e:
-                            conn_write.rollback()
-                            log_exception(logger, f"Database error marking ready order {order['id']}", e)
-                            admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
                         except Exception as e:
-                            conn_write.rollback()
                             log_exception(logger, f"Error marking ready order {order['id']}", e)
                             admin_utils.show_feedback_dialog(f"Erro ao atualizar status: {e}", level="error")
                         finally:
-                            cursor_write.close()
                             conn_write.close()
 
                 if st.button("📦 Realizar Entrega", key=f"dlv_{order['id']}"):
-                    success = False
                     conn_write = database.get_connection()
-                    cursor_write = conn_write.cursor()
                     try:
-                        cursor_write.execute("BEGIN TRANSACTION")
-                        # 1. Re-inject ALL items to stock momentarily
-                        for _, it in items.iterrows():
-                            p_row_chk = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn_write, params=(it['product_id'],))
-                            if p_row_chk.empty: continue
-
-                            old_stock = p_row_chk.iloc[0]['stock_quantity']
-                            kit_comps = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn_write, params=(it['product_id'],))
-                            
-                            if not kit_comps.empty:
-                                for _, kc in kit_comps.iterrows():
-                                    restore_amt = it['quantity'] * kc['quantity'] 
-                                    cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (int(restore_amt), int(kc['child_product_id'])))
-                            else:
-                                cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", (it['quantity'], it['product_id']))
-                            
-                            audit.log_action(conn_write, 'UPDATE', 'products', it['product_id'], {'stock_quantity': old_stock}, {'stock_quantity': old_stock + it['quantity']})
-                        
-                        # 2. Create Sale Record
-                        ord_uuid = f"ENC-{datetime.now().strftime('%y%m%d')}-{order['id']}"
-                        total_ord_price = order['total_price']
-                        deposit_total = order['deposit_amount'] or 0
-                        deposit_ratio = deposit_total / total_ord_price if total_ord_price > 0 else 0
-                        
-                        for _, it in items.iterrows():
-                            item_subtotal = it['unit_price'] * it['quantity']
-                            discount_share = item_subtotal * deposit_ratio
-                            final_item_price = item_subtotal - discount_share
-                            notes_item = f"Encomenda #{order['id']}"
-                            if deposit_total > 0: notes_item += f" (Sinal: R$ {discount_share:.2f})"
-
-                            cursor_write.execute("""
-                                INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, 
-                                                 discount, payment_method, notes, salesperson, order_id)
-                                VALUES (?, ?, ?, ?, 'Finalizada', ?, ?, 'Misto', ?, 'Sistema', ?)
-                            """, (date.today(), it['product_id'], it['quantity'], final_item_price, 
-                                  order['client_id'], discount_share, notes_item, ord_uuid))
-                            
-                            # 3. Deduct Stock (Sales Logic)
-                            p_row_chk = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn_write, params=(it['product_id'],))
-                            if not p_row_chk.empty:
-                                old_stock_after = p_row_chk.iloc[0]['stock_quantity']
-                                kit_comps_2 = pd.read_sql("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", conn_write, params=(it['product_id'],))
-                                if not kit_comps_2.empty:
-                                     for _, kc in kit_comps_2.iterrows():
-                                        deduct_amt = it['quantity'] * kc['quantity']
-                                        cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (int(deduct_amt), int(kc['child_product_id'])))
-                                else:
-                                    cursor_write.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", (it['quantity'], it['product_id']))
-                                
-                                audit.log_action(conn_write, 'UPDATE', 'products', it['product_id'], {'stock_quantity': old_stock_after}, {'stock_quantity': old_stock_after - it['quantity']})
-                            
-                            audit.log_action(conn_write, 'CREATE', 'sales', cursor_write.lastrowid, None, {
-                                'order_id': order['id'], 'product_id': it['product_id'], 'quantity': it['quantity'], 'total_price': (it['unit_price'] * it['quantity'])
-                            })
-                        
-                        # 4. Finalize Order Status
-                        old_status = order['status']
-                        cursor_write.execute("UPDATE commission_orders SET status='Entregue' WHERE id=?", (order['id'],))
-                        conn_write.commit()
-                        audit.log_action(conn_write, 'UPDATE', 'commission_orders', order['id'], {'status': old_status}, {'status': 'Entregue'})
-                        success = True
-                    except sqlite3.Error as e:
-                        conn_write.rollback()
-                        log_exception(logger, f"Database error delivering order {order['id']}", e)
-                        admin_utils.show_feedback_dialog(f"Erro de Banco de Dados: {e}", level="error")
-                    except Exception as e:
-                        conn_write.rollback()
-                        log_exception(logger, f"Error delivering order {order['id']}", e)
-                        admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
-                    finally:
-                        cursor_write.close()
-                        conn_write.close()
+                        order_data_dict = {
+                            'client_id': order['client_id'],
+                            'total_price': order['total_price'],
+                            'deposit_amount': order['deposit_amount'],
+                            'status': order['status']
+                        }
+                        order_service.deliver_order(conn_write, order['id'], order_data_dict, items)
                     
-                    if success:
                         # Prepare data for Receipt
                         rec_data = {
                             "id": formatted_id,
@@ -941,5 +606,10 @@ else:
                         st.session_state['expanded_order_id'] = order['id']
                         
                         st.rerun()
+                    except Exception as e:
+                        log_exception(logger, f"Error delivering order {order['id']}", e)
+                        admin_utils.show_feedback_dialog(f"Erro na entrega: {e}", level="error")
+                    finally:
+                        conn_write.close()
 
 conn.close()
