@@ -431,7 +431,8 @@ with tab_finance:
                     
                     if c_type.startswith("Material"):
                         # Category Filter Data
-                        cats = pd.read_sql("SELECT id, name FROM material_categories ORDER BY name", conn)
+                        from services import material_service
+                        cats = material_service.get_all_categories(conn)
                         cat_opts = {row['name']: row['id'] for _, row in cats.iterrows()}
                         
                         # Material Filters
@@ -439,15 +440,15 @@ with tab_finance:
                         cat_filter = c_mf1.selectbox("Filtrar Categoria", ["Todas"] + list(cat_opts.keys()), key=f"fcat_{sid}")
                         name_filter = c_mf2.text_input("🔍 Buscar Material", placeholder="Ex: Argila...", key=f"fmat_{sid}")
                         
-                        # Query Materials
-                        q_mat = "SELECT id, name, unit, price_per_unit, stock_level FROM materials WHERE type != 'Serviço'"
-                        if cat_filter != "Todas":
-                            q_mat += f" AND category_id={cat_opts[cat_filter]}"
-                        if name_filter:
-                            q_mat += f" AND name LIKE '%{name_filter}%'"
-                        q_mat += " ORDER BY name"
+                        # Query Materials via Service
+                        mats = material_service.get_all_materials(conn)
+                        # Filter out Services
+                        mats = mats[mats['type'] != 'Serviço']
                         
-                        mats = pd.read_sql(q_mat, conn)
+                        if cat_filter != "Todas":
+                            mats = mats[mats['category_id'] == cat_opts[cat_filter]]
+                        if name_filter:
+                            mats = mats[mats['name'].str.contains(name_filter, case=False)]
                         
                         if mats.empty:
                             st.warning("Nenhum material encontrado.")

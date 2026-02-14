@@ -3,6 +3,9 @@ import sqlite3
 from datetime import datetime
 import json
 import audit
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # --- Student CRUD ---
 
@@ -33,32 +36,47 @@ def get_all_classes(conn):
 
 def create_class(conn, name, schedule, notes):
     """Creates a new class."""
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO classes (name, schedule, notes) VALUES (?, ?, ?)", (name, schedule, notes))
-    rid = cursor.lastrowid
-    audit.log_action(conn, 'CREATE', 'classes', rid, None, {'name': name}, commit=False)
-    conn.commit()
-    return rid
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO classes (name, schedule, notes) VALUES (?, ?, ?)", (name, schedule, notes))
+        rid = cursor.lastrowid
+        audit.log_action(conn, 'CREATE', 'classes', rid, None, {'name': name}, commit=False)
+        conn.commit()
+        return rid
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar turma '{name}': {e}")
+        raise
 
 def update_class(conn, class_id, name, schedule, notes):
     """Updates a class."""
     old = pd.read_sql("SELECT * FROM classes WHERE id=?", conn, params=(class_id,)).iloc[0].to_dict()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE classes SET name=?, schedule=?, notes=? WHERE id=?", (name, schedule, notes, class_id))
-    audit.log_action(conn, 'UPDATE', 'classes', class_id, old, {'name': name}, commit=False)
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE classes SET name=?, schedule=?, notes=? WHERE id=?", (name, schedule, notes, class_id))
+        audit.log_action(conn, 'UPDATE', 'classes', class_id, old, {'name': name}, commit=False)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar turma {class_id}: {e}")
+        raise
 
 def create_student(conn, name, phone, class_id=None, join_date=None):
     """Creates a new student."""
     if not join_date:
         join_date = datetime.now().strftime('%Y-%m-%d')
     
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO students (name, phone, class_id, join_date, active) VALUES (?, ?, ?, ?, 1)", (name, phone, class_id, join_date))
-    new_id = cursor.lastrowid
-    audit.log_action(conn, 'CREATE', 'students', new_id, None, {'name': name, 'class_id': class_id}, commit=False)
-    conn.commit()
-    return new_id
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO students (name, phone, class_id, join_date, active) VALUES (?, ?, ?, ?, 1)", (name, phone, class_id, join_date))
+        new_id = cursor.lastrowid
+        audit.log_action(conn, 'CREATE', 'students', new_id, None, {'name': name, 'class_id': class_id}, commit=False)
+        conn.commit()
+        return new_id
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar aluno '{name}': {e}")
+        raise
 
 def update_student(conn, student_id, name, phone, active):
     """Updates student info (Name, Phone, Active). Class is handled separately."""
@@ -66,15 +84,21 @@ def update_student(conn, student_id, name, phone, active):
     # Get old data
     old = pd.read_sql("SELECT * FROM students WHERE id=?", conn, params=(student_id,)).iloc[0].to_dict()
     
-    cursor = conn.cursor()
-    cursor.execute("UPDATE students SET name=?, phone=?, active=? WHERE id=?", 
-                   (name, phone, int(active), student_id))
-    
-    audit.log_action(conn, 'UPDATE', 'students', student_id, old, {'name': name, 'phone': phone, 'active': active}, commit=False)
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE students SET name=?, phone=?, active=? WHERE id=?", 
+                       (name, phone, int(active), student_id))
+        
+        audit.log_action(conn, 'UPDATE', 'students', student_id, old, {'name': name, 'phone': phone, 'active': active}, commit=False)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar aluno {student_id}: {e}")
+        raise
     try:
         conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-    except Exception: pass
+    except Exception as e:
+        logger.warning(f"WAL Checkpoint (PASSIVE) failed: {e}")
 
 def update_student_class(conn, student_id, class_id):
     """Updates only the student's class."""
@@ -84,19 +108,25 @@ def update_student_class(conn, student_id, class_id):
     except Exception:
         old = {}
         
-    cursor = conn.cursor()
-    cursor.execute("UPDATE students SET class_id=? WHERE id=?", (class_id, student_id))
-    
-    if cursor.rowcount == 0:
-        print(f"WARNING: Update failed for student {student_id} (Row not found?)")
-    
-    audit.log_action(conn, 'UPDATE_CLASS', 'students', student_id, old, {'class_id': class_id}, commit=False)
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE students SET class_id=? WHERE id=?", (class_id, student_id))
+        
+        if cursor.rowcount == 0:
+            logger.warning(f"Update failed for student {student_id} (Row not found?)")
+        
+        audit.log_action(conn, 'UPDATE_CLASS', 'students', student_id, old, {'class_id': class_id}, commit=False)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar turma do aluno {student_id}: {e}")
+        raise
     
     # Force Checkpoint to ensure visibility
     try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except Exception: pass
+    except Exception as e:
+        logger.warning(f"WAL Checkpoint (TRUNCATE) failed: {e}")
     
     return True
 
@@ -108,18 +138,23 @@ def add_consumption(conn, student_id, description, quantity, unit_price, total_v
     The unit_price and total_val should be ALREADY MARKED UP before calling this 
     IF they come from the UI, but let's ensure we store the markup % for audit.
     """
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup)
-        VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?)
-    """, (student_id, description, quantity, unit_price, total_val, date, notes, markup))
-    
-    new_id = cursor.lastrowid
-    audit.log_action(conn, 'CREATE', 'student_consumptions', new_id, None, 
-                     {'student_id': student_id, 'desc': description, 'val': total_val, 'markup': markup}, commit=False)
-    conn.commit()
-    return new_id
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup)
+            VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?)
+        """, (student_id, description, quantity, unit_price, total_val, date, notes, markup))
+        
+        new_id = cursor.lastrowid
+        audit.log_action(conn, 'CREATE', 'student_consumptions', new_id, None, 
+                         {'student_id': student_id, 'desc': description, 'val': total_val, 'markup': markup}, commit=False)
+        conn.commit()
+        return new_id
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao adicionar consumo para aluno {student_id}: {e}")
+        raise
 
 def process_material_consumption(conn, student_id, material_id, quantity, date, user_id=None, notes=None, markup=0.0):
     """
@@ -140,32 +175,37 @@ def process_material_consumption(conn, student_id, material_id, quantity, date, 
     total_val = unit_price * quantity
     desc = f"Consumo: {mat['name']}"
     
-    # 2. Deduct Stock
-    new_stock = mat['stock_level'] - quantity
-    cursor.execute("UPDATE materials SET stock_level=? WHERE id=?", (new_stock, material_id))
-    
-    # 3. Log Consumption
-    cursor.execute("""
-        INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup, material_id)
-        VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?, ?)
-    """, (student_id, desc, quantity, unit_price, total_val, date, notes, markup, material_id))
-    cons_id = cursor.lastrowid
-    
-    # 4. Inventory Log (We log the base cost for inventory purposes? Or the total val?)
-    # Usually inventory SAIDA is at cost. But for student revenue tracking, we use the sale price.
-    # Let's log at base cost for inventory and noted as student consumption.
-    base_total = base_price * quantity
-    cursor.execute("""
-        INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (material_id, datetime.now().isoformat(), 'SAIDA', quantity, base_total, f"Aluno ID {student_id} (Markup: {markup}%)", user_id))
-    
-    # Audit
-    audit.log_action(conn, 'CONSUME_MAT', 'student_consumptions', cons_id, None, 
-                     {'mat_id': material_id, 'qty': quantity}, commit=False)
-    
-    conn.commit()
-    return cons_id
+    try:
+        # 2. Deduct Stock
+        new_stock = mat['stock_level'] - quantity
+        cursor.execute("UPDATE materials SET stock_level=? WHERE id=?", (new_stock, material_id))
+        
+        # 3. Log Consumption
+        cursor.execute("""
+            INSERT INTO student_consumptions (student_id, description, quantity, unit_price, total_value, date, status, notes, markup, material_id)
+            VALUES (?, ?, ?, ?, ?, ?, 'Pendente', ?, ?, ?)
+        """, (student_id, desc, quantity, unit_price, total_val, date, notes, markup, material_id))
+        cons_id = cursor.lastrowid
+        
+        # 4. Inventory Log (We log the base cost for inventory purposes? Or the total val?)
+        # Usually inventory SAIDA is at cost. But for student revenue tracking, we use the sale price.
+        # Let's log at base cost for inventory and noted as student consumption.
+        base_total = base_price * quantity
+        cursor.execute("""
+            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (material_id, datetime.now().isoformat(), 'SAIDA', quantity, base_total, f"Aluno ID {student_id} (Markup: {markup}%)", user_id))
+        
+        # Audit
+        audit.log_action(conn, 'CONSUME_MAT', 'student_consumptions', cons_id, None, 
+                         {'mat_id': material_id, 'qty': quantity}, commit=False)
+        
+        conn.commit()
+        return cons_id
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao processar consumo de material para aluno {student_id}: {e}")
+        raise
 
 
 # --- Financials ---
@@ -279,92 +319,69 @@ def generate_tuition_record(conn, student_id, month_year, amount):
     if exist:
         return False, "Mensalidade já gerada."
         
-    cursor.execute("INSERT INTO tuitions (student_id, month_year, amount, status, created_at) VALUES (?, ?, ?, 'Pendente', ?)", 
-                   (student_id, month_year, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    conn.commit()
-    return True, "Gerada com sucesso."
+    try:
+        cursor.execute("INSERT INTO tuitions (student_id, month_year, amount, status, created_at) VALUES (?, ?, ?, 'Pendente', ?)", 
+                       (student_id, month_year, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        return True, "Gerada com sucesso."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao gerar mensalidade para aluno {student_id}: {e}")
+        raise
 
 def confirm_payment_all_pending(conn, student_id):
     """Marks all pending items as Paid for a student."""
-    cursor = conn.cursor()
-    now_str = datetime.now().strftime('%Y-%m-%d')
-    
-    # Tuitions
-    cursor.execute("UPDATE tuitions SET status='Pago', payment_date=? WHERE student_id=? AND status='Pendente'", (now_str, student_id))
-    
-    # Consumptions
-    cursor.execute("UPDATE student_consumptions SET status='Pago', payment_date=? WHERE student_id=? AND status='Pendente'", (now_str, student_id))
-    
-    conn.commit()
-    audit.log_action(conn, 'PAYMENT', 'finance', student_id, None, {'type': 'ALL_PENDING'}, commit=True)
+    try:
+        cursor = conn.cursor()
+        now_str = datetime.now().strftime('%Y-%m-%d')
+        
+        # Tuitions
+        cursor.execute("UPDATE tuitions SET status='Pago', payment_date=? WHERE student_id=? AND status='Pendente'", (now_str, student_id))
+        
+        # Consumptions
+        cursor.execute("UPDATE student_consumptions SET status='Pago', payment_date=? WHERE student_id=? AND status='Pendente'", (now_str, student_id))
+        
+        conn.commit()
+        audit.log_action(conn, 'PAYMENT', 'finance', student_id, None, {'type': 'ALL_PENDING'}, commit=True)
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao confirmar pagamento total para aluno {student_id}: {e}")
+        raise
 
 def process_partial_payment(conn, student_id, payment_amount):
     """
     Allocates a payment amount to the oldest pending debts first.
     """
-    cursor = conn.cursor()
-    # Fetch all pending items (Tuitions and Consumptions) ordered by date ASC
-    # Tuitions: date = COALESCE(payment_date, created_at, 'YYYY-MM-01') ? No, use month_year logic
-    # We need a unified list with ID, TABLE, AMOUNT_DUE, DATE
-    
-    pending_items = []
-    
-    # 1. Tuitions
-    ts = pd.read_sql("SELECT id, amount, amount_paid, month_year FROM tuitions WHERE student_id=? AND status='Pendente'", conn, params=(student_id,))
-    for _, row in ts.iterrows():
-        # Approx date from month_year for sorting
-        try:
-            d_str = f"{row['month_year'][3:]}-{row['month_year'][:2]}-01"
-        except Exception: d_str = '9999-99-99'
-        pending_items.append({
-            'type': 'tuition',
-            'id': row['id'],
-            'due': row['amount'] - (row['amount_paid'] or 0),
-            'date': d_str
-        })
-        
-    # 2. Consumptions
-    cs = pd.read_sql("SELECT id, total_value, amount_paid, date FROM student_consumptions WHERE student_id=? AND status='Pendente'", conn, params=(student_id,))
-    for _, row in cs.iterrows():
-        pending_items.append({
-            'type': 'consumption',
-            'id': row['id'],
-            'due': row['total_value'] - (row['amount_paid'] or 0),
-            'date': row['date']
-        })
-        
-    # Sort key: date
-    pending_items.sort(key=lambda x: x['date'])
-    
-    remaining_payment = float(payment_amount)
-    items_paid = []
-    
-    now_str = datetime.now().strftime('%Y-%m-%d')
-    
-    for item in pending_items:
-        if remaining_payment <= 0.009: # Float epsilon safety
-            break
-            
-        pay_this_item = min(remaining_payment, item['due'])
-        
-        # Update logic
-        if item['type'] == 'tuition':
-            cursor.execute("UPDATE tuitions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
-            # Check if fully paid
-            if abs(pay_this_item - item['due']) < 0.01:
-                cursor.execute("UPDATE tuitions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
-        else:
-            cursor.execute("UPDATE student_consumptions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
-            if abs(pay_this_item - item['due']) < 0.01:
-                cursor.execute("UPDATE student_consumptions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
+    try:
+        cursor = conn.cursor()
+        for item in pending_items:
+            if remaining_payment <= 0.009: # Float epsilon safety
+                break
                 
-        remaining_payment -= pay_this_item
-        items_paid.append(f"{item['type']} {item['id']} ({pay_this_item:.2f})")
+            pay_this_item = min(remaining_payment, item['due'])
+            
+            # Update logic
+            if item['type'] == 'tuition':
+                cursor.execute("UPDATE tuitions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
+                # Check if fully paid
+                if abs(pay_this_item - item['due']) < 0.01:
+                    cursor.execute("UPDATE tuitions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
+            else:
+                cursor.execute("UPDATE student_consumptions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
+                if abs(pay_this_item - item['due']) < 0.01:
+                    cursor.execute("UPDATE student_consumptions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
+                    
+            remaining_payment -= pay_this_item
+            items_paid.append(f"{item['type']} {item['id']} ({pay_this_item:.2f})")
+            
+        conn.commit()
+        audit.log_action(conn, 'PARTIAL_PAYMENT', 'finance', student_id, None, {'amount': payment_amount, 'items': items_paid}, commit=False)
         
-    conn.commit()
-    audit.log_action(conn, 'PARTIAL_PAYMENT', 'finance', student_id, None, {'amount': payment_amount, 'items': items_paid}, commit=False)
-    
-    return True, f"Pagamento de R$ {payment_amount:.2f} registrado com sucesso!"
+        return True, f"Pagamento de R$ {payment_amount:.2f} registrado com sucesso!"
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao processar pagamento parcial para aluno {student_id}: {e}")
+        raise
 
 def cancel_consumption(conn, consumption_id):
     """Cancels a consumption and restores stock if it was a material."""
@@ -376,20 +393,25 @@ def cancel_consumption(conn, consumption_id):
     
     if status == 'Cancelado': return False, "Já está cancelado."
 
-    # Restore stock if material
-    if mat_id and qty:
-        cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id=?", (qty, mat_id))
-        # Log restoration in inventory transactions
-        cursor.execute("""
-            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes)
-            VALUES (?, ?, ?, ?, 0, ?)
-        """, (mat_id, datetime.now().isoformat(), 'ENTRADA', qty, f"Estorno Cancelamento Aluno ID {sid}"))
+    try:
+        # Restore stock if material
+        if mat_id and qty:
+            cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id=?", (qty, mat_id))
+            # Log restoration in inventory transactions
+            cursor.execute("""
+                INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes)
+                VALUES (?, ?, ?, ?, 0, ?)
+            """, (mat_id, datetime.now().isoformat(), 'ENTRADA', qty, f"Estorno Cancelamento Aluno ID {sid}"))
 
-    # Update status
-    cursor.execute("UPDATE student_consumptions SET status='Cancelado' WHERE id=?", (consumption_id,))
-    
-    audit.log_action(conn, 'CANCEL_CONSUMPTION', 'student_consumptions', consumption_id, {'old_status': status}, {'new_status': 'Cancelado'}, commit=False)
-    conn.commit()
+        # Update status
+        cursor.execute("UPDATE student_consumptions SET status='Cancelado' WHERE id=?", (consumption_id,))
+        
+        audit.log_action(conn, 'CANCEL_CONSUMPTION', 'student_consumptions', consumption_id, {'old_status': status}, {'new_status': 'Cancelado'}, commit=False)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao cancelar consumo {consumption_id}: {e}")
+        raise
     return True, "Cancelado com sucesso."
 
 def cancel_tuition(conn, tuition_id):
@@ -401,18 +423,28 @@ def cancel_tuition(conn, tuition_id):
     
     if status == 'Cancelado': return False, "Já está cancelado."
     
-    cursor.execute("UPDATE tuitions SET status='Cancelado' WHERE id=?", (tuition_id,))
-    audit.log_action(conn, 'CANCEL_TUITION', 'tuitions', tuition_id, {'old_status': status}, {'new_status': 'Cancelado'}, commit=False)
-    conn.commit()
+    try:
+        cursor.execute("UPDATE tuitions SET status='Cancelado' WHERE id=?", (tuition_id,))
+        audit.log_action(conn, 'CANCEL_TUITION', 'tuitions', tuition_id, {'old_status': status}, {'new_status': 'Cancelado'}, commit=False)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao cancelar mensalidade {tuition_id}: {e}")
+        raise
     return True, "Cancelado com sucesso."
 
 def update_tuition(conn, tuition_id, amount):
     """Updates tuition amount."""
     cursor = conn.cursor()
     old = pd.read_sql("SELECT amount FROM tuitions WHERE id=?", conn, params=(tuition_id,)).iloc[0].to_dict()
-    cursor.execute("UPDATE tuitions SET amount=? WHERE id=?", (amount, tuition_id))
-    audit.log_action(conn, 'UPDATE', 'tuitions', tuition_id, old, {'amount': amount}, commit=False)
-    conn.commit()
+    try:
+        cursor.execute("UPDATE tuitions SET amount=? WHERE id=?", (amount, tuition_id))
+        audit.log_action(conn, 'UPDATE', 'tuitions', tuition_id, old, {'amount': amount}, commit=False)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar mensalidade {tuition_id}: {e}")
+        raise
     return True
 
 def update_consumption(conn, consumption_id, description, total_value):
@@ -421,9 +453,14 @@ def update_consumption(conn, consumption_id, description, total_value):
     # For now, we allow description and total value adjustments.
     cursor = conn.cursor()
     old = pd.read_sql("SELECT description, total_value FROM student_consumptions WHERE id=?", conn, params=(consumption_id,)).iloc[0].to_dict()
-    cursor.execute("UPDATE student_consumptions SET description=?, total_value=? WHERE id=?", (description, total_value, consumption_id))
-    audit.log_action(conn, 'UPDATE', 'student_consumptions', consumption_id, old, {'description': description, 'total_value': total_value}, commit=False)
-    conn.commit()
+    try:
+        cursor.execute("UPDATE student_consumptions SET description=?, total_value=? WHERE id=?", (description, total_value, consumption_id))
+        audit.log_action(conn, 'UPDATE', 'student_consumptions', consumption_id, old, {'description': description, 'total_value': total_value}, commit=False)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar consumo {consumption_id}: {e}")
+        raise
     return True
 
 def get_module_summary_stats(conn):

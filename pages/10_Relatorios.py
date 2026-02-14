@@ -9,96 +9,28 @@ import reports
 import io
 import services.production_service as production_service
 import services.product_service as product_service
+import services.report_service as report_service
 from datetime import datetime, date, timedelta
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cached_sales_data(_conn, start_date, end_date, seller_filter):
     """Fetches sales data for reports."""
-    query = """
-        SELECT s.date as 'Data', p.name as 'Produto', s.quantity as 'Qtd',
-               s.total_price as 'Valor', s.discount as 'Desconto',
-               s.payment_method as 'Pagamento', s.salesperson as 'Vendedor',
-               COALESCE(c.name, 'Consumidor Final') as 'Cliente'
-        FROM sales s
-        LEFT JOIN products p ON s.product_id = p.id
-        LEFT JOIN clients c ON s.client_id = c.id
-        WHERE s.date BETWEEN ? AND ?
-    """
-    params = [start_date, end_date]
-    
-    if seller_filter != "Todos":
-        query += " AND s.salesperson = ?"
-        params.append(seller_filter)
-    
-    query += " ORDER BY s.date DESC"
-    
-    return pd.read_sql(query, _conn, params=params)
+    return report_service.get_sales_data(_conn, start_date, end_date, seller_filter)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cached_top_products(_conn, start_date, end_date, top_limit, order_by):
     """Fetches top items for report."""
-    order_col = "total_qty" if order_by == "Quantidade" else "total_value"
-    
-    query = f"""
-        SELECT p.name as 'Produto', p.category as 'Categoria',
-               SUM(s.quantity) as total_qty,
-               SUM(s.total_price) as total_value,
-               COUNT(*) as num_sales
-        FROM sales s
-        JOIN products p ON s.product_id = p.id
-        WHERE s.date BETWEEN ? AND ?
-        GROUP BY p.id
-        ORDER BY {order_col} DESC
-        LIMIT ?
-    """
-    return pd.read_sql(query, _conn, params=[start_date, end_date, top_limit])
+    return report_service.get_top_products(_conn, start_date, end_date, top_limit, order_by)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cached_expenses(_conn, start_date, end_date, cat_filter):
     """Fetches expenses for report."""
-    query = """
-        SELECT e.date as 'Data', e.description as 'Descrição', e.category as 'Categoria',
-               COALESCE(s.name, '-') as 'Fornecedor', e.amount as 'Valor'
-        FROM expenses e
-        LEFT JOIN suppliers s ON e.supplier_id = s.id
-        WHERE e.date BETWEEN ? AND ?
-    """
-    params = [start_date, end_date]
-    if cat_filter != "Todas":
-        query += " AND e.category = ?"
-        params.append(cat_filter)
-    
-    query += " ORDER BY e.date DESC"
-    return pd.read_sql(query, _conn, params=params)
+    return report_service.get_expenses_data(_conn, start_date, end_date, cat_filter)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cached_material_consumption(_conn, start_date, end_date, cat_filter):
     """Fetches material consumption."""
-    query = """
-        SELECT m.name as 'Insumo', 
-               COALESCE(mc.name, 'Geral') as 'Categoria',
-               SUM(it.quantity) as 'Consumido',
-               m.unit as 'Unidade',
-               m.price_per_unit as 'Custo Unit.',
-               SUM(it.quantity) * m.price_per_unit as 'Custo Total'
-        FROM inventory_transactions it
-        JOIN materials m ON it.material_id = m.id
-        LEFT JOIN material_categories mc ON m.category_id = mc.id
-        WHERE DATE(it.date) BETWEEN ? AND ?
-          AND it.type = 'SAIDA'
-    """
-    params = [start_date, end_date]
-    
-    if cat_filter != "Todas":
-        query += " AND mc.name = ?"
-        params.append(cat_filter)
-    
-    query += """
-        GROUP BY m.id
-        HAVING SUM(it.quantity) > 0
-        ORDER BY SUM(it.quantity) DESC
-    """
-    return pd.read_sql(query, _conn, params=params)
+    return report_service.get_material_consumption(_conn, start_date, end_date, cat_filter)
 
 st.set_page_config(page_title="Relatórios", page_icon="📊", layout="wide")
 
@@ -292,13 +224,7 @@ elif report_key == "sales":
                 prev_start = start_date - timedelta(days=period_days)
                 prev_end = start_date - timedelta(days=1)
                 
-                prev_query = "SELECT SUM(total_price) as total FROM sales WHERE date BETWEEN ? AND ?"
-                prev_params = [prev_start, prev_end]
-                if seller_filter != "Todos":
-                    prev_query += " AND salesperson = ?"
-                    prev_params.append(seller_filter)
-                
-                prev_total = pd.read_sql(prev_query, conn, params=prev_params).iloc[0]['total'] or 0
+                prev_total = report_service.get_sales_total_period(conn, prev_start, prev_end, seller_filter)
                 
                 if prev_total > 0:
                     variation = ((total_value - prev_total) / prev_total) * 100
@@ -427,13 +353,7 @@ elif report_key == "expenses":
                 prev_start = start_date - timedelta(days=period_days)
                 prev_end = start_date - timedelta(days=1)
                 
-                prev_query = "SELECT SUM(amount) as total FROM expenses WHERE date BETWEEN ? AND ?"
-                prev_params = [prev_start, prev_end]
-                if cat_filter != "Todas":
-                    prev_query += " AND category = ?"
-                    prev_params.append(cat_filter)
-                
-                prev_total = pd.read_sql(prev_query, conn, params=prev_params).iloc[0]['total'] or 0
+                prev_total = report_service.get_expenses_total_period(conn, prev_start, prev_end, cat_filter)
                 
                 if prev_total > 0:
                     variation = ((total_expenses - prev_total) / prev_total) * 100
@@ -668,20 +588,7 @@ elif report_key == "profitability":
         
         # Query products with cost calculation
         # Cost is calculated from product_recipes (materials used)
-        query = (
-            "SELECT p.id, p.name as 'Produto', p.category as 'Categoria', p.base_price as 'Preço Venda', "
-            "COALESCE((SELECT SUM(pr.quantity * m.price_per_unit) FROM product_recipes pr JOIN materials m ON pr.material_id = m.id WHERE pr.product_id = p.id), 0) as 'Custo Produção', "
-            "p.stock_quantity as 'Estoque' FROM products p WHERE 1=1"
-        )
-        params = []
-        
-        if cat_filter != "Todas":
-            query += " AND p.category = ?"
-            params.append(cat_filter)
-        
-        query += " ORDER BY p.name"
-        
-        report_df = pd.read_sql(query, conn, params=params)
+        report_df = report_service.get_product_profitability(conn, cat_filter)
         
         if not report_df.empty:
             # Calculate margin columns
@@ -774,13 +681,7 @@ elif report_key == "sales_trend":
         
         if view_type == "Por Produto":
             # Monthly sales by product - pivot table
-            query = (
-                "SELECT p.name as Produto, strftime('%m', s.date) as Mes, SUM(s.quantity) as Quantidade, SUM(s.total_price) as Valor "
-                "FROM sales s JOIN products p ON s.product_id = p.id "
-                "WHERE strftime('%Y', s.date) = ? GROUP BY p.id, strftime('%m', s.date) ORDER BY p.name, Mes"
-            )
-            
-            raw_df = pd.read_sql(query, conn, params=[str(selected_year)])
+            raw_df = report_service.get_sales_trend(conn, selected_year)
             
             if not raw_df.empty:
                 # Get top products by total sales
@@ -905,15 +806,8 @@ elif report_key == "profitability":
             "Período": f"{start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}"
         }
         
-        # Get sales with product cost info
-        query = (
-            "SELECT p.name as Produto, p.category as Categoria, SUM(s.quantity) as QtdVendida, SUM(s.total_price) as Receita, "
-            "p.base_price as CustoBase, SUM(s.quantity) * p.base_price as CustoTotal "
-            "FROM sales s JOIN products p ON s.product_id = p.id "
-            "WHERE s.date BETWEEN ? AND ? GROUP BY p.id ORDER BY Receita DESC LIMIT ?"
-        )
-        
-        report_df = pd.read_sql(query, conn, params=[start_date, end_date, top_limit])
+        # Get realized profitability
+        report_df = report_service.get_realized_profitability(conn, start_date, end_date, top_limit)
         
         if not report_df.empty:
             # Calculate profit margin
@@ -981,14 +875,7 @@ elif report_key == "customer_history":
             "Período": f"{start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}"
         }
         
-        query = (
-            "SELECT COALESCE(c.name, 'Consumidor Final') as Cliente, COUNT(s.id) as NumCompras, SUM(s.quantity) as QtdItens, "
-            "SUM(s.total_price) as ValorTotal, AVG(s.total_price) as TicketMedio, MAX(s.date) as UltimaCompra "
-            "FROM sales s LEFT JOIN clients c ON s.client_id = c.id "
-            "WHERE s.date BETWEEN ? AND ? GROUP BY COALESCE(c.id, 0) ORDER BY ValorTotal DESC"
-        )
-        
-        report_df = pd.read_sql(query, conn, params=[start_date, end_date])
+        report_df = report_service.get_customer_history(conn, start_date, end_date)
         
         if not report_df.empty:
             report_df.columns = ['Cliente', 'Nº Compras', 'Qtd Itens', 'Valor Total', 'Ticket Médio', 'Última Compra']
@@ -1063,19 +950,10 @@ elif report_key == "cash_flow":
             date_format = '%Y-%m'
             display_format = '%m/%Y'
         
-        # Get sales (income)
-        sales_query = (
-            f"SELECT strftime('{date_format}', date) as Periodo, SUM(total_price) as Entradas "
-            f"FROM sales WHERE date BETWEEN ? AND ? GROUP BY strftime('{date_format}', date)"
-        )
-        sales_df = pd.read_sql(sales_query, conn, params=[start_date, end_date])
-        
-        # Get expenses
-        expenses_query = (
-            f"SELECT strftime('{date_format}', date) as Periodo, SUM(amount) as Saidas "
-            f"FROM expenses WHERE date BETWEEN ? AND ? GROUP BY strftime('{date_format}', date)"
-        )
-        expenses_df = pd.read_sql(expenses_query, conn, params=[start_date, end_date])
+        # Get sales (income) and expenses
+        flow_data = report_service.get_cash_flow_data(conn, start_date, end_date, date_format)
+        sales_df = flow_data['sales']
+        expenses_df = flow_data['expenses']
         
         # Merge
         if not sales_df.empty or not expenses_df.empty:
@@ -1147,13 +1025,7 @@ elif report_key == "stock_forecast":
         
         if item_type == "Produtos":
             # Products: based on average sales
-            query = (
-                "SELECT p.name as Nome, p.category as Categoria, p.stock_quantity as EstoqueAtual, "
-                "COALESCE(SUM(s.quantity), 0) as VendidoPeriodo, COALESCE(SUM(s.quantity) / ?, 0) as MediaDiaria "
-                "FROM products p LEFT JOIN sales s ON p.id = s.product_id AND s.date >= ? "
-                "GROUP BY p.id HAVING p.stock_quantity > 0 ORDER BY MediaDiaria DESC"
-            )
-            report_df = pd.read_sql(query, conn, params=[period_days, cutoff_date])
+            report_df = report_service.get_stock_forecast_products(conn, period_days, cutoff_date)
             
             if not report_df.empty:
                 # Calculate days until stockout
@@ -1173,14 +1045,7 @@ elif report_key == "stock_forecast":
                 
         else:  # Insumos
             # Materials: based on average consumption
-            query = (
-                "SELECT m.name as Nome, COALESCE(mc.name, 'Geral') as Categoria, m.stock_level as EstoqueAtual, m.unit as Unidade, "
-                "COALESCE(SUM(it.quantity), 0) as ConsumidoPeriodo, COALESCE(SUM(it.quantity) / ?, 0) as MediaDiaria "
-                "FROM materials m LEFT JOIN material_categories mc ON m.category_id = mc.id "
-                "LEFT JOIN inventory_transactions it ON m.id = it.material_id AND it.type = 'SAIDA' AND it.date >= ? "
-                "WHERE m.type = 'Material' GROUP BY m.id HAVING m.stock_level > 0 ORDER BY MediaDiaria DESC"
-            )
-            report_df = pd.read_sql(query, conn, params=[period_days, cutoff_date])
+            report_df = report_service.get_stock_forecast_materials(conn, period_days, cutoff_date)
             
             if not report_df.empty:
                 # Calculate days until stockout
@@ -1268,13 +1133,7 @@ elif report_key == "dead_stock":
         
         # Products without sales
         if item_type in ["Todos", "Produtos"]:
-            products_query = (
-                "SELECT p.name as 'Nome', p.category as 'Categoria', p.stock_quantity as 'Estoque', p.base_price as 'Preço', "
-                "(p.stock_quantity * p.base_price) as 'Valor Parado', MAX(s.date) as 'Última Venda' "
-                "FROM products p LEFT JOIN sales s ON p.id = s.product_id "
-                "GROUP BY p.id HAVING MAX(s.date) IS NULL OR MAX(s.date) < ? ORDER BY 'Valor Parado' DESC"
-            )
-            products_df = pd.read_sql(products_query, conn, params=[cutoff_date])
+            products_df = report_service.get_dead_stock_products(conn, cutoff_date)
             if not products_df.empty:
                 products_df['Tipo'] = 'Produto'
                 products_df['Última Venda'] = products_df['Última Venda'].apply(
@@ -1284,14 +1143,7 @@ elif report_key == "dead_stock":
         
         # Materials without consumption
         if item_type in ["Todos", "Insumos"]:
-            materials_query = (
-                "SELECT m.name as 'Nome', COALESCE(mc.name, 'Geral') as 'Categoria', m.stock_level as 'Estoque', m.price_per_unit as 'Preço', "
-                "(m.stock_level * m.price_per_unit) as 'Valor Parado', MAX(it.date) as 'Último Consumo' "
-                "FROM materials m LEFT JOIN material_categories mc ON m.category_id = mc.id "
-                "LEFT JOIN inventory_transactions it ON m.id = it.material_id AND it.type = 'SAIDA' "
-                "WHERE m.type = 'Material' GROUP BY m.id HAVING MAX(it.date) IS NULL OR MAX(it.date) < ? ORDER BY 'Valor Parado' DESC"
-            )
-            materials_df = pd.read_sql(materials_query, conn, params=[cutoff_date])
+            materials_df = report_service.get_dead_stock_materials(conn, cutoff_date)
             if not materials_df.empty:
                 materials_df['Tipo'] = 'Insumo'
                 materials_df['Último Consumo'] = materials_df['Último Consumo'].apply(
@@ -1395,16 +1247,8 @@ elif report_key == "pending_orders":
         if selected_status != "Todas":
             status_filter = f"AND co.status = '{selected_status}'"
         
-        query = (
-            "SELECT co.id as 'Nº Pedido', COALESCE(c.name, 'Sem Cliente') as 'Cliente', co.status as 'Status', DATE(co.date_created) as 'Dt Criação', "
-            "DATE(co.date_due) as 'Prazo', co.total_price as 'Valor Total', co.deposit_amount as 'Sinal', "
-            "(co.total_price - COALESCE(co.deposit_amount, 0) - COALESCE(co.manual_discount, 0)) as 'Saldo', "
-            "(SELECT COUNT(*) FROM commission_items ci WHERE ci.order_id = co.id) as 'Itens', co.notes as 'Observações' "
-            "FROM commission_orders co LEFT JOIN clients c ON co.client_id = c.id "
-            f"WHERE co.status NOT IN ('Entregue', 'Concluída') {status_filter} ORDER BY {sort_options[selected_sort]}"
-        )
-        
-        report_df = pd.read_sql(query, conn)
+        query_sort = sort_options[selected_sort]
+        report_df = report_service.get_pending_orders(conn, status_filter, query_sort)
         
         if not report_df.empty:
             # Calculate days until due
@@ -1470,24 +1314,12 @@ elif report_key == "production_cost":
         }
         
         # Get production with material costs from inventory transactions
-        query = (
-            "SELECT p.name as Produto, p.category as Categoria, SUM(ph.quantity) as QtdProduzida, p.base_price as PrecoVenda, "
-            "SUM(ph.quantity) * p.base_price as ReceitaPotencial "
-            "FROM production_history ph JOIN products p ON ph.product_id = p.id "
-            "WHERE DATE(ph.timestamp) BETWEEN ? AND ? GROUP BY p.id ORDER BY QtdProduzida DESC"
-        )
-        
-        report_df = pd.read_sql(query, conn, params=[start_date, end_date])
+        report_df = report_service.get_production_cost_data(conn, start_date, end_date)
         
         if not report_df.empty:
             # Get material consumption in the same period as an estimate
-            material_query = (
-                "SELECT SUM(it.quantity * m.price_per_unit) as CustoInsumos "
-                "FROM inventory_transactions it JOIN materials m ON it.material_id = m.id "
-                "WHERE it.type = 'SAIDA' AND DATE(it.date) BETWEEN ? AND ?"
-            )
-            material_cost = pd.read_sql(material_query, conn, params=[start_date, end_date])
-            total_material_cost = material_cost['CustoInsumos'].iloc[0] or 0
+            # Get material consumption in the same period as an estimate
+            total_material_cost = report_service.get_period_material_cost(conn, start_date, end_date)
             
             # Distribute material cost proportionally by production quantity
             total_produced = report_df['QtdProduzida'].sum()
@@ -1570,15 +1402,7 @@ elif report_key == "seasonality":
         years = [str(current_year - i) for i in range(years_back)]
         
         # Get sales for the selected month across years
-        years_str = "', '".join(years)
-        query = (
-            "SELECT strftime('%Y', date) as Ano, COUNT(*) as NumVendas, SUM(quantity) as QtdVendida, "
-            "SUM(total_price) as ValorTotal, AVG(total_price) as TicketMedio "
-            "FROM sales WHERE strftime('%m', date) = ? AND strftime('%Y', date) IN ('{years_str}') "
-            "GROUP BY strftime('%Y', date) ORDER BY Ano"
-        )
-        
-        report_df = pd.read_sql(query, conn, params=[f"{month_num:02d}"])
+        report_df = report_service.get_seasonality_data(conn, month_num, years)
         
         if not report_df.empty:
             report_df.columns = ['Ano', 'Nº Vendas', 'Qtd Vendida', 'Valor Total', 'Ticket Médio']
@@ -1642,15 +1466,7 @@ elif report_key == "suppliers":
         }
         
         # Get expenses by supplier (purchases are usually in "Compra de Insumo" category)
-        query = (
-            "SELECT COALESCE(s.name, 'Sem Fornecedor') as Fornecedor, COUNT(e.id) as NumCompras, "
-            "SUM(e.amount) as ValorTotal, AVG(e.amount) as MediaCompra, MAX(e.date) as UltimaCompra "
-            "FROM expenses e LEFT JOIN suppliers s ON e.supplier_id = s.id "
-            "WHERE e.date BETWEEN ? AND ? AND e.category LIKE '%Compra%' "
-            "GROUP BY COALESCE(s.id, 0) ORDER BY ValorTotal DESC"
-        )
-        
-        report_df = pd.read_sql(query, conn, params=[start_date, end_date])
+        report_df = report_service.get_supplier_purchases(conn, start_date, end_date)
         
         if not report_df.empty:
             report_df.columns = ['Fornecedor', 'Nº Compras', 'Valor Total', 'Média/Compra', 'Última Compra']
@@ -1684,14 +1500,7 @@ elif report_key == "suppliers":
             headers = list(report_df.columns)
         else:
             # Try broader category
-            query2 = (
-                "SELECT COALESCE(s.name, 'Sem Fornecedor') as Fornecedor, COUNT(e.id) as NumCompras, "
-                "SUM(e.amount) as ValorTotal, AVG(e.amount) as MediaCompra, MAX(e.date) as UltimaCompra "
-                "FROM expenses e LEFT JOIN suppliers s ON e.supplier_id = s.id "
-                "WHERE e.date BETWEEN ? AND ? AND e.supplier_id IS NOT NULL "
-                "GROUP BY s.id ORDER BY ValorTotal DESC"
-            )
-            report_df = pd.read_sql(query2, conn, params=[start_date, end_date])
+            report_df = report_service.get_supplier_purchases_all(conn, start_date, end_date)
             
             if not report_df.empty:
                 report_df.columns = ['Fornecedor', 'Nº Compras', 'Valor Total', 'Média/Compra', 'Última Compra']

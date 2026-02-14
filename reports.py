@@ -3,6 +3,9 @@ import io
 from datetime import datetime
 import pandas as pd
 import io
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 class PDFReport(FPDF):
     """Generic PDF report with tables for stock, sales, expenses, etc."""
@@ -17,8 +20,8 @@ class PDFReport(FPDF):
         # Logo
         try:
             self.image('logo-amicando-RGB.jpg', x=10, y=10, w=30)
-        except (FileNotFoundError, RuntimeError):
-            pass
+        except (FileNotFoundError, RuntimeError) as e:
+            logger.warning(f"Failed to load logo in PDFReport: {e}")
         
         # Title
         self.set_font('Helvetica', 'B', 16)
@@ -169,7 +172,8 @@ class PDFReceipt(FPDF):
             # x = (210 - 40) / 2 = 85
             self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
             self.set_y(55) # Move cursor down explicitly below logo (10 + ~40 height + margin)
-        except (FileNotFoundError, RuntimeError):
+        except (FileNotFoundError, RuntimeError) as e:
+             logger.warning(f"Failed to load logo in PDFReceipt: {e}")
              # Fallback if image not found
              self.set_font('Helvetica', 'B', 16)
              self.cell(0, 10, 'Atelier Amicando', new_x="LMARGIN", new_y="NEXT", align='C')
@@ -297,8 +301,8 @@ def generate_quote_pdf(quote_data):
             # Logo centered
             try:
                 self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
-            except (FileNotFoundError, RuntimeError):
-                pass
+            except (FileNotFoundError, RuntimeError) as e:
+                logger.warning(f"Failed to load logo in Quote PDF: {e}")
             
             self.set_y(55) # Below logo
             self.set_font('Helvetica', 'B', 14)
@@ -433,7 +437,8 @@ def generate_quote_pdf(quote_data):
                      
                      pdf.image(img_p, x=x_img_curr, y=y_imgs, w=16, h=16)
                      x_img_curr += 18 # 16 + 2 gap
-                 except Exception: pass
+                 except Exception as e:
+                     logger.warning(f"Failed to load image {img_p} in Quote PDF: {e}")
 
         # Draw Border around Product Cell
         pdf.set_xy(x_start, y_start)
@@ -569,7 +574,8 @@ def generate_receipt_pdf(order_data):
                      if x_img_curr + 16 > x_start + w_prod: break 
                      pdf.image(img_p, x=x_img_curr, y=y_imgs, w=16, h=16)
                      x_img_curr += 18
-                 except Exception: pass
+                 except Exception as e:
+                     logger.warning(f"Failed to load image {img_p} in Receipt PDF: {e}")
 
         # Draw Border
         pdf.set_xy(x_start, y_start)
@@ -632,8 +638,8 @@ def generate_student_statement(student_data, items, total_due=None):
             # Centered Header Standard
             try:
                 self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
-            except (FileNotFoundError, RuntimeError):
-                pass
+            except (FileNotFoundError, RuntimeError) as e:
+                logger.warning(f"Failed to load logo in Student Statement PDF: {e}")
             
             self.set_y(55) # Below logo
             self.set_font('Helvetica', 'B', 14)

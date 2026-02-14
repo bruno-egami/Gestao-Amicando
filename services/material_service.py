@@ -35,13 +35,18 @@ def create_material(conn: sqlite3.Connection, name: str, category_id: Optional[i
     """
     Creates a new material. Returns the new material ID.
     """
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO materials (name, category_id, supplier_id, price_per_unit, unit, stock_level, min_stock_alert, type, image_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path))
-    conn.commit()
-    return cursor.lastrowid
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO materials (name, category_id, supplier_id, price_per_unit, unit, stock_level, min_stock_alert, type, image_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path))
+        conn.commit()
+        return cursor.lastrowid
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar material '{name}': {e}")
+        raise
 
 def update_material(conn: sqlite3.Connection, material_id: int, name: str, category_id: Optional[int], 
                    supplier_id: Optional[int], price: float, unit: str, stock_level: float, 
@@ -49,22 +54,32 @@ def update_material(conn: sqlite3.Connection, material_id: int, name: str, categ
     """
     Updates an existing material.
     """
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE materials
-        SET name = ?, category_id = ?, supplier_id = ?, price_per_unit = ?, unit = ?, 
-            stock_level = ?, min_stock_alert = ?, type = ?, image_path = ?
-        WHERE id = ?
-    """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path, material_id))
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE materials
+            SET name = ?, category_id = ?, supplier_id = ?, price_per_unit = ?, unit = ?, 
+                stock_level = ?, min_stock_alert = ?, type = ?, image_path = ?
+            WHERE id = ?
+        """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path, material_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar material {material_id}: {e}")
+        raise
 
 def delete_material(conn: sqlite3.Connection, material_id: int) -> None:
     """
     Deletes a material.
     """
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao deletar material {material_id}: {e}")
+        raise
 
 def update_stock(conn: sqlite3.Connection, material_id: int, quantity_change: float, reason: str) -> None:
     """
@@ -106,10 +121,15 @@ def create_category(conn: sqlite3.Connection, name: str) -> int:
     """
     Creates a new category.
     """
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (name,))
-    conn.commit()
-    return cursor.lastrowid
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (name,))
+        conn.commit()
+        return cursor.lastrowid
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar categoria '{name}': {e}")
+        raise
 
 # --- Suppliers ---
 
@@ -190,12 +210,17 @@ def log_transaction(conn: sqlite3.Connection, material_id: int, date_str: str, t
     """
     Logs a manual inventory transaction.
     """
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (material_id, date_str, trans_type, quantity, cost, notes, user_id))
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (material_id, date_str, trans_type, quantity, cost, notes, user_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao registrar transação para material {material_id}: {e}")
+        raise
 
 def register_entry(conn: sqlite3.Connection, material_id: int, quantity: float, total_cost: float, 
                    notes: str, user_id: int) -> Tuple[float, float]:

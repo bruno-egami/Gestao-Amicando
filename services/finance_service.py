@@ -17,15 +17,25 @@ def get_expense_categories(conn: sqlite3.Connection) -> List[str]:
 
 def create_expense_category(conn: sqlite3.Connection, name: str) -> None:
     """Creates a new expense category."""
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (name,))
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (name,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar categoria de despesa '{name}': {e}")
+        raise
 
 def delete_expense_category(conn: sqlite3.Connection, name: str) -> None:
     """Deletes an expense category by name."""
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM expense_categories WHERE name=?", (name,))
-    conn.commit()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM expense_categories WHERE name=?", (name,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao deletar categoria de despesa '{name}': {e}")
+        raise
 
 # --- EXPENSES ---
 
@@ -110,23 +120,33 @@ def update_expense(conn: sqlite3.Connection, expense_id: int, date_obj: date, de
     # Get old data first
     old_data = get_expense_by_id(conn, expense_id)
     
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE expenses 
-        SET date=?, description=?, amount=?, category=?, supplier_id=? 
-        WHERE id=?
-    """, (date_obj, description, amount, category, supplier_id, expense_id))
-    conn.commit()
-    return old_data
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE expenses 
+            SET date=?, description=?, amount=?, category=?, supplier_id=? 
+            WHERE id=?
+        """, (date_obj, description, amount, category, supplier_id, expense_id))
+        conn.commit()
+        return old_data
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar despesa {expense_id}: {e}")
+        raise
 
 def delete_expense(conn: sqlite3.Connection, expense_id: int) -> Dict[str, Any]:
     """Deletes an expense and returns the deleted data for audit."""
     old_data = get_expense_by_id(conn, expense_id)
     
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
-    conn.commit()
-    return old_data
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
+        conn.commit()
+        return old_data
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao deletar despesa {expense_id}: {e}")
+        raise
 
 # --- FIXED COSTS ---
 
@@ -152,34 +172,49 @@ def get_fixed_cost_by_id(conn: sqlite3.Connection, fc_id: int) -> Dict[str, Any]
 
 def create_fixed_cost(conn: sqlite3.Connection, description: str, value: float, due_day: int, 
                      periodicity: str, category: str) -> int:
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO fixed_costs (description, value, due_day, periodicity, category) 
-        VALUES (?, ?, ?, ?, ?)
-    """, (description, value, due_day, periodicity, category))
-    conn.commit()
-    return cursor.lastrowid
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO fixed_costs (description, value, due_day, periodicity, category) 
+            VALUES (?, ?, ?, ?, ?)
+        """, (description, value, due_day, periodicity, category))
+        conn.commit()
+        return cursor.lastrowid
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar custo fixo '{description}': {e}")
+        raise
 
 def update_fixed_cost(conn: sqlite3.Connection, fc_id: int, description: str, value: float, 
                      due_day: int, periodicity: str, category: str) -> Dict[str, Any]:
     old_data = get_fixed_cost_by_id(conn, fc_id)
     
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE fixed_costs 
-        SET description=?, value=?, due_day=?, periodicity=?, category=? 
-        WHERE id=?
-    """, (description, value, due_day, periodicity, category, fc_id))
-    conn.commit()
-    return old_data
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE fixed_costs 
+            SET description=?, value=?, due_day=?, periodicity=?, category=? 
+            WHERE id=?
+        """, (description, value, due_day, periodicity, category, fc_id))
+        conn.commit()
+        return old_data
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar custo fixo {fc_id}: {e}")
+        raise
 
 def delete_fixed_cost(conn: sqlite3.Connection, fc_id: int) -> Dict[str, Any]:
     old_data = get_fixed_cost_by_id(conn, fc_id)
     
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM fixed_costs WHERE id=?", (fc_id,))
-    conn.commit()
-    return old_data
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM fixed_costs WHERE id=?", (fc_id,))
+        conn.commit()
+        return old_data
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao deletar custo fixo {fc_id}: {e}")
+        raise
 
 def auto_process_monthly_fixed_costs(conn: sqlite3.Connection) -> int:
     """

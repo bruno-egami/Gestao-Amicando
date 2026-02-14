@@ -37,8 +37,8 @@ def start_production(cursor, product_id, quantity, start_date, notes=None, varia
     Initiates a new production card in the 'Fila de Espera' stage.
     """
     history = {
-        "Iniciado": datetime.now().strftime("%d/%m %H:%M"), 
-        "Fila de Espera": datetime.now().strftime("%d/%m %H:%M")
+        "Iniciado": datetime.now().isoformat(timespec='minutes'), 
+        "Fila de Espera": datetime.now().isoformat(timespec='minutes')
     }
     history_json = json.dumps(history)
     
@@ -66,7 +66,7 @@ def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total
         history = {}
     
     # Add next stage timestamp
-    history[next_stage] = datetime.now().strftime("%d/%m %H:%M")
+    history[next_stage] = datetime.now().isoformat(timespec='minutes')
     history_json = json.dumps(history)
 
     # 1. Automatic Material Deduction
@@ -203,7 +203,7 @@ def register_loss(cursor, item, stage, qty_loss, reason_loss):
         history = {}
     
     break_key = f"Quebra ({stage})"
-    history[break_key] = f"-{qty_loss} pcs | {datetime.now().strftime('%d/%m %H:%M')}"
+    history[break_key] = f"-{qty_loss} pcs | {datetime.now().isoformat(timespec='minutes')}"
     history_json = json.dumps(history)
     
     # 3. Update WIP
@@ -216,8 +216,8 @@ def register_loss(cursor, item, stage, qty_loss, reason_loss):
     replenished = False
     if order_id:
         rep_history = {
-            "Iniciado": datetime.now().strftime("%d/%m %H:%M"), 
-            "Fila de Espera (Reposição)": datetime.now().strftime("%d/%m %H:%M")
+            "Iniciado": datetime.now().isoformat(timespec='minutes'), 
+            "Fila de Espera (Reposição)": datetime.now().isoformat(timespec='minutes')
         }
         rep_history_json = json.dumps(rep_history)
         
@@ -310,30 +310,26 @@ def get_stage_duration_stats(_conn):
             history = json.loads(row['stage_history']) if row['stage_history'] else {}
             
             # Find entry date for current stage
+            # Find entry date for current stage
             if row['Estágio'] in history:
-                # Format roughly: "dd/mm HH:MM" or "yyyy-mm-dd..." depending on legacy. 
-                # The current format used in start_production/move_stage is "%d/%m %H:%M" (current year implied? No, wait)
-                # Let's check move_stage implementation: 
-                # history[next_stage] = datetime.now().strftime("%d/%m %H:%M") -> This is risky for year transitions!
-                # Ideally we should fix the date format in move_stage to ISO, but for now let's handle parsing.
-                # If parsed without year, assume current year or adjust if future.
-                
                 date_str = history[row['Estágio']]
-                # Try parsing "%d/%m %H:%M"
+                
+                # Try ISO format first (New)
                 try:
-                    dt = datetime.strptime(date_str, "%d/%m %H:%M")
-                    # Replace year with current year
-                    dt = dt.replace(year=today.year)
-                    # If result is in future (e.g. it was Dec 31 and now is Jan 1), subtract a year
-                    if dt > today:
-                        dt = dt.replace(year=today.year - 1)
-                    entry_date_str = dt
-                except Exception:
-                    # Fallback or different format
-                    entry_date_str = today 
+                    # Handles both 'T' separator and simple space if needed
+                    entry_date_str = datetime.fromisoformat(date_str)
+                except ValueError:
+                    # Fallback to legacy "%d/%m %H:%M"
+                    try:
+                        dt = datetime.strptime(date_str, "%d/%m %H:%M")
+                        dt = dt.replace(year=today.year)
+                        if dt > today:
+                            dt = dt.replace(year=today.year - 1)
+                        entry_date_str = dt
+                    except Exception:
+                        entry_date_str = today 
             else:
-                # Fallback to start_date if Fila/Iniciado or unknown
-                # start_date is usually ISO "YYYY-MM-DD" or similar
+                # Fallback to start_date
                 try:
                     entry_date_str = datetime.fromisoformat(row['start_date'])
                 except (ValueError, TypeError):

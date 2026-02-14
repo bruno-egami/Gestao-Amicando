@@ -406,6 +406,34 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_variants_product ON product_variants(product_id)")
     except Exception: pass
 
+    # 10. Commission Items: Add 'notes', 'variant_id'
+    try:
+        cursor.execute("ALTER TABLE commission_items ADD COLUMN notes TEXT")
+    except sqlite3.OperationalError: pass
+
+    # 11. Quote Items: Add 'item_notes', 'variant_id'
+    try:
+        cursor.execute("ALTER TABLE quote_items ADD COLUMN item_notes TEXT")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE quote_items ADD COLUMN variant_id INTEGER REFERENCES product_variants(id)")
+    except sqlite3.OperationalError: pass
+
+    # 12. Quotes: Add 'delivery_terms', 'payment_terms'
+    try:
+        cursor.execute("ALTER TABLE quotes ADD COLUMN delivery_terms TEXT")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE quotes ADD COLUMN payment_terms TEXT")
+    except sqlite3.OperationalError: pass
+
+    # 13. Product Variants: Add 'material_quantity'
+    try:
+        cursor.execute("ALTER TABLE product_variants ADD COLUMN material_quantity REAL DEFAULT 0.0")
+    except sqlite3.OperationalError: pass
+
 
 
 
@@ -520,10 +548,13 @@ def init_db():
             quantity_from_stock INTEGER DEFAULT 0,
             quantity_produced INTEGER DEFAULT 0,
             unit_price REAL,
+            variant_id INTEGER,
+            notes TEXT,
             FOREIGN KEY (order_id) REFERENCES commission_orders (id),
-            FOREIGN KEY (product_id) REFERENCES products (id)
+            FOREIGN KEY (product_id) REFERENCES products (id),
+            FOREIGN KEY (variant_id) REFERENCES product_variants(id)
         )
-    ''') 
+    ''')  
     
     # Quotes (Orçamentos)
     cursor.execute('''
@@ -537,6 +568,8 @@ def init_db():
             discount REAL DEFAULT 0,
             notes TEXT,
             converted_order_id INTEGER,
+            delivery_terms TEXT,
+            payment_terms TEXT,
             FOREIGN KEY (client_id) REFERENCES clients (id),
             FOREIGN KEY (converted_order_id) REFERENCES commission_orders (id)
         )
@@ -550,8 +583,11 @@ def init_db():
             product_id INTEGER,
             quantity INTEGER,
             unit_price REAL,
+            item_notes TEXT,
+            variant_id INTEGER,
             FOREIGN KEY (quote_id) REFERENCES quotes (id),
-            FOREIGN KEY (product_id) REFERENCES products (id)
+            FOREIGN KEY (product_id) REFERENCES products (id),
+            FOREIGN KEY (variant_id) REFERENCES product_variants(id)
         )
     ''') 
     
@@ -601,6 +637,7 @@ def init_db():
             variant_name TEXT,
             stock_quantity INTEGER DEFAULT 0,
             price_adder REAL DEFAULT 0.0,
+            material_quantity REAL DEFAULT 0.0,
             material_id INTEGER,
             FOREIGN KEY (product_id) REFERENCES products(id),
             FOREIGN KEY (material_id) REFERENCES materials(id)

@@ -7,6 +7,9 @@ import services.product_service as product_service
 import admin_utils
 from datetime import date, datetime
 import json
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 st.set_page_config(page_title="Produção", layout="wide", page_icon="🏭")
 
@@ -92,7 +95,8 @@ with tab_kanban:
                         if days_in > 7:
                             title_prefix = "⚠️ "
                             days_msg = f" (:red[{days_in} dias])"
-                    except Exception: pass
+                    except Exception as e:
+                        logger.warning(f"Error calculating days in stage for item {item.get('id')}: {e}")
 
                     st.markdown(f"**{title_prefix}{item['product_name']}**{days_msg}")
                     st.markdown(f"📦 {item['quantity']} un")

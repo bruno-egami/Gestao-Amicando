@@ -798,6 +798,67 @@ def create_client(conn, name, phone, email=None):
 
 def create_quote(conn, quote_data, items):
     """
+    Creates a new quote.
+    quote_data: client_id, notes, delivery_terms, payment_terms, valid_days
+    items: list of {product_id, qty, price, notes}
+    """
+    cursor = conn.cursor()
+    try:
+        # Calculate validity
+        valid_until = date.today() + pd.Timedelta(days=int(quote_data.get('valid_days', 30)))
+        
+        # Calculate total
+        total_val = sum(i['qty'] * i['price'] for i in items)
+        
+        cursor.execute("""
+            INSERT INTO quotes (client_id, date_created, date_valid_until, status, total_price, notes, delivery_terms, payment_terms)
+            VALUES (?, ?, ?, 'Pendente', ?, ?, ?, ?)
+        """, (quote_data['client_id'], date.today(), valid_until, total_val, quote_data['notes'], 
+              quote_data.get('delivery_terms'), quote_data.get('payment_terms')))
+        
+        quote_id = cursor.lastrowid
+        
+        for item in items:
+            cursor.execute("""
+                INSERT INTO quote_items (quote_id, product_id, quantity, unit_price, item_notes)
+                VALUES (?, ?, ?, ?, ?)
+            """, (quote_id, item['product_id'], item['qty'], item['price'], item.get('notes', '')))
+            
+        conn.commit()
+        return quote_id
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error creating quote: {e}")
+        raise
+
+def get_all_quotes(conn):
+    """Fetches all quotes ordered by creation date."""
+    return pd.read_sql("SELECT * FROM quotes ORDER BY date_created DESC", conn)
+
+def get_quote_items(conn, quote_id):
+    """Fetches items for a specific quote."""
+    return pd.read_sql("SELECT * FROM quote_items WHERE quote_id=?", conn, params=(quote_id,))
+
+def get_quote_details_for_pdf(conn, quote_id):
+    """Fetches detailed item info for quote PDF."""
+    return pd.read_sql("""
+        SELECT qi.product_id, p.name, qi.quantity, qi.unit_price, qi.item_notes 
+        FROM quote_items qi
+        LEFT JOIN products p ON qi.product_id = p.id
+        WHERE qi.quote_id=?
+    """, conn, params=(quote_id,))
+
+def update_quote_status(conn, quote_id, new_status):
+    """Updates the status of a quote."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE quotes SET status=? WHERE id=?", (new_status, quote_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error updating quote status {quote_id}: {e}")
+        raise
     Creates a quote and its items.
     quote_data: client_id, notes, delivery_terms, payment_terms, valid_days
     items: list of dicts {product_id, qty, price, notes}

@@ -147,7 +147,8 @@ def get_product_images(conn, product_id):
         try:
             parsed = ast.literal_eval(raw_paths)
             if parsed: own_imgs.extend(parsed)
-        except: pass
+        except (ValueError, SyntaxError) as e:
+            logger.warning(f"Failed to parse image paths for product {product_id}: {e}")
         
     # 2. Kit components images
     kit_children = get_kit_components(conn, product_id)
@@ -162,7 +163,8 @@ def get_product_images(conn, product_id):
                 try:
                     ci_list = ast.literal_eval(ci_row['image_paths'])
                     if ci_list: comp_imgs.extend(ci_list)
-                except: pass
+                except (ValueError, SyntaxError) as e:
+                    logger.warning(f"Failed to parse image paths for kit component in product {product_id}: {e}")
     
     # Prepend components (Prioritize dynamic/component detail) + Own images
     all_imgs = comp_imgs + own_imgs
@@ -352,6 +354,12 @@ def get_product_variants(conn, product_id):
         WHERE pv.product_id = ?
     """
     return pd.read_sql(query, conn, params=(int(product_id),))
+
+def get_variant_by_id(conn, variant_id):
+    """Fetches a single variant by ID."""
+    query = "SELECT * FROM product_variants WHERE id = ?"
+    df = pd.read_sql(query, conn, params=(int(variant_id),))
+    return df.iloc[0] if not df.empty else None
 
 def update_variant_stock(conn, variant_id, new_quantity):
     """Updates the stock quantity of a variant."""

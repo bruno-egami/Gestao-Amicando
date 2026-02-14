@@ -4,6 +4,7 @@ import auth
 import database
 import admin_utils
 import audit
+import services.client_service as client_service
 import time
 
 st.set_page_config(page_title="Clientes", page_icon="👥", layout="wide")
@@ -24,8 +25,6 @@ auth.render_custom_sidebar()
 admin_utils.render_header_logo()
 st.title("👥 Gestão de Clientes")
 
-cursor = conn.cursor()
-
 # Session State for Edit Mode
 if "cli_edit_id" not in st.session_state:
     st.session_state.cli_edit_id = None
@@ -44,12 +43,13 @@ with col_form:
     
     if is_edit:
         try:
-            edit_row = pd.read_sql("SELECT * FROM clients WHERE id=?", conn, params=(st.session_state.cli_edit_id,)).iloc[0]
-            def_name = edit_row['name'] or ""
-            def_contact = edit_row['contact'] or ""
-            def_phone = edit_row['phone'] or ""
-            def_email = edit_row['email'] or ""
-            def_notes = edit_row['notes'] or ""
+            edit_row = client_service.get_client_by_id(conn, st.session_state.cli_edit_id)
+            if edit_row:
+                def_name = edit_row['name'] or ""
+                def_contact = edit_row['contact'] or ""
+                def_phone = edit_row['phone'] or ""
+                def_email = edit_row['email'] or ""
+                def_notes = edit_row['notes'] or ""
         except Exception:
             st.session_state.cli_edit_id = None
             st.rerun()
@@ -74,30 +74,18 @@ with col_form:
                 new_data = {'name': f_name, 'contact': f_contact, 'phone': f_phone, 'email': f_email, 'notes': f_notes}
                 
                 if is_edit:
-                    # Capture old data for audit
-                    old_data = {'name': def_name, 'contact': def_contact, 'phone': def_phone, 'email': def_email, 'notes': def_notes}
-                    
-                    cursor.execute("""
-                        UPDATE clients SET name=?, contact=?, phone=?, email=?, notes=? WHERE id=?
-                    """, (f_name, f_contact, f_phone, f_email, f_notes, st.session_state.cli_edit_id))
-                    conn.commit()
-                    
-                    # Log UPDATE
-                    audit.log_action(conn, 'UPDATE', 'clients', st.session_state.cli_edit_id, old_data, new_data)
-                    
-                    admin_utils.show_feedback_dialog("Cliente atualizado!", level="success")
-                    st.session_state.cli_edit_id = None
+                    try:
+                        client_service.update_client(conn, st.session_state.cli_edit_id, f_name, f_contact, f_phone, f_email, f_notes)
+                        admin_utils.show_feedback_dialog("Cliente atualizado!", level="success")
+                        st.session_state.cli_edit_id = None
+                    except Exception as e:
+                        st.error(f"Erro ao atualizar: {e}")
                 else:
-                    cursor.execute("""
-                        INSERT INTO clients (name, contact, phone, email, notes) VALUES (?, ?, ?, ?, ?)
-                    """, (f_name, f_contact, f_phone, f_email, f_notes))
-                    conn.commit()
-                    new_id = cursor.lastrowid
-                    
-                    # Log CREATE
-                    audit.log_action(conn, 'CREATE', 'clients', new_id, None, new_data)
-                    
-                    admin_utils.show_feedback_dialog("Cliente cadastrado!", level="success")
+                    try:
+                        client_service.create_client(conn, f_name, f_contact, f_phone, f_email, f_notes)
+                        admin_utils.show_feedback_dialog("Cliente cadastrado!", level="success")
+                    except Exception as e:
+                         st.error(f"Erro ao criar: {e}")
 
 # === RIGHT: LIST WITH SEARCH ===
 with col_list:
@@ -107,7 +95,7 @@ with col_list:
     search_term = st.text_input("🔍 Buscar", placeholder="Nome, contato, telefone...")
     
     # Fetch Data
-    df = pd.read_sql("SELECT * FROM clients ORDER BY name", conn)
+    df = client_service.get_all_clients(conn)
     
     # Apply Search Filter
     if search_term and not df.empty:
@@ -139,13 +127,12 @@ with col_list:
                 
                 with c3:
                     if st.button("🗑️ Excluir", key=f"del_cli_{row['id']}", use_container_width=True):
-                        def do_delete(cid=row['id'], cname=row['name'], r=row):
+                        def do_delete(cid=row['id'], cname=row['name']):
                             try:
-                                old_data = {'id': cid, 'name': cname, 'contact': r['contact'], 
-                                           'phone': r['phone'], 'email': r['email'], 'notes': r['notes']}
-                                cursor.execute("DELETE FROM clients WHERE id=?", (cid,))
-                                conn.commit()
-                                audit.log_action(conn, 'DELETE', 'clients', cid, old_data, None)
+                                client_service.delete_client(conn, cid)
+                                st.success(f"Cliente '{cname}' excluído.")
+                                time.sleep(1)
+                                st.rerun()
                             except Exception as e:
                                 st.error(f"Erro: {e}")
 

@@ -3,9 +3,9 @@ import pandas as pd
 import database
 import admin_utils
 import auth
-import audit
 from datetime import datetime
 import os
+from services import firing_service
 
 st.set_page_config(page_title="Queimas", page_icon="🔥", layout="wide")
 
@@ -26,16 +26,8 @@ if not auth.check_page_access("Queimas"):
 auth.render_custom_sidebar()
 st.title("Gestão de Queimas e Manutenção de Fornos")
 
-cursor = conn.cursor()
-
-cursor = conn.cursor()
-
-
-# save_image moved to admin_utils
-
 # Fetch Kilns
-kilns_df = pd.read_sql("SELECT id, name FROM kilns", conn)
-kiln_map = {row['name']: row['id'] for _, row in kilns_df.iterrows()}
+kiln_map = firing_service.get_kilns(conn)
 kiln_options = list(kiln_map.keys())
 
 # Fetch Categories for Maintenance
@@ -64,8 +56,11 @@ with tab1:
         default_data = {}
         if is_edit:
             try:
-                row_edit = pd.read_sql("SELECT * FROM firings WHERE id = ?", conn, params=(st.session_state.firing_edit_id,)).iloc[0]
-                default_data = row_edit
+                row_edit = firing_service.get_firing_by_id(conn, st.session_state.firing_edit_id)
+                if row_edit is not None:
+                    default_data = row_edit
+                else:
+                    raise ValueError("Queima não encontrada")
             except Exception:
                 admin_utils.show_feedback_dialog("Erro ao carregar dados.", level="error")
                 st.session_state.firing_edit_id = None
@@ -82,9 +77,6 @@ with tab1:
             # Kiln Index
             d_kiln_idx = 0
             if is_edit and default_data.get('kiln_id'):
-                # Find name by ID from loading kilns again or reverse map
-                # Efficient: use kiln_options and map
-                # brute force find name
                 k_name = next((k for k, v in kiln_map.items() if v == default_data['kiln_id']), None)
                 if k_name in kiln_options:
                     d_kiln_idx = kiln_options.index(k_name)
@@ -96,19 +88,13 @@ with tab1:
             # Values
             d_cons = float(default_data['power_consumption_kwh']) if is_edit else 0.0
             d_cost = float(default_data['cost']) if is_edit else 0.0
-            # To preserve generic calculator behavior, we might separate calculator from fields if editing
-            # But let's simplify: User inputs manual values or uses calculator delta (but delta is hard to reverse).
-            # Let's show "Consumo" and "Custo" as input fields (overridable) rather than just start/end calc
-            # Or keep calculator but allow overwrite.
-            # I will stick to Input Fields for Final Value to make editing easy.
             
             date = st.date_input("Data", d_date, format="DD/MM/YYYY")
             sel_kiln = st.selectbox("Forno Utilizado", kiln_options, index=d_kiln_idx)
             f_type = st.selectbox("Tipo de Queima", types, index=d_type_idx)
             
             st.markdown("#### Energia")
-            # If editing, we just set the final consumption/cost. Calculator logic is for NEW principally.
-            # To allow Calculator to work:
+            
             if not is_edit:
                  c1, c2 = st.columns(2)
                  start_kwh = c1.number_input("Leitura Inicial", min_value=0.0, step=0.1, format="%.1f")
@@ -119,8 +105,6 @@ with tab1:
             consumption = st.number_input("Consumo (kWh)", min_value=0.0, step=0.1, value=d_cons, format="%.1f")
             kwh_price = st.number_input("Preço kWh (R$)", min_value=0.0, step=0.01, value=0.80)
             
-            # Auto calc cost if not overridden or if logic dictates
-            # Simple logic: Cost is Cons * Price.
             cost_calc = consumption * kwh_price
             cost = st.number_input("Custo Total (R$)", min_value=0.0, step=0.01, value=cost_calc if not is_edit else d_cost)
 
@@ -145,26 +129,28 @@ with tab1:
                 
                 k_id = kiln_map[sel_kiln]
                 
-                if is_edit:
-                    cursor.execute("""
-                        UPDATE firings 
-                        SET date=?, type=?, power_consumption_kwh=?, cost=?, kiln_id=?, observation=?, image_path=?
-                        WHERE id=?
-                    """, (date, f_type, consumption, cost, k_id, obs, final_img_path, st.session_state.firing_edit_id))
-                    admin_utils.show_feedback_dialog("Queima atualizada!", level="success")
-                    st.session_state.firing_edit_id = None
-                else:
-                    cursor.execute("""
-                        INSERT INTO firings (date, type, power_consumption_kwh, cost, kiln_id, observation, image_path)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (date, f_type, consumption, cost, k_id, obs, final_img_path))
-                    new_id = cursor.lastrowid
-                    conn.commit()
-                    audit.log_action(conn, 'CREATE', 'firings', new_id, None,
-                        {'date': str(date), 'type': f_type, 'cost': cost, 'power_consumption_kwh': consumption})
-                    admin_utils.show_feedback_dialog("Queima registrada!", level="success")
-                
-                st.rerun()
+                firing_data = {
+                    'date': date,
+                    'type': f_type,
+                    'power_consumption_kwh': consumption,
+                    'cost': cost,
+                    'kiln_id': k_id,
+                    'observation': obs,
+                    'image_path': final_img_path
+                }
+
+                try:
+                    if is_edit:
+                        firing_service.update_firing(conn, st.session_state.firing_edit_id, firing_data)
+                        admin_utils.show_feedback_dialog("Queima atualizada!", level="success")
+                        st.session_state.firing_edit_id = None
+                    else:
+                        firing_service.create_firing(conn, firing_data)
+                        admin_utils.show_feedback_dialog("Queima registrada!", level="success")
+                    
+                    st.rerun()
+                except Exception as e:
+                    admin_utils.show_feedback_dialog(f"Erro ao salvar: {e}", level="error")
 
     # --- Histórico Queimas ---
     with col_hist:
@@ -174,36 +160,17 @@ with tab1:
         fc1, fc2, fc3 = st.columns(3)
         fil_kiln = fc1.selectbox("Filtrar Forno", ["Todos"] + kiln_options)
         fil_type = fc2.selectbox("Filtrar Tipo", ["Todos", "Biscoito", "Esmalte", "Outro"])
-        
-        # Date Range defaulting to last 30 days or similar, or just allow empty
-        # Streamlit date_input can take a tuple for range
         fil_date = fc3.date_input("Intervalo Data", [], format="DD/MM/YYYY") 
 
-        # Build Query
-        query = """
-            SELECT f.id, f.date, k.name as forno, f.type, f.power_consumption_kwh, f.cost, f.observation, f.image_path
-            FROM firings f
-            LEFT JOIN kilns k ON f.kiln_id = k.id
-            WHERE 1=1
-        """
-        params = []
+        # Using Service
+        filters = {
+            'kiln_name': fil_kiln,
+            'type': fil_type,
+            'start_date': fil_date[0] if len(fil_date) == 2 else None,
+            'end_date': fil_date[1] if len(fil_date) == 2 else None
+        }
         
-        if fil_kiln != "Todos":
-            query += " AND k.name = ?"
-            params.append(fil_kiln)
-            
-        if fil_type != "Todos":
-            query += " AND f.type = ?"
-            params.append(fil_type)
-            
-        if len(fil_date) == 2:
-            query += " AND f.date BETWEEN ? AND ?"
-            params.append(fil_date[0])
-            params.append(fil_date[1])
-            
-        query += " ORDER BY f.date DESC"
-        
-        df_firings = pd.read_sql(query, conn, params=params)
+        df_firings = firing_service.get_firings(conn, filters)
         
         if not df_firings.empty:
             for i, row in df_firings.iterrows():
@@ -222,10 +189,7 @@ with tab1:
                             st.rerun()
                             
                         if c_del.button("🗑️ Excluir", key=f"del_f_{row['id']}"):
-                            old_data = {'date': str(row['date']), 'type': row['type'], 'cost': row['cost']}
-                            cursor.execute("DELETE FROM firings WHERE id=?", (row['id'],))
-                            conn.commit()
-                            audit.log_action(conn, 'DELETE', 'firings', row['id'], old_data, None)
+                            firing_service.delete_firing(conn, row['id'])
                             st.rerun()
                             
                     with c_img:
@@ -253,8 +217,11 @@ with tab2:
         m_default = {}
         if is_m_edit:
             try:
-                m_row = pd.read_sql("SELECT * FROM kiln_maintenance WHERE id = ?", conn, params=(st.session_state.maint_edit_id,)).iloc[0]
-                m_default = m_row
+                m_row = firing_service.get_maintenance_by_id(conn, st.session_state.maint_edit_id)
+                if m_row is not None:
+                    m_default = m_row
+                else:
+                    raise ValueError("Manutenção não encontrada")
             except Exception:
                 admin_utils.show_feedback_dialog("Erro ao carregar dados.", level="error")
                 st.session_state.maint_edit_id = None
@@ -300,26 +267,27 @@ with tab2:
                 
                 mk_id = kiln_map[m_kiln]
                 
-                if is_m_edit:
-                    cursor.execute("""
-                        UPDATE kiln_maintenance 
-                        SET kiln_id=?, date=?, category=?, description=?, observation=?, image_path=?
-                        WHERE id=?
-                    """, (mk_id, m_date, m_cat, m_desc, m_obs, final_m_img, st.session_state.maint_edit_id))
-                    admin_utils.show_feedback_dialog("Manutenção Atualizada!", level="success")
-                    st.session_state.maint_edit_id = None
-                else:
-                    cursor.execute("""
-                        INSERT INTO kiln_maintenance (kiln_id, date, category, description, observation, image_path)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (mk_id, m_date, m_cat, m_desc, m_obs, final_m_img))
-                    new_id = cursor.lastrowid
-                    conn.commit()
-                    audit.log_action(conn, 'CREATE', 'kiln_maintenance', new_id, None,
-                        {'date': str(m_date), 'category': m_cat, 'description': m_desc})
-                    admin_utils.show_feedback_dialog("Manutenção Registrada!", level="success")
+                maint_data = {
+                    'kiln_id': mk_id,
+                    'date': m_date,
+                    'category': m_cat,
+                    'description': m_desc,
+                    'observation': m_obs,
+                    'image_path': final_m_img
+                }
                 
-                st.rerun()
+                try:
+                    if is_m_edit:
+                        firing_service.update_maintenance(conn, st.session_state.maint_edit_id, maint_data)
+                        admin_utils.show_feedback_dialog("Manutenção Atualizada!", level="success")
+                        st.session_state.maint_edit_id = None
+                    else:
+                        firing_service.create_maintenance(conn, maint_data)
+                        admin_utils.show_feedback_dialog("Manutenção Registrada!", level="success")
+                    
+                    st.rerun()
+                except Exception as e:
+                    admin_utils.show_feedback_dialog(f"Erro ao salvar: {e}", level="error")
                 
     # --- Histórico Manutenção ---
     with col_m_hist:
@@ -331,31 +299,15 @@ with tab2:
         mfil_cat = mf2.selectbox("Filtrar Categoria", ["Todas"] + maint_categories, key="mfil_cat")
         mfil_date = mf3.date_input("Intervalo Data", [], key="mfil_date")
 
-        # Query
-        m_query = """
-            SELECT m.id, m.date, k.name as forno, m.category, m.description, m.observation, m.image_path
-            FROM kiln_maintenance m
-            JOIN kilns k ON m.kiln_id = k.id
-            WHERE 1=1
-        """
-        m_params = []
+        # Using Service
+        m_filters = {
+            'kiln_name': mfil_kiln,
+            'category': mfil_cat,
+            'start_date': mfil_date[0] if len(mfil_date) == 2 else None,
+            'end_date': mfil_date[1] if len(mfil_date) == 2 else None
+        }
         
-        if mfil_kiln != "Todos":
-            m_query += " AND k.name = ?"
-            m_params.append(mfil_kiln)
-            
-        if mfil_cat != "Todas":
-            m_query += " AND m.category = ?"
-            m_params.append(mfil_cat)
-            
-        if len(mfil_date) == 2:
-            m_query += " AND m.date BETWEEN ? AND ?"
-            m_params.append(mfil_date[0])
-            m_params.append(mfil_date[1])
-            
-        m_query += " ORDER BY m.date DESC"
-        
-        df_maint = pd.read_sql(m_query, conn, params=m_params)
+        df_maint = firing_service.get_maintenance_records(conn, m_filters)
         
         if not df_maint.empty:
             for i, row in df_maint.iterrows():
@@ -372,10 +324,7 @@ with tab2:
                             st.rerun()
                             
                         if c_mdel.button("🗑️ Excluir", key=f"del_m_{row['id']}"):
-                             old_data = {'date': str(row['date']), 'category': row['category'], 'description': row['description']}
-                             cursor.execute("DELETE FROM kiln_maintenance WHERE id=?", (row['id'],))
-                             conn.commit()
-                             audit.log_action(conn, 'DELETE', 'kiln_maintenance', row['id'], old_data, None)
+                             firing_service.delete_maintenance(conn, row['id'])
                              st.rerun()
                     with c_mimg:
                         if row['image_path'] and os.path.exists(row['image_path']):

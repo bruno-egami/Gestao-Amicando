@@ -4,6 +4,7 @@ import database
 import admin_utils
 import auth
 import audit
+import services.supplier_service as supplier_service
 import time
 
 st.set_page_config(page_title="Fornecedores", page_icon="🚚", layout="wide")
@@ -26,8 +27,6 @@ if not auth.check_page_access("Fornecedores"):
 auth.render_custom_sidebar()
 st.title("🚚 Gestão de Fornecedores")
 
-cursor = conn.cursor()
-
 # Session State for Edit Mode
 if "sup_edit_id" not in st.session_state:
     st.session_state.sup_edit_id = None
@@ -46,8 +45,9 @@ with col_form:
     
     if is_edit:
         try:
-            edit_row = pd.read_sql("SELECT * FROM suppliers WHERE id=?", conn, params=(st.session_state.sup_edit_id,)).iloc[0]
-            def_name = edit_row['name'] or ""
+            edit_row = supplier_service.get_supplier_by_id(conn, st.session_state.sup_edit_id)
+            if edit_row:
+                def_name = edit_row['name'] or ""
             def_contact = edit_row['contact'] or ""
             def_phone = edit_row['phone'] or ""
             def_email = edit_row['email'] or ""
@@ -73,25 +73,19 @@ with col_form:
             if not f_name:
                 admin_utils.show_feedback_dialog("Nome é obrigatório.", level="warning")
             else:
-                new_data = {'name': f_name, 'contact': f_contact, 'phone': f_phone, 'email': f_email, 'notes': f_notes}
-                
                 if is_edit:
-                    old_data = {'name': def_name, 'contact': def_contact, 'phone': def_phone, 'email': def_email, 'notes': def_notes}
-                    cursor.execute("""
-                        UPDATE suppliers SET name=?, contact=?, phone=?, email=?, notes=? WHERE id=?
-                    """, (f_name, f_contact, f_phone, f_email, f_notes, st.session_state.sup_edit_id))
-                    conn.commit()
-                    audit.log_action(conn, 'UPDATE', 'suppliers', st.session_state.sup_edit_id, old_data, new_data)
-                    admin_utils.show_feedback_dialog("Fornecedor atualizado!", level="success")
-                    st.session_state.sup_edit_id = None
+                    try:
+                        supplier_service.update_supplier(conn, st.session_state.sup_edit_id, f_name, f_contact, f_phone, f_email, f_notes)
+                        admin_utils.show_feedback_dialog("Fornecedor atualizado!", level="success")
+                        st.session_state.sup_edit_id = None
+                    except Exception as e:
+                        st.error(f"Erro ao atualizar: {e}")
                 else:
-                    cursor.execute("""
-                        INSERT INTO suppliers (name, contact, phone, email, notes) VALUES (?, ?, ?, ?, ?)
-                    """, (f_name, f_contact, f_phone, f_email, f_notes))
-                    conn.commit()
-                    new_id = cursor.lastrowid
-                    audit.log_action(conn, 'CREATE', 'suppliers', new_id, None, new_data)
-                    admin_utils.show_feedback_dialog("Fornecedor cadastrado!", level="success")
+                    try:
+                        supplier_service.create_supplier(conn, f_name, f_contact, f_phone, f_email, f_notes)
+                        admin_utils.show_feedback_dialog("Fornecedor cadastrado!", level="success")
+                    except Exception as e:
+                        st.error(f"Erro ao criar: {e}")
                 st.rerun()
 
 # === RIGHT: LIST WITH SEARCH ===
@@ -102,7 +96,7 @@ with col_list:
     search_term = st.text_input("🔍 Buscar", placeholder="Nome, contato, telefone...")
     
     # Fetch Data
-    df = pd.read_sql("SELECT * FROM suppliers ORDER BY name", conn)
+    df = supplier_service.get_all_suppliers(conn)
     
     # Apply Search Filter
     if search_term and not df.empty:
@@ -134,13 +128,12 @@ with col_list:
                 
                 with c3:
                     if st.button("🗑️ Excluir", key=f"del_sup_{row['id']}", use_container_width=True):
-                        def do_delete(sid=row['id'], sname=row['name'], r=row):
+                        def do_delete(sid=row['id'], sname=row['name']):
                             try:
-                                old_data = {'id': sid, 'name': sname, 'contact': r['contact'], 
-                                           'phone': r['phone'], 'email': r['email'], 'notes': r['notes']}
-                                cursor.execute("DELETE FROM suppliers WHERE id=?", (sid,))
-                                conn.commit()
-                                audit.log_action(conn, 'DELETE', 'suppliers', sid, old_data, None)
+                                supplier_service.delete_supplier(conn, sid)
+                                st.success(f"Fornecedor '{sname}' excluído.")
+                                time.sleep(1)
+                                st.rerun()
                             except Exception as e:
                                 st.error(f"Erro: {e}")
 

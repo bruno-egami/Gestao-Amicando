@@ -10,6 +10,9 @@ import services.order_service as order_service
 import utils.styles as styles
 import uuid
 from datetime import datetime, date, timedelta
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 st.set_page_config(page_title="Vendas", page_icon="💰", layout="wide")
 
@@ -66,7 +69,9 @@ def show_receipt_dialog(order_data):
                         current_dt = order_data['date']
                      else:
                         current_dt = datetime.strptime(order_data['date'], '%d/%m/%Y')
-             except: pass
+             except Exception as e:
+                 logger.warning(f"Error parsing date in Vendas receipt: {e}")
+                 pass
              
              formatted_id = f"VEN-{current_dt.strftime('%y%m%d')}-{order_data.get('id')}"
              type_lbl = "Venda"
@@ -429,16 +434,16 @@ with tab_pos:
                         
                         is_kit, kit_stock = product_service.get_kit_stock_status(conn, p_id_check)
                         
-                        p_stock_row = pd.read_sql("SELECT stock_quantity FROM products WHERE id=?", conn, params=(p_id_check,))
+                        p_stock_row = product_service.get_product_by_id(conn, p_id_check)
                         
                         variant_id = item.get('variant_id')
                         if variant_id:
-                            v_row = pd.read_sql("SELECT stock_quantity FROM product_variants WHERE id=?", conn, params=(variant_id,)).iloc[0]
+                            v_row = product_service.get_variant_by_id(conn, variant_id)
                             r_stock = v_row['stock_quantity']
                         elif is_kit:
                             r_stock = kit_stock
-                        elif not p_stock_row.empty:
-                            r_stock = p_stock_row.iloc[0]['stock_quantity']
+                        elif p_stock_row is not None:
+                            r_stock = p_stock_row['stock_quantity']
                         
                         qty_req = item['qty']
                         can_sell = min(r_stock, qty_req)
@@ -845,7 +850,7 @@ with tab_quotes:
     sel_q_status = q_f1.multiselect("Status", ["Pendente", "Aprovado", "Recusado", "Expirado"], default=["Pendente"])
     sel_q_client = q_f2.text_input("Filtrar Cliente")
 
-    quotes_df = pd.read_sql("SELECT * FROM quotes ORDER BY date_created DESC", conn) # Basic fetch
+    quotes_df = order_service.get_all_quotes(conn) # Basic fetch
     # Join client name
     c_df = order_service.get_all_clients(conn)
     quotes_df = quotes_df.merge(c_df, left_on='client_id', right_on='id', suffixes=('', '_cli'))
@@ -859,18 +864,13 @@ with tab_quotes:
             st.write(f"Notas: {quote['notes']}")
             
             # Fetch items
-            items = pd.read_sql("SELECT * FROM quote_items WHERE quote_id=?", conn, params=(quote['id'],))
+            items = order_service.get_quote_items(conn, quote['id'])
             st.dataframe(items)
             
             c1, c2, c3 = st.columns(3)
             # PDF GEN
             # Fetch full item details for PDF
-            pdf_items = pd.read_sql("""
-                SELECT qi.product_id, p.name, qi.quantity, qi.unit_price, qi.item_notes 
-                FROM quote_items qi
-                LEFT JOIN products p ON qi.product_id = p.id
-                WHERE qi.quote_id=?
-            """, conn, params=(quote['id'],))
+            pdf_items = order_service.get_quote_details_for_pdf(conn, quote['id'])
             
             pdf_data = reports.generate_quote_pdf({
                 "id": f"ORC-{quote['id']}", 
