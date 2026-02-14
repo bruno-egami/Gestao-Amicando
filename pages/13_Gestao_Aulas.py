@@ -355,9 +355,13 @@ with tab_finance:
                                 if ec1.button("📝 Editar", key=f"edit_t_{t['id']}"):
                                     edit_tuition_dialog(t['id'], sname, t['month_year'], t['amount'])
                                 if ec2.button("🗑️ Cancelar", key=f"cancel_t_{t['id']}"):
+                                    def do_cancel_tuition(tid=t['id']):
+                                        with database.db_session() as ctx_conn:
+                                            student_service.cancel_tuition(ctx_conn, tid)
+                                    
                                     admin_utils.show_confirmation_dialog(
                                         f"Deseja cancelar a mensalidade de {t['month_year']}?",
-                                        on_confirm=lambda tid=t['id']: student_service.cancel_tuition(conn, tid)
+                                        on_confirm=do_cancel_tuition
                                     )
 
                         # Render Consumptions
@@ -377,9 +381,13 @@ with tab_finance:
                                 if ec1.button("📝 Editar", key=f"edit_c_{c['id']}"):
                                     edit_consumption_dialog(c['id'], sname, c['description'], c['total_value'])
                                 if ec2.button("🗑️ Cancelar", key=f"cancel_c_{c['id']}"):
+                                    def do_cancel_consumption(cid=c['id']):
+                                        with database.db_session() as ctx_conn:
+                                            student_service.cancel_consumption(ctx_conn, cid)
+
                                     admin_utils.show_confirmation_dialog(
                                         f"Deseja cancelar o lançamento: {c['description']}?",
-                                        on_confirm=lambda cid=c['id']: student_service.cancel_consumption(conn, cid)
+                                        on_confirm=do_cancel_consumption
                                     )
                                     
                         st.divider()
@@ -415,9 +423,13 @@ with tab_finance:
                         pay_val = p_col1.number_input("Valor Pagamento (R$)", min_value=0.01, max_value=float(total), value=float(total), step=10.0, key=f"pay_input_{sid}")
                         
                         if p_col2.button("✅ Pagar", key=f"pay_{sid}", type="primary", use_container_width=True):
+                            def do_process_payment(s=sid, v=pay_val):
+                                with database.db_session() as ctx_conn:
+                                    student_service.process_partial_payment(ctx_conn, s, v)
+
                             admin_utils.show_confirmation_dialog(
                                 f"Confirmar pagamento de R$ {pay_val:.2f} para {sname}?",
-                                on_confirm=lambda s=sid, v=pay_val: student_service.process_partial_payment(conn, s, v)
+                                on_confirm=do_process_payment
                             )
                         
                         # PDF Download

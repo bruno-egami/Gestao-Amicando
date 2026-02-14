@@ -129,7 +129,8 @@ with col_list:
                     if st.button("🗑️ Excluir", key=f"del_cli_{row['id']}", use_container_width=True):
                         def do_delete(cid=row['id'], cname=row['name']):
                             try:
-                                client_service.delete_client(conn, cid)
+                                with database.db_session() as ctx_conn:
+                                    client_service.delete_client(ctx_conn, cid)
                                 st.success(f"Cliente '{cname}' excluído.")
                                 time.sleep(1)
                                 st.rerun()

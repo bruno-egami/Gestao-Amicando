@@ -859,6 +859,9 @@ def update_quote_status(conn, quote_id, new_status):
         conn.rollback()
         logger.error(f"Error updating quote status {quote_id}: {e}")
         raise
+
+def create_quote(conn, quote_data, items):
+    """
     Creates a quote and its items.
     quote_data: client_id, notes, delivery_terms, payment_terms, valid_days
     items: list of dicts {product_id, qty, price, notes}

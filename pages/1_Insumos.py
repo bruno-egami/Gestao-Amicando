@@ -240,9 +240,10 @@ with tab_cat:
                     if st.button("EXCLUIR INSUMO", type="primary", use_container_width=True):
                         def do_delete(mid=st.session_state.insumo_edit_id, mname=target_data.get('name')):
                             try:
-                                original = material_service.get_material_by_id(conn, mid)
-                                material_service.delete_material(conn, mid)
-                                audit.log_action(conn, 'DELETE', 'materials', mid, original, None)
+                                with database.db_session() as ctx_conn:
+                                    original = material_service.get_material_by_id(ctx_conn, mid)
+                                    material_service.delete_material(ctx_conn, mid)
+                                    audit.log_action(ctx_conn, 'DELETE', 'materials', mid, original, None)
                                 st.session_state.insumo_edit_id = None
                             except Exception as e:
                                 st.error(f"Erro ao excluir: {e}")

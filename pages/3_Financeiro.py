@@ -165,7 +165,8 @@ with tab_gestao:
                 cc1.text(cat)
                 if cc2.button("🗑️", key=f"del_cat_{cat}"):
                     def do_del_cat(name=cat):
-                        finance_service.delete_expense_category(conn, name)
+                        with database.db_session() as ctx_conn:
+                            finance_service.delete_expense_category(ctx_conn, name)
                         st.rerun()
                     
                     admin_utils.show_confirmation_dialog(
@@ -314,8 +315,9 @@ with tab_gestao:
                                 st.rerun()
                             if st.button("🗑️", key=f"d_e_{row['id']}", help="Excluir"):
                                 def do_del_exp(eid=row['id']):
-                                    old_data = finance_service.delete_expense(conn, eid)
-                                    audit.log_action(conn, 'DELETE', 'expenses', eid, old_data, None)
+                                    with database.db_session() as ctx_conn:
+                                        old_data = finance_service.delete_expense(ctx_conn, eid)
+                                        audit.log_action(ctx_conn, 'DELETE', 'expenses', eid, old_data, None)
                                     st.rerun()
 
                                 admin_utils.show_confirmation_dialog(
@@ -426,8 +428,9 @@ with tab_gestao:
                             st.rerun()
                         if fc_del.button("🗑️ Excluir", key=f"d_f_{row['id']}"):
                             def do_del_fix(fid=row['id']):
-                                old_data = finance_service.delete_fixed_cost(conn, fid)
-                                audit.log_action(conn, 'DELETE', 'fixed_costs', fid, old_data, None)
+                                with database.db_session() as ctx_conn:
+                                    old_data = finance_service.delete_fixed_cost(ctx_conn, fid)
+                                    audit.log_action(ctx_conn, 'DELETE', 'fixed_costs', fid, old_data, None)
                                 st.rerun()
 
                             admin_utils.show_confirmation_dialog(

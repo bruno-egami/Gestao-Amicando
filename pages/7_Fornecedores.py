@@ -130,7 +130,8 @@ with col_list:
                     if st.button("🗑️ Excluir", key=f"del_sup_{row['id']}", use_container_width=True):
                         def do_delete(sid=row['id'], sname=row['name']):
                             try:
-                                supplier_service.delete_supplier(conn, sid)
+                                with database.db_session() as ctx_conn:
+                                    supplier_service.delete_supplier(ctx_conn, sid)
                                 st.success(f"Fornecedor '{sname}' excluído.")
                                 time.sleep(1)
                                 st.rerun()

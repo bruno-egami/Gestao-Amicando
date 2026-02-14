@@ -66,7 +66,8 @@ with tab1:
             if st.button("Excluir Categoria Selecionada", use_container_width=True):
                  if del_cat:
                     def do_del_cat(name=del_cat):
-                        product_service.delete_category(conn, name)
+                        with database.db_session() as ctx_conn:
+                            product_service.delete_category(ctx_conn, name)
                         product_service.get_categories.clear()
                     
                     admin_utils.show_confirmation_dialog(
@@ -370,9 +371,9 @@ with tab1:
         selected_prod_id = st.session_state.editing_product_id
         
         # Ensure product exists (fetch fresh data)
-        try:
-            curr_prod = product_service.get_product_by_id(conn, selected_prod_id).iloc[0]
-        except IndexError:
+        curr_prod = product_service.get_product_by_id(conn, selected_prod_id)
+        
+        if curr_prod is None:
             st.warning("Produto não encontrado (talvez excluído).")
             st.session_state.editing_product_id = None
             st.rerun()
@@ -485,7 +486,8 @@ with tab1:
                 if st.button("🗑️ Remover Insumo selecionado", use_container_width=True):
                     if del_id:
                         def do_del_rec(rid=del_id):
-                            product_service.delete_recipe_item(conn, rid)
+                            with database.db_session() as ctx_conn:
+                                product_service.delete_recipe_item(ctx_conn, rid)
                         
                         admin_utils.show_confirmation_dialog(
                             "Remover este insumo da receita do produto?",
@@ -619,7 +621,8 @@ with tab1:
                         # Delete
                         if vc5.button("🗑️", key=f"del_var_{var_row['id']}"):
                             def do_del_var(vid=var_row['id'], vname=var_row['variant_name']):
-                                product_service.delete_variant(conn, vid)
+                                with database.db_session() as ctx_conn:
+                                    product_service.delete_variant(ctx_conn, vid)
                             
                             admin_utils.show_confirmation_dialog(
                                 f"Excluir a variação '{var_row['variant_name']}'?",
@@ -659,7 +662,8 @@ with tab1:
                 if st.button("🗑️ Remover Componente selecionado", use_container_width=True):
                      if del_kit_id:
                         def do_del_kit(kid=del_kit_id):
-                            product_service.delete_kit_item(conn, kid)
+                            with database.db_session() as ctx_conn:
+                                product_service.delete_kit_item(ctx_conn, kid)
 
                         admin_utils.show_confirmation_dialog(
                             "Remover este componente do kit?",
@@ -1021,7 +1025,8 @@ with tab2:
                     # Delete button
                     if st.button("🗑️", key=f"del_prod_{row['id']}", help="Excluir registro"):
                         def do_delete_hist(rid=row['id'], pid=row['product_id'], qty=row['quantity'], pname=row['product_name']):
-                            product_service.delete_production_history(conn, rid, pid, qty, pname)
+                            with database.db_session() as ctx_conn:
+                                product_service.delete_production_history(ctx_conn, rid, pid, qty, pname)
                             product_service.get_all_products.clear()
 
                         admin_utils.show_confirmation_dialog(

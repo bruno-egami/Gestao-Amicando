@@ -157,7 +157,8 @@ with tab_users:
                             if st.button("🗑️", key=f"del_user_{row['id']}", use_container_width=True, help="Excluir"):
                                 def do_del_user(uid=row['id']):
                                     try:
-                                        admin_service.delete_user(conn, uid)
+                                        with database.db_session() as ctx_conn:
+                                            admin_service.delete_user(ctx_conn, uid)
                                         st.rerun()
                                     except ValueError as ve:
                                         admin_utils.show_feedback_dialog(str(ve), level="error")
@@ -238,10 +239,11 @@ with tab_audit:
                     if row['action'] in ['UPDATE', 'DELETE'] and row['old_data']:
                         if st.button("↩️ Reverter", key=f"rb_{row['id']}"):
                             def do_rollback(rid=row['id']):
-                                if audit.rollback_record(conn, rid):
-                                    admin_utils.show_feedback_dialog("Restaurado com sucesso!", level="success")
-                                else:
-                                    admin_utils.show_feedback_dialog("Erro ao restaurar.", level="error")
+                                with database.db_session() as ctx_conn:
+                                    if audit.rollback_record(ctx_conn, rid):
+                                        admin_utils.show_feedback_dialog("Restaurado com sucesso!", level="success")
+                                    else:
+                                        admin_utils.show_feedback_dialog("Erro ao restaurar.", level="error")
                             admin_utils.show_confirmation_dialog(f"Reverter alteração {row['id']}?", on_confirm=do_rollback)
 
 
