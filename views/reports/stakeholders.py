@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import services.report_service as report_service
+import services.analytics_service as report_service
 from datetime import datetime, date, timedelta
 
 def render_customer_history(conn):

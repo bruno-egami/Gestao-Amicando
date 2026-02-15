@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import services.product_service as product_service
-import services.report_service as report_service
+import services.analytics_service as report_service
 from datetime import datetime, date, timedelta
 
 def render_stock_current(conn):
