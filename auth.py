@@ -154,9 +154,10 @@ def verify_admin_authorization(conn, password: str) -> bool:
 def get_current_user() -> dict | None:
     """Get the currently logged-in user from session state."""
     if 'current_user' in st.session_state and st.session_state.current_user:
-        # Check session timeout (5 minutes)
+        # Check session timeout (60 minutes)
+        SESSION_TIMEOUT_SECONDS = 3600
         if 'last_activity' in st.session_state:
-            if (time.time() - st.session_state.last_activity) > 3600:  # 60 min
+            if (time.time() - st.session_state.last_activity) > SESSION_TIMEOUT_SECONDS:
                 logout()
                 return None
         st.session_state.last_activity = time.time()

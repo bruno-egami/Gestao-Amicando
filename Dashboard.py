@@ -37,29 +37,29 @@ with database.db_session() as conn_init:
 
 # --- AUTHENTICATION ---
 conn = get_db_connection()
-if not auth.require_login(conn):
-    st.stop()
-
-# Render custom sidebar
-auth.render_custom_sidebar()
-
-# Get current user
-current_user = auth.get_current_user()
-is_admin = current_user and current_user['role'] == 'admin'
-
-# --- SIDEBAR ---
-with st.sidebar:
-    admin_utils.render_sidebar_logo()
-    
-    st.info("ℹ️ Dashboard focado em operações (Encomendas e Estoque).")
-
-# --- MAIN CONTENT ---
-admin_utils.render_header_logo()
-st.title("📊 Dashboard")
-st.write(f"Hoje: **{date.today().strftime('%d/%m/%Y')}**")
-
-# --- QUERIES & DATA LOADING ---
 try:
+    if not auth.require_login(conn):
+        st.stop()
+
+    # Render custom sidebar
+    auth.render_custom_sidebar()
+
+    # Get current user
+    current_user = auth.get_current_user()
+    is_admin = current_user and current_user['role'] == 'admin'
+
+    # --- SIDEBAR ---
+    with st.sidebar:
+        admin_utils.render_sidebar_logo()
+        
+        st.info("ℹ️ Dashboard focado em operações (Encomendas e Estoque).")
+
+    # --- MAIN CONTENT ---
+    admin_utils.render_header_logo()
+    st.title("📊 Dashboard")
+    st.write(f"Hoje: **{date.today().strftime('%d/%m/%Y')}**")
+
+    # --- QUERIES & DATA LOADING ---
     today_str = date.today().isoformat()
     
     # 1. Encomendas (Orders)

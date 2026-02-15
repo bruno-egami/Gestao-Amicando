@@ -109,6 +109,25 @@ def get_audit_log(conn, filters: dict = None, limit: int = 100):
     
     return pd.read_sql(query, conn, params=params)
 
+ALLOWED_TABLES = {
+    'products', 'sales', 'expenses', 'materials', 'clients',
+    'suppliers', 'commission_orders', 'commission_items', 'firings',
+    'users', 'fixed_costs', 'quotes', 'quote_items',
+    'students', 'tuitions', 'student_consumptions', 'classes',
+    'kilns', 'kiln_maintenance', 'production_wip', 'production_history',
+    'production_losses', 'inventory_transactions', 'product_variants',
+    'product_recipes', 'product_kits', 'class_cancellations',
+    'material_categories', 'product_categories', 'expense_categories'
+}
+
+def _get_table_columns(cursor, table_name):
+    """Returns set of valid column names for a table."""
+    try:
+        info = cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {row[1] for row in info}
+    except Exception:
+        return set()
+
 def rollback_record(conn, audit_id: int) -> bool:
     """
     Rollback a record to its previous state based on an audit log entry.
@@ -133,7 +152,21 @@ def rollback_record(conn, audit_id: int) -> bool:
     record_id = entry['record_id']
     old_data = json.loads(entry['old_data']) if entry['old_data'] else None
     
+    # Validate table name against whitelist
+    if table_name not in ALLOWED_TABLES:
+        st.error(f"Tabela '{table_name}' não é permitida para rollback.")
+        return False
+    
     cursor = conn.cursor()
+    
+    # Validate column names against actual table schema
+    if old_data:
+        valid_columns = _get_table_columns(cursor, table_name)
+        if valid_columns:
+            invalid_cols = set(old_data.keys()) - valid_columns
+            if invalid_cols:
+                st.error(f"Colunas inválidas detectadas: {invalid_cols}")
+                return False
     
     try:
         if action == 'DELETE' and old_data:
