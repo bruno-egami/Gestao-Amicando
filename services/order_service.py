@@ -27,8 +27,12 @@ def create_sale(cursor, sale_data):
         INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, discount, payment_method, notes, salesperson, order_id, variant_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
+    dt = sale_data['date']
+    if hasattr(dt, 'isoformat'):
+        dt = dt.isoformat()
+        
     cursor.execute(query, (
-        sale_data['date'], 
+        dt, 
         int(sale_data['product_id']) if sale_data['product_id'] else None, 
         sale_data['quantity'], 
         sale_data['total_price'], 
