@@ -7,6 +7,7 @@ import audit
 import reports
 import services.product_service as product_service
 import services.order_service as order_service
+import services.sales_service as sales_service
 import utils.styles as styles
 import uuid
 from datetime import datetime, date, timedelta
@@ -550,109 +551,57 @@ with tab_pos:
                                  valid_client = False
                                  
                             if valid_client:
-                                 try:
-                                     trans_uuid = f"TRX-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}"
-                                     order_items = []
-                                     cursor = conn.cursor()
-                                     
-                                     for ca in cart_analysis:
-                                        it = ca['item']
-                                        q_sell = int(ca['can_sell'])
-                                        q_order = int(ca['must_order'])
-                                        
-                                        # 1. Sale Portion
-                                        if q_sell > 0:
-                                            unit_disc = it['discount'] / it['qty']
-                                            total_sell = (it['base_price'] * q_sell) - (unit_disc * q_sell)
-                                            disc_sell = unit_disc * q_sell
-                                            
-                                            sale_data = {
-                                                "date": date_order,
-                                                "product_id": int(it['product_id']),
-                                                "quantity": q_sell,
-                                                "total_price": total_sell,
-                                                "status": "Finalizada",
-                                                "client_id": final_client_id,
-                                                "discount": disc_sell,
-                                                "payment_method": pay_method_choice,
-                                                "notes": notes_order,
-                                                "salesperson": salesperson_choice,
-                                                "order_id": trans_uuid,
-                                                "variant_id": it.get('variant_id')
-                                            }
-                                            order_service.create_sale(cursor, sale_data)
-                                            
-                                            # Audit
-                                            audit.log_action(conn, 'CREATE', 'sales', trans_uuid, None, {'audit_msg': 'Partial Sale'}, commit=False)
-                                            # Deduct Stock
-                                            logs = product_service.deduct_stock(cursor, int(it['product_id']), q_sell, variant_id=it.get('variant_id'))
-                                            for log in logs: st.toast(log, icon="📉")
-
-                                        # 2. Order Portion
-                                        if q_order > 0:
-                                            order_items.append({
-                                                'product_id': it['product_id'],
-                                                'qty': q_order,
-                                                'unit_price': it['base_price'],
-                                                'variant_id': it.get('variant_id')
-                                            })
-                                            
-                                     # Create Commission Order
-                                     final_notes = notes_order
-                                     if order_items:
+                                try:
+                                    # Call Sales Service
+                                    result = sales_service.process_sale_transaction(
+                                        conn, 
+                                        cart_analysis, 
+                                        final_client_id, 
+                                        salesperson_choice, 
+                                        pay_method_choice, 
+                                        notes_order, 
+                                        d_comm, 
+                                        deposit_val
+                                    )
+                                    
+                                    trans_uuid = result['trans_id']
+                                    new_ord_id = result['order_id']
+                                    logs = result['logs']
+                                    
+                                    # Show Logs
+                                    for log in logs: st.toast(log, icon="📉")
+                                    
+                                    if new_ord_id:
+                                        admin_utils.show_feedback_dialog(f"Encomenda gerada: #{new_ord_id}", level="success")
+                                    
+                                    admin_utils.show_feedback_dialog("Venda Finalizada!", level="success")
+                                    
+                                    # Construct Receipt Data
+                                    final_notes = notes_order
+                                    if new_ord_id:
                                          final_notes = f"Gerado via Venda #{trans_uuid}. Obs: {notes_order}"
                                          if deposit_val > 0:
                                              final_notes += f"\n\nSinal: R$ {deposit_val:.2f}"
-
-                                         order_data = {
-                                             'client_id': final_client_id,
-                                             'date_created': date.today(),
-                                             'date_due': d_comm,
-                                             'status': "Pendente",
-                                             'total_price': 0, 
-                                             'notes': final_notes,
-                                             'deposit_amount': deposit_val
-                                         }
-                                         new_ord_id = order_service.create_commission_order(cursor, order_data)
-                                         order_service.add_commission_items(cursor, new_ord_id, order_items)
-                                         
-                                         # Deposit as Sale
-                                         if deposit_val > 0:
-                                             order_service.create_sale(cursor, {
-                                                  "date": date.today(),
-                                                  "product_id": None,
-                                                  "quantity": 1,
-                                                  "total_price": deposit_val,
-                                                  "status": "Finalizada",
-                                                  "client_id": final_client_id,
-                                                  "discount": 0,
-                                                  "payment_method": pay_method_choice,
-                                                  "notes": f"Sinal Enc #{new_ord_id}",
-                                                  "salesperson": salesperson_choice,
-                                                  "order_id": f"ENC-{new_ord_id}"
-                                              })
-                                         
-                                         admin_utils.show_feedback_dialog(f"Encomenda gerada: #{new_ord_id}", level="success")
-                                     
-                                     conn.commit()
-                                     admin_utils.show_feedback_dialog("Venda Finalizada!", level="success")
-                                     
-                                     st.session_state['last_order'] = {
+                                    
+                                    # Check if order was involved for receipt display
+                                    has_order = new_ord_id is not None
+                                    
+                                    st.session_state['last_order'] = {
                                         "id": trans_uuid,
                                         "client": final_client_name,
                                         "salesperson": salesperson_choice,
                                         "payment_method": pay_method_choice,
                                         "notes": final_notes,
                                         "total": cart_total,
-                                        "deposit": deposit_val if order_items else 0,
-                                        "date_due": d_comm.strftime("%d/%m/%Y") if order_items else None,
+                                        "deposit": deposit_val if has_order else 0,
+                                        "date_due": d_comm.strftime("%d/%m/%Y") if has_order else None,
                                         "items": st.session_state['cart'] 
-                                     }
-                                     st.session_state['cart'] = []
-                                     st.rerun()
+                                    }
+                                    st.session_state['cart'] = []
+                                    st.rerun()
 
-                                 except Exception as e:
-                                     admin_utils.show_feedback_dialog(f"ERRO DE TRANSAÇÃO: {e}", level="error")
+                                except Exception as e:
+                                    admin_utils.show_feedback_dialog(f"ERRO DE TRANSAÇÃO: {e}", level="error")
                         
                         # --- QUOTE BUTTON ---
                         if col_act3.button("📄 Salvar como Orçamento", type="secondary", use_container_width=True):

@@ -418,52 +418,18 @@ with tab_finance:
         if not classes_sim.empty:
             sim_data = []
             for _, c_row in classes_sim.iterrows():
-                # We need a dummy student ID to use calculate_tuition effectively OR we refactor calculate_tuition.
-                # But calculate_tuition relies on student->class relation. 
-                # Let's verify 'calculate_tuition' logic matches what we want: It gets class weekday.
-                # Actually, we can just duplicate the date calculation logic here for display or refactor service. 
-                # Refactoring service 'calculate_tuition' to be 'calculate_class_days(class_id, month)' is better practice but let's do inline for speed or small helper.
+                metrics = student_service.calculate_class_monthly_metrics(conn, c_row['id'], sim_month)
                 
-                # Let's make a temporary helper here or call the service if we can. 
-                # Service 'calculate_tuition' takes student_id. Let's make a specific class-based calc in service if needed,
-                # but for now I will rely on the logic:
-                # 1. Get weekday. 2. Count days. 3. Subtract cancellations.
-                
-                if pd.notnull(c_row['weekday']):
-                    wd = int(c_row['weekday'])
-                    # Count days
-                    try:
-                        m, y = map(int, sim_month.split('/'))
-                        import calendar
-                        cal = calendar.monthcalendar(y, m)
-                        valid_dates = []
-                        for week in cal:
-                            if week[wd] != 0: valid_dates.append(f"{y:04d}-{m:02d}-{week[wd]:02d}")
-                        total_days = len(valid_dates)
-                        
-                        # Cancellations
-                        cancs = student_service.get_class_cancellations(conn, c_row['id'])
-                        canc_count = 0
-                        if not cancs.empty:
-                            canc_dates = cancs['date'].tolist()
-                            for d in valid_dates:
-                                if d in canc_dates: canc_count += 1
-                        
-                        net = max(0, total_days - canc_count)
-                        val_global = student_service.get_global_price_per_class(conn)
-                        estimated_tuition = net * val_global
-                        
-                        sim_data.append({
-                            "_wd_idx": wd,
-                            "Turma": c_row['name'],
-                            "Dia Semana": WEEKDAYS_REV.get(wd, "-"),
-                            "Aulas Totais": total_days,
-                            "Cancelamentos": canc_count,
-                            "Aulas Líquidas": net,
-                            "Mensalidade Est. (R$)": float(estimated_tuition)
-                        })
-                    except:
-                        pass
+                if metrics:
+                    sim_data.append({
+                        "_wd_idx": metrics['weekday_idx'],
+                        "Turma": c_row['name'],
+                        "Dia Semana": WEEKDAYS_REV.get(metrics['weekday_idx'], "-"),
+                        "Aulas Totais": metrics['total_days'],
+                        "Cancelamentos": metrics['canc_count'],
+                        "Aulas Líquidas": metrics['net_days'],
+                        "Mensalidade Est. (R$)": metrics['estimated_tuition']
+                    })
 
             if sim_data:
                 # Sort by weekday index
@@ -651,53 +617,12 @@ with tab_finance:
                                 sid_z = s_row['id']
                                 sname_z = s_row['name']
                                 
-                                # Fetch Financial Data (Replicating logic)
-                                tuit_z, cons_z, total_z = student_service.get_student_financial_summary(conn, sid_z)
-                                
-                                # Logic to build items list
-                                items_z = []
-                                involved_months_z = set()
-                                st_class_name_z = "---"
-                                
-                                # Process Tuitions
-                                for _, t in tuit_z.iterrows():
-                                    if t.get('class_name'): st_class_name_z = t['class_name']
-                                    
-                                    desc = f"Mensalidade {t['month_year']}"
-                                    if 'class_count' in t and pd.notnull(t['class_count']):
-                                        try: desc += f" ({int(t['class_count'])} aulas)"
-                                        except: pass
-                                    
-                                    items_z.append({
-                                        "date": t['month_year'], "description": desc, "quantity": 1, "value": t['amount'], 
-                                        "paid": t.get('amount_paid', 0) or 0, "status": t['status'], "class_dates": t.get('class_dates')
-                                    })
-                                    involved_months_z.add(t['month_year'])
-                                    
-                                # Process Consumptions
-                                for _, c in cons_z.iterrows():
-                                    desc = c['description']
-                                    if c.get('notes'): desc += f" ({c['notes']})"
-                                    items_z.append({
-                                        "date": c['date'], "description": desc, "quantity": c['quantity'], "value": c['total_value'], 
-                                        "paid": c.get('amount_paid', 0) or 0, "status": c['status']
-                                    })
+                                # Fetch Financial Data (Unified)
+                                items_z, cancs_list_z, total_z, st_class_name_z = student_service.get_student_statement_items(conn, sid_z)
 
                                 # Only add if there are items (skip empty reports)
                                 if items_z:
-                                    # Fetch Cancellations
-                                    cancs_list_z = []
-                                    if involved_months_z:
-                                         try:
-                                             cid_z = s_row['class_id']
-                                             if cid_z:
-                                                 all_cancs_z = student_service.get_class_cancellations(conn, cid_z)
-                                                 if not all_cancs_z.empty:
-                                                     all_cancs_z['mm_yyyy'] = pd.to_datetime(all_cancs_z['date']).dt.strftime('%m/%Y')
-                                                     filtered_cancs_z = all_cancs_z[all_cancs_z['mm_yyyy'].isin(involved_months_z)]
-                                                     for _, cr in filtered_cancs_z.iterrows():
-                                                         cancs_list_z.append({'date': cr['date'], 'reason': cr['reason']})
-                                         except: pass
+                                    # Generate PDF (Logic unchanged from here)
                                     
                                     # Generate PDF
                                     month_header = zip_filename_input.replace('-', '/')
@@ -797,60 +722,8 @@ with tab_finance:
 
                         # Prepare list for PDF (unchanged logic for PDF generation)
                         # Prepare list for PDF
-                        items = []
-                        involved_months = set()
-                        
-                        st_class_name = "---"
-                        for _, t in tuit.iterrows():
-                            paid = t.get('amount_paid', 0) or 0
-                            
-                            # Update st_class_name if available in tuition
-                            if t.get('class_name'): st_class_name = t['class_name']
-
-                            # Description with Class Count
-                            desc = f"Mensalidade {t['month_year']}"
-                            if 'class_count' in t and pd.notnull(t['class_count']):
-                                try:
-                                    desc += f" ({int(t['class_count'])} aulas)"
-                                except: pass
-                                
-                            items.append({
-                                "date": t['month_year'], 
-                                "description": desc, 
-                                "quantity": 1, 
-                                "value": t['amount'], 
-                                "paid": paid, 
-                                "status": t['status'],
-                                "class_dates": t.get('class_dates')
-                            })
-                            involved_months.add(t['month_year'])
-                            
-                        for _, c in cons.iterrows():
-                            desc = c['description']
-                            if c.get('notes'): desc += f" ({c['notes']})"
-                            paid = c.get('amount_paid', 0) or 0
-                            items.append({"date": c['date'], "description": desc, "quantity": c['quantity'], "value": c['total_value'], "paid": paid, "status": c['status']})
-                            
-                        # Fetch Cancellations for Report
-                        cancellations_list = []
-                        if involved_months:
-                             try:
-                                 # row has student data including class_id
-                                 cid_rep = row['class_id']
-                                 # Get all cancellations
-                                 all_cancs = student_service.get_class_cancellations(conn, cid_rep)
-                                 if not all_cancs.empty:
-                                     # Filter by involved months
-                                     all_cancs['mm_yyyy'] = pd.to_datetime(all_cancs['date']).dt.strftime('%m/%Y')
-                                     filtered_cancs = all_cancs[all_cancs['mm_yyyy'].isin(involved_months)]
-                                     
-                                     for _, cr in filtered_cancs.iterrows():
-                                         cancellations_list.append({
-                                             'date': cr['date'],
-                                             'reason': cr['reason']
-                                         })
-                             except Exception as e:
-                                 print(f"Error fetching cancellations for report: {e}")
+                        # Prepare list for PDF
+                        items, cancellations_list, _, st_class_name = student_service.get_student_statement_items(conn, sid)
                     else:
                         st.success("Tudo pago! Nenhuma pendência encontrada. 🎉")
 

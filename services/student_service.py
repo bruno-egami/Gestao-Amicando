@@ -2,6 +2,7 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 import json
+import calendar
 import audit
 from utils.logging_config import get_logger
 
@@ -362,25 +363,14 @@ def get_student_financial_summary(conn, student_id, month_year_filter=None):
     """
     Returns tuple: (tuitions_df, consumptions_df, total_due)
     """
-    student_id = int(student_id)
-    # Tuitions
-    t_query = """
-        SELECT t.*, c.name as class_name 
-        FROM tuitions t 
-        JOIN students s ON t.student_id = s.id 
-        LEFT JOIN classes c ON s.class_id = c.id 
-        WHERE t.student_id=? AND t.status='Pendente'
-    """
-    t_params = [student_id]
-    if month_year_filter:
-        t_query += " AND t.month_year=?"
-        t_params.append(month_year_filter)
-    tuitions = pd.read_sql(t_query, conn, params=t_params)
+    # 1. Tuitions (Pending)
+    tuitions = get_student_tuitions(conn, int(student_id), status='Pendente', month_year=month_year_filter)
     
-    # Consumptions
-    c_query = "SELECT * FROM student_consumptions WHERE student_id=? AND status='Pendente'"
-    consumptions = pd.read_sql(c_query, conn, params=(student_id,))
+    # 2. Consumptions (Pending)
+    # Note: month_year_filter is currently not applied to consumptions in the old logic, preserving that.
+    consumptions = get_student_consumptions(conn, int(student_id), status='Pendente')
     
+    # Calculate Total
     tuitions['amount_paid'] = tuitions['amount_paid'].fillna(0)
     consumptions['amount_paid'] = consumptions['amount_paid'].fillna(0)
     
@@ -671,3 +661,162 @@ def get_debts_summary(conn):
         ORDER BY total_due DESC
     """
     return pd.read_sql(query, conn)
+
+def get_student_tuitions(conn, student_id, status=None, month_year=None):
+    """
+    Get tuitions for a student.
+    status: 'Pendente', 'Pago', 'Cancelado' (optional)
+    month_year: 'MM/YYYY' (optional)
+    """
+    query = """
+        SELECT t.*, c.name as class_name 
+        FROM tuitions t 
+        LEFT JOIN students s ON t.student_id = s.id 
+        LEFT JOIN classes c ON s.class_id = c.id 
+        WHERE t.student_id=?
+    """
+    params = [student_id]
+    
+    if status:
+        query += " AND t.status=?"
+        params.append(status)
+        
+    if month_year:
+        query += " AND t.month_year=?"
+        params.append(month_year)
+        
+    query += " ORDER BY substr(t.month_year, 4, 4) || substr(t.month_year, 1, 2) DESC" # Order by date desc
+    
+    return pd.read_sql(query, conn, params=params)
+
+def get_student_consumptions(conn, student_id, status=None):
+    """
+    Get consumptions for a student.
+    status: 'Pendente', 'Pago', 'Cancelado' (optional)
+    """
+    query = "SELECT * FROM student_consumptions WHERE student_id=?"
+    params = [student_id]
+    
+    if status:
+        query += " AND status=?"
+        params.append(status)
+        
+    query += " ORDER BY date DESC"
+    return pd.read_sql(query, conn, params=params)
+
+def calculate_class_monthly_metrics(conn, class_id, month_year_str):
+    """
+    Calculates metrics for a class in a given month.
+    Returns dict with keys: total_days, canc_count, net_days, estimated_tuition
+    """
+    try:
+        # Get Class Info
+        # Ensure native int for sqlite
+        c_row = pd.read_sql("SELECT * FROM classes WHERE id=?", conn, params=(int(class_id),)).iloc[0]
+        if pd.isnull(c_row['weekday']):
+            return None
+            
+        wd = int(c_row['weekday'])
+        m, y = map(int, month_year_str.split('/'))
+        
+        # Count Days
+        cal = calendar.monthcalendar(y, m)
+        valid_dates = []
+        for week in cal:
+            if week[wd] != 0: valid_dates.append(f"{y:04d}-{m:02d}-{week[wd]:02d}")
+        total_days = len(valid_dates)
+        
+        # Cancellations
+        cancs = get_class_cancellations(conn, class_id)
+        canc_count = 0
+        if not cancs.empty:
+            canc_dates = cancs['date'].tolist()
+            for d in valid_dates:
+                if d in canc_dates: canc_count += 1
+        
+        net = max(0, total_days - canc_count)
+        val_global = get_global_price_per_class(conn)
+        estimated_tuition = net * val_global
+        
+        return {
+            "total_days": total_days,
+            "canc_count": canc_count,
+            "net_days": net,
+            "estimated_tuition": float(estimated_tuition),
+            "weekday_idx": wd
+        }
+    except Exception as e:
+        logger.error(f"Error calculating metrics for class {class_id}: {e}")
+        return None
+
+def get_student_statement_items(conn, student_id):
+    """
+    Generates the list of financial items (Tuitions + Consumptions) and Cancellations
+    formatted for the PDF report.
+    Returns: (items_list, cancellations_list, total_due, class_name)
+    """
+    # 1. Fetch Data
+    tuit, cons, total = get_student_financial_summary(conn, student_id)
+    
+    items = []
+    involved_months = set()
+    st_class_name = "---"
+    
+    # 2. Process Tuitions
+    for _, t in tuit.iterrows():
+        if t.get('class_name'): st_class_name = t['class_name']
+        
+        desc = f"Mensalidade {t['month_year']}"
+        if 'class_count' in t and pd.notnull(t['class_count']):
+            try: desc += f" ({int(t['class_count'])} aulas)"
+            except: pass
+        
+        paid = t.get('amount_paid', 0) or 0
+        items.append({
+            "date": t['month_year'], 
+            "description": desc, 
+            "quantity": 1, 
+            "value": float(t['amount']), 
+            "paid": float(paid), 
+            "status": t['status'],
+            "class_dates": t.get('class_dates')
+        })
+        involved_months.add(t['month_year'])
+        
+    # 3. Process Consumptions
+    for _, c in cons.iterrows():
+        desc = c['description']
+        if c.get('notes'): desc += f" ({c['notes']})"
+        paid = c.get('amount_paid', 0) or 0
+        items.append({
+            "date": c['date'], 
+            "description": desc, 
+            "quantity": c['quantity'], 
+            "value": float(c['total_value']), 
+            "paid": float(paid), 
+            "status": c['status']
+        })
+
+    # 4. Process Cancellations
+    cancellations = []
+    if involved_months:
+        try:
+            s_row = pd.read_sql("SELECT class_id FROM students WHERE id=?", conn, params=(int(student_id),))
+            if not s_row.empty and s_row.iloc[0]['class_id']:
+                cid = s_row.iloc[0]['class_id']
+                all_cancs = get_class_cancellations(conn, cid)
+                if not all_cancs.empty:
+                    all_cancs['mm_yyyy'] = pd.to_datetime(all_cancs['date']).dt.strftime('%m/%Y')
+                    filtered = all_cancs[all_cancs['mm_yyyy'].isin(involved_months)]
+                    
+                    for _, cr in filtered.iterrows():
+                        cancellations.append({
+                            'date': cr['date'],
+                            'reason': cr['reason']
+                        })
+        except Exception as e:
+            logger.error(f"Error fetching cancellations for statement: {e}")
+            
+    return items, cancellations, total, st_class_name
+
+
