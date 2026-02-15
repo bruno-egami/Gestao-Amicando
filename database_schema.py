@@ -3,7 +3,7 @@ from utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# --- Migrations ---
+# --- MIGRATIONS SYSTEM ---
 
 def _migrate_v1(cursor):
     """
@@ -62,11 +62,8 @@ def _migrate_v1(cursor):
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_frequency', 'Diário')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('last_backup_timestamp', '2000-01-01T00:00:00')")
 
-# Registry of migrations: {version_int: function_taking_cursor}
 def _migrate_v2(cursor):
-    """
-    Migration v2: Add 'force_password_change' to users.
-    """
+    """Migration v2: Add 'force_password_change' to users."""
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
@@ -82,9 +79,7 @@ MIGRATIONS = {
 }
 
 def run_migrations(conn):
-    """
-    Check current DB version and apply pending migrations sequentially.
-    """
+    """Check current DB version and apply pending migrations sequentially."""
     cursor = conn.cursor()
     
     # Get current version
@@ -110,29 +105,16 @@ def run_migrations(conn):
     else:
         logger.info("Database is up to date.")
 
-# --- Schema Initialization ---
+
+# --- SCHEMA INITIALIZATION ---
 
 def init_db_from_conn(conn):
     cursor = conn.cursor()
 
-    # --- Table Creations ---
-
-    # Material Categories
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS material_categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        )
-    ''')
-
-    # Product Categories
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS product_categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        )
-    ''')
-
+    # ==========================================
+    # 1. CORE DOMAIN (Settings, Users, Audit)
+    # ==========================================
+    
     # Settings
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS settings (
@@ -142,30 +124,6 @@ def init_db_from_conn(conn):
     ''')
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_frequency', 'Diário')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('last_backup_timestamp', '2000-01-01T00:00:00')")
-
-    # Suppliers
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS suppliers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            contact TEXT,
-            phone TEXT,
-            email TEXT,
-            notes TEXT
-        )
-    ''')
-    
-    # Clients
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            contact TEXT,
-            phone TEXT,
-            email TEXT,
-            notes TEXT
-        )
-    ''')
 
     # Users (Authentication & Authorization)
     cursor.execute('''
@@ -177,11 +135,12 @@ def init_db_from_conn(conn):
             name TEXT,
             active INTEGER DEFAULT 1,
             created_at TEXT,
-            last_login TEXT
+            last_login TEXT,
+            force_password_change INTEGER DEFAULT 0
         )
     ''')
 
-    # Audit Log (Track all changes for rollback)
+    # Audit Log
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,25 +156,43 @@ def init_db_from_conn(conn):
         )
     ''')
 
-    # Production History (Log each production event)
+    # ==========================================
+    # 2. PARTNERS DOMAIN (Clients, Suppliers)
+    # ==========================================
+    
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS production_history (
+        CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            product_id INTEGER NOT NULL,
-            product_name TEXT,
-            quantity INTEGER NOT NULL,
-            order_id INTEGER,
-            user_id INTEGER,
-            username TEXT,
-            notes TEXT,
-            FOREIGN KEY (product_id) REFERENCES products(id),
-            FOREIGN KEY (order_id) REFERENCES commission_orders(id),
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            name TEXT NOT NULL,
+            contact TEXT,
+            phone TEXT,
+            email TEXT,
+            notes TEXT
         )
     ''')
 
-    # Materials
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            contact TEXT,
+            phone TEXT,
+            email TEXT,
+            notes TEXT
+        )
+    ''')
+
+    # ==========================================
+    # 3. INVENTORY DOMAIN (Materials)
+    # ==========================================
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS material_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS materials (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -232,131 +209,32 @@ def init_db_from_conn(conn):
         )
     ''')
 
-    # Fixed Costs
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS fixed_costs (
+        CREATE TABLE IF NOT EXISTS inventory_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            description TEXT NOT NULL UNIQUE,
-            value REAL NOT NULL,
-            due_day INTEGER,
-            periodicity TEXT, -- 'Mensal', 'Anual', 'Semanal'
-            category TEXT
-        )
-    ''')
-
-    # Kilns
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS kilns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        )
-    ''')
-
-    # Kiln Maintenance
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS kiln_maintenance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kiln_id INTEGER,
+            material_id INTEGER,
             date TEXT,
-            category TEXT, -- 'Resistência', 'Termopar', 'Estrutura'
-            description TEXT,
-            observation TEXT,
-            image_path TEXT,
-            FOREIGN KEY (kiln_id) REFERENCES kilns (id)
+            type TEXT, -- 'ENTRADA', 'SAIDA', 'AJUSTE'
+            quantity REAL,
+            cost REAL,
+            notes TEXT,
+            user_id INTEGER,
+            FOREIGN KEY (material_id) REFERENCES materials(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
         )
     ''')
 
-    # Expense Categories
+    # ==========================================
+    # 4. PRODUCTS DOMAIN
+    # ==========================================
+
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS expense_categories (
+        CREATE TABLE IF NOT EXISTS product_categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE
         )
     ''')
 
-    # Firings (Quemas)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS firings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            type TEXT, -- 'Biscoito', 'Esmaltação'
-            kiln_id INTEGER,
-            power_consumption_kwh REAL DEFAULT 0,
-            cost REAL DEFAULT 0,
-            observation TEXT,
-            image_path TEXT,
-            FOREIGN KEY (kiln_id) REFERENCES kilns(id)
-        )
-    ''')
-
-    # ... (rest of tables)
-
-    # ... (Seed and Migration blocks moved below)
-    pass
-
-    # 10. Commission Items: Add 'notes', 'variant_id'
-    try:
-        cursor.execute("ALTER TABLE commission_items ADD COLUMN notes TEXT")
-    except sqlite3.OperationalError: pass
-
-    # 11. Quote Items: Add 'item_notes', 'variant_id'
-    try:
-        cursor.execute("ALTER TABLE quote_items ADD COLUMN item_notes TEXT")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE quote_items ADD COLUMN variant_id INTEGER REFERENCES product_variants(id)")
-    except sqlite3.OperationalError: pass
-
-    # 12. Quotes: Add 'delivery_terms', 'payment_terms'
-    try:
-        cursor.execute("ALTER TABLE quotes ADD COLUMN delivery_terms TEXT")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE quotes ADD COLUMN payment_terms TEXT")
-    except sqlite3.OperationalError: pass
-
-    # 13. Product Variants: Add 'material_quantity'
-    try:
-        cursor.execute("ALTER TABLE product_variants ADD COLUMN material_quantity REAL DEFAULT 0.0")
-    except sqlite3.OperationalError: pass
-
-    # ... (Refactor blocks moved below)
-    pass
-
-
-
-
-
-    # Security Upgrade: Password reset REMOVED (User request)
-    # Admin creation is handled by auth.create_default_admin
-    pass
-
-    conn.commit()
-    
-    # Seed Kilns
-    cursor.execute("SELECT count(*) FROM kilns")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO kilns (name) VALUES ('Jung (Pequeno)')")
-        cursor.execute("INSERT INTO kilns (name) VALUES ('Arimbá (Grande)')")
-        conn.commit()
-
-    # Ensure default data for categories (previous)
-    cursor.execute("SELECT count(*) FROM material_categories")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO material_categories (name) VALUES ('Geral')")
-        conn.commit()
-
-    # Ensure default data for Product categories
-    cursor.execute("SELECT count(*) FROM product_categories")
-    if cursor.fetchone()[0] == 0:
-        def_prods = ["Utilitário", "Decorativo", "Outros"]
-        for dp in def_prods:
-            cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (dp,))
-        conn.commit()
-
-    # Products
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -372,7 +250,6 @@ def init_db_from_conn(conn):
         )
     ''')
 
-    # Product Recipes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS product_recipes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,23 +260,36 @@ def init_db_from_conn(conn):
             FOREIGN KEY (material_id) REFERENCES materials (id)
         )
     ''')
-    
-    # Expenses
+
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS expenses (
+        CREATE TABLE IF NOT EXISTS product_kits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            description TEXT,
-            amount REAL,
-            category TEXT,
-            supplier_id INTEGER,
-            linked_material_id INTEGER,
-            FOREIGN KEY (supplier_id) REFERENCES suppliers (id),
-            FOREIGN KEY (linked_material_id) REFERENCES materials (id)
+            parent_product_id INTEGER NOT NULL,
+            child_product_id INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            FOREIGN KEY (parent_product_id) REFERENCES products(id),
+            FOREIGN KEY (child_product_id) REFERENCES products(id)
         )
     ''')
 
-    # Sales
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS product_variants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            variant_name TEXT,
+            stock_quantity INTEGER DEFAULT 0,
+            price_adder REAL DEFAULT 0.0,
+            material_quantity REAL DEFAULT 0.0,
+            material_id INTEGER,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        )
+    ''')
+
+    # ==========================================
+    # 5. SALES & ORDERS DOMAIN
+    # ==========================================
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sales (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -409,11 +299,16 @@ def init_db_from_conn(conn):
             total_price REAL,
             status TEXT,
             client_id INTEGER,
+            discount REAL DEFAULT 0,
+            payment_method TEXT,
+            notes TEXT,
+            salesperson TEXT,
+            order_id TEXT,
+            variant_id INTEGER,
             FOREIGN KEY (product_id) REFERENCES products (id)
         )
     ''')
 
-    # Commission Orders (Headers)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS commission_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -425,11 +320,11 @@ def init_db_from_conn(conn):
             date_due TEXT,
             status TEXT, -- 'Pendente', 'Em Produção', 'Concluída', 'Entregue'
             notes TEXT,
+            image_paths TEXT,
             FOREIGN KEY (client_id) REFERENCES clients (id)
         )
     ''')
 
-    # Commission Items (Details)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS commission_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -445,9 +340,8 @@ def init_db_from_conn(conn):
             FOREIGN KEY (product_id) REFERENCES products (id),
             FOREIGN KEY (variant_id) REFERENCES product_variants(id)
         )
-    ''')  
-    
-    # Quotes (Orçamentos)
+    ''')
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS quotes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -465,8 +359,7 @@ def init_db_from_conn(conn):
             FOREIGN KEY (converted_order_id) REFERENCES commission_orders (id)
         )
     ''')
-    
-    # Quote Items (Itens do Orçamento)
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS quote_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -480,143 +373,99 @@ def init_db_from_conn(conn):
             FOREIGN KEY (product_id) REFERENCES products (id),
             FOREIGN KEY (variant_id) REFERENCES product_variants(id)
         )
-    ''') 
-    
-    # Drop old table if exists (during dev phase)
-    try:
-        cursor.execute("DROP TABLE IF EXISTS commissions")
-    except Exception:
-        pass
+    ''')
 
-    # --- Drop Deprecated Tables ---
-    cursor.execute("DROP TABLE IF EXISTS formulas")
-    cursor.execute("DROP TABLE IF EXISTS formula_ingredients")
-    
-    # Inventory Transactions (Stock History)
+    # ==========================================
+    # 6. EXPENSES DOMAIN
+    # ==========================================
+
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS inventory_transactions (
+        CREATE TABLE IF NOT EXISTS expense_categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT,
-            type TEXT, -- 'ENTRADA', 'SAIDA', 'AJUSTE'
-            quantity REAL,
-            cost REAL,
-            notes TEXT,
+            description TEXT,
+            amount REAL,
+            category TEXT,
+            supplier_id INTEGER,
+            linked_material_id INTEGER,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id),
+            FOREIGN KEY (linked_material_id) REFERENCES materials (id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS fixed_costs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            description TEXT NOT NULL UNIQUE,
+            value REAL NOT NULL,
+            due_day INTEGER,
+            periodicity TEXT, -- 'Mensal', 'Anual', 'Semanal'
+            category TEXT
+        )
+    ''')
+
+    # ==========================================
+    # 7. PRODUCTION DOMAIN (Kilns, Firings, WIP)
+    # ==========================================
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kilns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kiln_maintenance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kiln_id INTEGER,
+            date TEXT,
+            category TEXT, -- 'Resistência', 'Termopar', 'Estrutura'
+            description TEXT,
+            observation TEXT,
+            image_path TEXT,
+            FOREIGN KEY (kiln_id) REFERENCES kilns (id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS firings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            type TEXT, -- 'Biscoito', 'Esmaltação'
+            kiln_id INTEGER,
+            power_consumption_kwh REAL DEFAULT 0,
+            cost REAL DEFAULT 0,
+            observation TEXT,
+            image_path TEXT,
+            FOREIGN KEY (kiln_id) REFERENCES kilns(id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS production_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            product_id INTEGER NOT NULL,
+            product_name TEXT,
+            quantity INTEGER NOT NULL,
+            order_id INTEGER,
             user_id INTEGER,
-            FOREIGN KEY (material_id) REFERENCES materials(id),
+            username TEXT,
+            notes TEXT,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (order_id) REFERENCES commission_orders(id),
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     ''')
 
-    # Product Kits (Bundles)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS product_kits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            parent_product_id INTEGER NOT NULL,
-            child_product_id INTEGER NOT NULL,
-            quantity INTEGER DEFAULT 1,
-            FOREIGN KEY (parent_product_id) REFERENCES products(id),
-            FOREIGN KEY (child_product_id) REFERENCES products(id)
-        )
-    ''')
-
-    # Product Variants (Esmaltes/Acabamentos)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS product_variants (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER,
-            variant_name TEXT,
-            stock_quantity INTEGER DEFAULT 0,
-            price_adder REAL DEFAULT 0.0,
-            material_quantity REAL DEFAULT 0.0,
-            material_id INTEGER,
-            FOREIGN KEY (product_id) REFERENCES products(id),
-            FOREIGN KEY (material_id) REFERENCES materials(id)
-        )
-    ''')
-
-    # --- CLASS MANAGEMENT TABLES (Phase 4) ---
-    # Students
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            phone TEXT,
-            active INTEGER DEFAULT 1,
-            class_id INTEGER,
-            join_date TEXT
-        )
-    ''')
-
-    # Class Cancellations
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS class_cancellations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_id INTEGER,
-            date TEXT NOT NULL,
-            reason TEXT,
-            created_at TEXT,
-            FOREIGN KEY (class_id) REFERENCES classes(id),
-            UNIQUE(class_id, date)
-        )
-    ''')
-
-    # Tuitions (Mensalidades)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS tuitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER,
-            month_year TEXT, -- MM/AAAA
-            amount REAL,
-            status TEXT DEFAULT 'Pendente', -- Pendente, Pago
-            payment_date TEXT,
-            class_count INTEGER,
-            unit_price REAL,
-            class_dates TEXT,
-            FOREIGN KEY (student_id) REFERENCES students(id)
-        )
-    ''')
-    
-    # Student Consumptions (Consumo de Aulas/Insumos Extras)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS student_consumptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER,
-            description TEXT,
-            quantity REAL,
-            unit_price REAL,
-            total_value REAL,
-            date TEXT,
-            status TEXT DEFAULT 'Pendente', -- Pendente, Pago
-            payment_date TEXT,
-            notes TEXT,
-            markup REAL DEFAULT 0.0,
-            FOREIGN KEY (student_id) REFERENCES students(id)
-        )
-    ''')
-    
-    # Classes (Turmas)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS classes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE, -- e.g. "Terça Manhã"
-            schedule TEXT, -- e.g. "Terça 09:00 - 12:00"
-            notes TEXT
-        )
-    ''')
-
-    # --- INDEXES for Performance ---
-    # Sales indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_product ON sales(product_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_client ON sales(client_id)")
-    
-    # Expenses indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expenses_supplier ON expenses(supplier_id)")
-    
-    # Production WIP (Work In Progress/Kanban)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS production_wip (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -637,77 +486,191 @@ def init_db_from_conn(conn):
         )
     ''')
     
-    # Production Losses (Breakage Tracking) - Handled in run_migrations
-    
-    # Commission Orders indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON commission_orders(status)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_date_due ON commission_orders(date_due)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_client ON commission_orders(client_id)")
-    
-    # Products indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)")
-    
-    # Materials indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_name ON materials(name)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_type ON materials(type)")
-    
-    # Inventory transactions indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_date ON inventory_transactions(date)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inv_trans_material ON inventory_transactions(material_id)")
-    
-    # Audit log indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_log(table_name)")
+    # production_losses handled in migration/init check for safety, or ensure created here:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS production_losses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            product_id INTEGER,
+            variant_id INTEGER,
+            stage TEXT,
+            quantity INTEGER,
+            reason TEXT,
+            order_id INTEGER,
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (variant_id) REFERENCES product_variants(id),
+            FOREIGN KEY (order_id) REFERENCES commission_orders(id)
+        )
+    ''')
 
-    # Product Variants indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_variants_product ON product_variants(product_id)")
+    # ==========================================
+    # 8. CLASSES DOMAIN
+    # ==========================================
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            schedule TEXT,
+            notes TEXT,
+            weekday INTEGER
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT,
+            active INTEGER DEFAULT 1,
+            class_id INTEGER,
+            join_date TEXT,
+            price_per_class REAL
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS class_cancellations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_id INTEGER,
+            date TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT,
+            FOREIGN KEY (class_id) REFERENCES classes(id),
+            UNIQUE(class_id, date)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tuitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            month_year TEXT, -- MM/AAAA
+            amount REAL,
+            status TEXT DEFAULT 'Pendente', -- Pendente, Pago
+            payment_date TEXT,
+            class_count INTEGER,
+            unit_price REAL,
+            class_dates TEXT,
+            created_at TEXT,
+            amount_paid REAL DEFAULT 0,
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS student_consumptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            description TEXT,
+            quantity REAL,
+            unit_price REAL,
+            total_value REAL,
+            date TEXT,
+            status TEXT DEFAULT 'Pendente', -- Pendente, Pago
+            payment_date TEXT,
+            notes TEXT,
+            markup REAL DEFAULT 0.0,
+            material_id INTEGER,
+            amount_paid REAL DEFAULT 0,
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )
+    ''')
+
+    # ==========================================
+    # 9. INDEXES
+    # ==========================================
     
+    indexes = [
+        # Sales
+        "CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date)",
+        "CREATE INDEX IF NOT EXISTS idx_sales_product ON sales(product_id)",
+        "CREATE INDEX IF NOT EXISTS idx_sales_client ON sales(client_id)",
+        # Expenses
+        "CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)",
+        "CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)",
+        "CREATE INDEX IF NOT EXISTS idx_expenses_supplier ON expenses(supplier_id)",
+        # Orders
+        "CREATE INDEX IF NOT EXISTS idx_orders_status ON commission_orders(status)",
+        "CREATE INDEX IF NOT EXISTS idx_orders_date_due ON commission_orders(date_due)",
+        "CREATE INDEX IF NOT EXISTS idx_orders_client ON commission_orders(client_id)",
+        # Products/Materials
+        "CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)",
+        "CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)",
+        "CREATE INDEX IF NOT EXISTS idx_materials_name ON materials(name)",
+        "CREATE INDEX IF NOT EXISTS idx_materials_type ON materials(type)",
+        "CREATE INDEX IF NOT EXISTS idx_prod_variants_product ON product_variants(product_id)",
+        # Inventory / Audit
+        "CREATE INDEX IF NOT EXISTS idx_inv_trans_date ON inventory_transactions(date)",
+        "CREATE INDEX IF NOT EXISTS idx_inv_trans_material ON inventory_transactions(material_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_log(table_name)",
+        "CREATE INDEX IF NOT EXISTS idx_losses_product ON production_losses(product_id)"
+    ]
+    
+    for idx_sql in indexes:
+        cursor.execute(idx_sql)
+
+    # ==========================================
+    # 10. CLEANUP & BACKFILL
+    # ==========================================
+
+    cursor.execute("DROP TABLE IF EXISTS commissions")
+    cursor.execute("DROP TABLE IF EXISTS formulas")
+    cursor.execute("DROP TABLE IF EXISTS formula_ingredients")
+    
+    # Global 'Safety' checks for columns that might have been added ad-hoc
+    # (These are redundant if CREATE TABLE is correct, but safe to keep for older DBs)
+    
+    safety_alterations = [
+        ("commission_items", "notes", "TEXT"),
+        ("quote_items", "item_notes", "TEXT"),
+        ("quote_items", "variant_id", "INTEGER REFERENCES product_variants(id)"),
+        ("quotes", "delivery_terms", "TEXT"),
+        ("quotes", "payment_terms", "TEXT"),
+        ("product_variants", "material_quantity", "REAL DEFAULT 0.0"),
+        ("firings", "kiln_id", "INTEGER"),
+        ("fixed_costs", "due_day", "INTEGER"),
+        ("students", "class_id", "INTEGER"),
+        ("classes", "weekday", "INTEGER")
+    ]
+    
+    for table, col, dtype in safety_alterations:
+        try: cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError: pass
+
     conn.commit()
 
-    
-    # Ensure default data for categories (Duplicate removed)
-    pass
-    
-    # --- GLOBAL MIGRATIONS (Try-Except for idempotency) ---
-    
-    # Firings Fix
-    for col, dtype in [('kiln_id', 'INTEGER'), ('observation', 'TEXT'), ('image_path', 'TEXT')]:
-        try: cursor.execute(f"ALTER TABLE firings ADD COLUMN {col} {dtype}")
-        except sqlite3.OperationalError: pass
+    # ==========================================
+    # 11. SEED DATA
+    # ==========================================
 
-    # Fixed Costs Fix
-    for col, dtype in [('due_day', 'INTEGER'), ('periodicity', 'TEXT'), ('category', 'TEXT')]:
-        try: cursor.execute(f"ALTER TABLE fixed_costs ADD COLUMN {col} {dtype}")
-        except sqlite3.OperationalError: pass
+    # Seed Kilns
+    if cursor.execute("SELECT count(*) FROM kilns").fetchone()[0] == 0:
+        cursor.execute("INSERT INTO kilns (name) VALUES ('Jung (Pequeno)')")
+        cursor.execute("INSERT INTO kilns (name) VALUES ('Arimbá (Grande)')")
+        conn.commit()
 
-    # Sales Fix
-    for col, dtype in [('discount', 'REAL DEFAULT 0'), ('payment_method', 'TEXT'), ('notes', 'TEXT'), ('salesperson', 'TEXT'), ('order_id', 'TEXT'), ('variant_id', 'INTEGER')]:
-        try: cursor.execute(f"ALTER TABLE sales ADD COLUMN {col} {dtype}")
-        except sqlite3.OperationalError: pass
+    # Seed Material Categories
+    if cursor.execute("SELECT count(*) FROM material_categories").fetchone()[0] == 0:
+        cursor.execute("INSERT INTO material_categories (name) VALUES ('Geral')")
+        conn.commit()
 
-    # Student Management Fix
-    try: cursor.execute("ALTER TABLE students ADD COLUMN class_id INTEGER")
-    except sqlite3.OperationalError: pass
-    try: cursor.execute("ALTER TABLE classes ADD COLUMN weekday INTEGER")
-    except sqlite3.OperationalError: pass
-    try: cursor.execute("ALTER TABLE students ADD COLUMN price_per_class REAL")
-    except sqlite3.OperationalError: pass
-    try: cursor.execute("ALTER TABLE tuitions ADD COLUMN class_count INTEGER")
-    except sqlite3.OperationalError: pass
-    try: cursor.execute("ALTER TABLE tuitions ADD COLUMN unit_price REAL")
-    except sqlite3.OperationalError: pass
+    # Seed Product Categories
+    if cursor.execute("SELECT count(*) FROM product_categories").fetchone()[0] == 0:
+        for dp in ["Utilitário", "Decorativo", "Outros"]:
+            cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (dp,))
+        conn.commit()
     
-    # Seed Data
-    cursor.execute("SELECT count(*) FROM expense_categories")
-    if cursor.fetchone()[0] == 0:
+    # Seed Expense Categories
+    if cursor.execute("SELECT count(*) FROM expense_categories").fetchone()[0] == 0:
         defaults = ["Gasto Eventual", "Custo Fixo Mensal (Pagamento)", "Compra de Insumo", "Manutenção", "Impostos", "Outros", "Aluguel", "Energia", "Água", "Internet", "Transporte", "Marketing"]
         for d in defaults:
             try: cursor.execute("INSERT OR IGNORE INTO expense_categories (name) VALUES (?)", (d,))
             except Exception: pass
         conn.commit()
 
-    # Run versioned migrations
+    # Run versioned migrations at the end
     run_migrations(conn)
 
-    print(f"Database schema initialized.")
+    logger.info("Database schema initialized and verified.")

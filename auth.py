@@ -156,7 +156,7 @@ def get_current_user() -> dict | None:
     if 'current_user' in st.session_state and st.session_state.current_user:
         # Check session timeout (5 minutes)
         if 'last_activity' in st.session_state:
-            if (time.time() - st.session_state.last_activity) > 300:  # 5 min
+            if (time.time() - st.session_state.last_activity) > 3600:  # 60 min
                 logout()
                 return None
         st.session_state.last_activity = time.time()

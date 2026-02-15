@@ -2,11 +2,6 @@ import streamlit as st
 
 
 
-def check_password():
-    # DEPRECATED: Use auth.require_role instead
-    st.error("Function check_password is deprecated and insecure. Use auth.py.")
-    return False
-
 def render_sidebar_logo():
     """Renders the logo in the sidebar if available."""
     try:
@@ -22,14 +17,6 @@ def render_header_logo():
             st.image("Logo amicando.png", width=200)
     except Exception:
         pass  # Logo missing or error
-
-def get_all_users(conn):
-    """Fetches all users for dropdown lists."""
-    import pandas as pd
-    try:
-        return pd.read_sql("SELECT id, username FROM users ORDER BY username", conn)
-    except Exception:
-        return pd.DataFrame(columns=['id', 'username'])
 
 def save_image(uploaded_file, folder):
     """Saves an uploaded file to the specified folder. Returns the file path."""
@@ -80,18 +67,6 @@ def show_feedback_dialog(message, level="success", sub_message=None, title=None)
     st.divider()
     if st.button("Fechar e Atualizar", type="primary", use_container_width=True):
         st.rerun()
-
-def confirm_action(message, action_label="Confirmar", on_confirm=None, key=None):
-    """
-    Shows a confirmation dialog before proceeding with a sensitive action.
-    This works by defining a dialog inside the calling code or using session_state.
-    
-    HOWEVER, for Streamlit @st.dialog, it's often cleaner to define the dialog 
-    locally in each file to have access to local variables/connection.
-    
-    I will provide a template here or specific dialogs for common actions.
-    """
-    pass
 
 @st.dialog("Atenção: Confirmação")
 def show_confirmation_dialog(message, action_label="Sim, continuar", on_confirm=None):
