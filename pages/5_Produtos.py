@@ -136,8 +136,7 @@ with tab1:
                     kit_children = product_service.get_kit_components(conn, row['id'])
                     if not kit_children.empty:
                         child_ids = kit_children['child_product_id'].tolist()
-                        placeholders = ",".join(["?"] * len(child_ids))
-                        c_imgs_df = pd.read_sql(f"SELECT image_paths FROM products WHERE id IN ({placeholders})", conn, params=child_ids)
+                        c_imgs_df = product_service.get_images_for_products(conn, child_ids)
                         comp_imgs = []
                         for _, ci_row in c_imgs_df.iterrows():
                             try:

@@ -8,6 +8,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import database
+import database_schema
 
 @pytest.fixture
 def db_conn():
@@ -16,7 +17,7 @@ def db_conn():
     """
     conn = sqlite3.connect(":memory:")
     # Initialize schema
-    database.init_db_from_conn(conn)
+    database_schema.init_db_from_conn(conn)
     yield conn
     conn.close()
 

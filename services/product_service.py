@@ -197,6 +197,17 @@ def get_product_images(conn, product_id):
             
     return unique_imgs
 
+def get_images_for_products(conn, product_ids):
+    """
+    Retrieves image paths for a list of product IDs.
+    Returns a DataFrame with 'image_paths' column.
+    """
+    if not product_ids:
+        return pd.DataFrame()
+    placeholders = ",".join(["?"] * len(product_ids))
+    query = f"SELECT image_paths FROM products WHERE id IN ({placeholders})"
+    return pd.read_sql(query, conn, params=product_ids)
+
 def deduct_stock(cursor, product_id, quantity, check_kits=True, variant_id=None):
     """
     Deducts stock from a product. If variant_id is provided, deducts from variant.

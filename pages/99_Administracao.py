@@ -190,7 +190,7 @@ with tab_audit:
     with f3:
         # Use simple query or add to service if strictly no SQL here. 
         # But this is readonly list for UI filter. Safe enough.
-        u_df = pd.read_sql("SELECT DISTINCT username FROM audit_log ORDER BY username", conn)
+        u_df = audit.get_all_usernames(conn)
         sel_user = st.selectbox("Usuário", ["Todos"] + u_df['username'].tolist())
     with f4:
         limit = st.number_input("Limite", min_value=10, max_value=500, value=100, step=50)

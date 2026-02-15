@@ -4,6 +4,10 @@ import contextlib
 import config
 from utils.logging_config import get_logger
 import database_schema
+from datetime import date
+
+# Fix for Python 3.12+ SQLite deprecation warning
+sqlite3.register_adapter(date, lambda d: d.isoformat())
 
 logger = get_logger(__name__)
 

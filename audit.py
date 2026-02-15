@@ -63,6 +63,10 @@ def get_record_history(conn, table_name: str, record_id: int):
     
     return df
 
+def get_all_usernames(conn):
+    import pandas as pd
+    return pd.read_sql("SELECT DISTINCT username FROM audit_log ORDER BY username", conn)
+
 def get_audit_log(conn, filters: dict = None, limit: int = 100):
     """
     Get audit log entries with optional filters.
