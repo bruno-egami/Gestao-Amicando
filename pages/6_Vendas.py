@@ -44,7 +44,8 @@ client_dict = {row['name']: row['id'] for _, row in clients_df.iterrows()}
 client_opts = [""] + list(client_dict.keys())
 
 # 2. Select Product (Visual Catalog)
-products_df = product_service.get_all_products(conn)
+# Full list for Cart lookup (Cached)
+all_products_df = product_service.get_all_products(conn)
 
 # --- Tabs Structure ---
 tab_pos, tab_quotes = st.tabs(["🛒 Nova Venda / Cotação", "📄 Orçamentos Salvos"])
@@ -60,13 +61,24 @@ with tab_pos:
     # LEFT COL: CATALOG
     # ==========================
     with col_catalog:
-        sales_catalog.render_catalog(conn, products_df)
+        # --- Filters (SQL Optimized) ---
+        c_filt1, c_filt2 = st.columns([1, 1])
+        search_term = c_filt1.text_input("🔍 Buscar Produto", placeholder="Nome do produto...")
+        
+        # Get Categories (from full list or DB)
+        all_cats = product_service.get_categories(conn, all_products_df)
+        sel_cats = c_filt2.multiselect("📂 Filtrar Categoria", options=all_cats, placeholder="Todas")
+        
+        # Fetch Filtered Data (SQL)
+        catalog_df = product_service.get_all_products(conn, search_term=search_term, category=sel_cats if sel_cats else None)
+        
+        sales_catalog.render_catalog(conn, catalog_df)
 
     # ==========================
     # RIGHT COL: CART & ACTION
     # ==========================
     with col_cart:
-        sales_cart.render_cart_section(conn, products_df, client_opts, client_dict)
+        sales_cart.render_cart_section(conn, all_products_df, client_opts, client_dict)
 
 # ==============================================================================
 # TAB 2: QUOTES MANAGEMENT

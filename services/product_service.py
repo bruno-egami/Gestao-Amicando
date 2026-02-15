@@ -23,10 +23,28 @@ def get_valid_path(paths_str):
         return None
 
 @st.cache_data(ttl=60, show_spinner=False)
-def get_all_products(_conn):
-    """Fetches all products for the catalog view."""
-    query = "SELECT id, name, base_price, stock_quantity, image_paths, category FROM products"
-    df = pd.read_sql(query, _conn)
+@st.cache_data(ttl=60, show_spinner=False)
+def get_all_products(_conn, search_term=None, category=None):
+    """Fetches products for the catalog view with optional SQL filtering."""
+    query = "SELECT id, name, base_price, stock_quantity, image_paths, category FROM products WHERE 1=1"
+    params = []
+    
+    if search_term:
+        query += " AND name LIKE ?"
+        params.append(f"%{search_term}%")
+    
+    if category and category != "Todas":
+        # Handle multiple categories if needed, but for now simple single or list
+        if isinstance(category, list):
+            if category:
+                placeholders = ",".join(["?"] * len(category))
+                query += f" AND category IN ({placeholders})"
+                params.extend(category)
+        else:
+             query += " AND category = ?"
+             params.append(category)
+             
+    df = pd.read_sql(query, _conn, params=params)
     
     # Pre-calculate thumb paths for UI efficiency
     if not df.empty:

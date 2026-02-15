@@ -89,24 +89,14 @@ with kf3:
     d_start = st.date_input("De", value=None, format="DD/MM/YYYY")
     d_end = st.date_input("Até", value=None, format="DD/MM/YYYY")
 
-# Fetch Orders
-orders = order_service.get_orders_for_management(conn)
-
-# Apply Filters
-if not orders.empty:
-    # Status
-    if sel_status:
-        orders = orders[orders['status'].isin(sel_status)]
-    
-    # Client
-    if sel_client != "Todos":
-        orders = orders[orders['client'] == sel_client]
-        
-    # Date Range
-    if d_start:
-        orders = orders[pd.to_datetime(orders['date_due']).dt.date >= d_start]
-    if d_end:
-        orders = orders[pd.to_datetime(orders['date_due']).dt.date <= d_end]
+# Fetch Orders (SQL Optimized)
+filters = {
+    "status": sel_status,
+    "client": sel_client,
+    "start_date": d_start,
+    "end_date": d_end
+}
+orders = order_service.get_orders_for_management(conn, filters)
 
 # Search filter (Legacy Text Search)
 search_orders = st.text_input("🔍 Buscar (Texto)", placeholder="ID, Notas...", key="search_orders")

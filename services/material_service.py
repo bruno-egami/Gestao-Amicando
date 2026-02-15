@@ -5,9 +5,10 @@ from typing import List, Optional, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-def get_all_materials(conn: sqlite3.Connection) -> pd.DataFrame:
+def get_all_materials(conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
     """
     Fetches all materials with their supplier and category names.
+    Supports SQL filtering.
     """
     query = """
         SELECT m.id, m.name, m.price_per_unit, m.unit, m.stock_level, m.min_stock_alert, m.type, 
@@ -15,9 +16,25 @@ def get_all_materials(conn: sqlite3.Connection) -> pd.DataFrame:
         FROM materials m
         LEFT JOIN suppliers s ON m.supplier_id = s.id
         LEFT JOIN material_categories c ON m.category_id = c.id
-        ORDER BY m.name
+        WHERE 1=1
     """
-    return pd.read_sql(query, conn)
+    params = []
+    
+    if filters:
+        if filters.get('category') and filters['category'] != "Todas":
+            query += " AND c.name = ?"
+            params.append(filters['category'])
+            
+        if filters.get('supplier') and filters['supplier'] != "Todos":
+            query += " AND s.name = ?"
+            params.append(filters['supplier'])
+            
+        if filters.get('search'):
+            query += " AND m.name LIKE ?"
+            params.append(f"%{filters['search']}%")
+
+    query += " ORDER BY m.name"
+    return pd.read_sql(query, conn, params=params)
 
 def get_material_by_id(conn: sqlite3.Connection, material_id: int) -> Optional[Dict[str, Any]]:
     """
@@ -91,7 +108,7 @@ def update_stock(conn: sqlite3.Connection, material_id: int, quantity_change: fl
         
         # Get current stock
         current_stock = cursor.execute("SELECT stock_level FROM materials WHERE id = ?", (material_id,)).fetchone()[0]
-        new_stock = current_stock + quantity_change
+        new_stock = round(current_stock + quantity_change, 4)
         
         # Update stock
         cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
@@ -247,7 +264,7 @@ def register_entry(conn: sqlite3.Connection, material_id: int, quantity: float, 
         else:
             new_avg_price = purchase_price_per_unit
             
-        new_stock = current_stock + quantity
+        new_stock = round(current_stock + quantity, 4)
         
         # Log Transaction
         log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'ENTRADA', quantity, total_cost, notes, user_id)
@@ -279,7 +296,7 @@ def register_exit(conn: sqlite3.Connection, material_id: int, quantity: float, n
             raise ValueError("Material not found")
             
         current_stock = mat['stock_level']
-        new_stock = current_stock - quantity
+        new_stock = round(current_stock - quantity, 4)
         
         # Log Transaction
         log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'SAIDA', quantity, 0.0, notes, user_id)

@@ -5,34 +5,14 @@ from services import product_service
 def render_catalog(conn, products_df):
     st.subheader("📦 Catálogo de Produtos")
     
-    # --- Filters ---
-    c_filt1, c_filt2 = st.columns([1, 1])
-    search_term = c_filt1.text_input("🔍 Buscar Produto", placeholder="Nome do produto...")
-    
-    # Get Categories from DB
-    all_cats = product_service.get_categories(conn, products_df)
-    
-    if all_cats:
-        sel_cats = c_filt2.multiselect("📂 Filtrar Categoria", options=all_cats, placeholder="Todas")
-    else:
-        sel_cats = []
-
-    # --- Apply Filters ---
-    filtered_df = products_df.copy()
-    
-    if search_term:
-        filtered_df = filtered_df[filtered_df['name'].str.contains(search_term, case=False, na=False)]
-    
-    if sel_cats:
-        filtered_df = filtered_df[filtered_df['category'].isin(sel_cats)]
-    
-    if filtered_df.empty:
+    # Grid Layout
+    if products_df.empty:
         st.warning("Nenhum produto encontrado.")
     else:
         # Grid Layout
         cols_per_row = 3
         with st.container(height=800): # Scrollable Catalog
-            rows = [filtered_df.iloc[i:i+cols_per_row] for i in range(0, len(filtered_df), cols_per_row)]
+            rows = [products_df.iloc[i:i+cols_per_row] for i in range(0, len(products_df), cols_per_row)]
             
             for row_chunk in rows:
                 cols = st.columns(cols_per_row)

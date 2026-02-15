@@ -236,18 +236,44 @@ def get_commission_items(conn, order_ids):
     return pd.read_sql(query, conn, params=order_ids)
 
 
-def get_orders_for_management(conn):
+def get_orders_for_management(conn, filters=None):
     """
-    Fetches all commission orders with client name for the management page.
-    Returns DataFrame with all columns needed for display.
+    Fetches commission orders with client name for the management page.
+    Supports SQL filtering for performance.
     """
-    return pd.read_sql("""
+    query = """
         SELECT o.id, c.name as client, o.date_due, o.status, o.total_price, o.notes, o.client_id,
                o.manual_discount, o.deposit_amount, o.date_created, o.image_paths
         FROM commission_orders o
         JOIN clients c ON o.client_id = c.id
-        ORDER BY o.date_due ASC
-    """, conn)
+        WHERE 1=1
+    """
+    params = []
+    
+    if filters:
+        # Status Filter (List)
+        if filters.get('status') and isinstance(filters['status'], list) and filters['status']:
+            placeholders = ",".join(["?"] * len(filters['status']))
+            query += f" AND o.status IN ({placeholders})"
+            params.extend(filters['status'])
+            
+        # Client Filter (Name)
+        if filters.get('client') and filters['client'] != "Todos":
+             query += " AND c.name = ?"
+             params.append(filters['client'])
+             
+        # Date Range (Due Date)
+        if filters.get('start_date'):
+            query += " AND o.date_due >= ?"
+            params.append(filters['start_date'])
+            
+        if filters.get('end_date'):
+            query += " AND o.date_due <= ?"
+            params.append(filters['end_date'])
+
+    query += " ORDER BY o.date_due ASC"
+    
+    return pd.read_sql(query, conn, params=params)
 
 
 def get_order_items_detail(conn, order_id):

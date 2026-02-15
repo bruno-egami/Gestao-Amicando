@@ -86,17 +86,13 @@ with tab_cat:
 
     st.divider()
 
-    # --- 3. Main Data Fetch ---
-    df_materials = material_service.get_all_materials(conn)
-
-    # In-memory filtering
-    if not df_materials.empty:
-        if f_cat != "Todas":
-            df_materials = df_materials[df_materials['category_name'] == f_cat]
-        if f_sup != "Todos":
-            df_materials = df_materials[df_materials['supplier_name'] == f_sup]
-        if f_search:
-            df_materials = df_materials[df_materials['name'].str.contains(f_search, case=False, na=False)]
+    # --- 3. Main Data Fetch (SQL Optimized) ---
+    filters = {
+        'category': f_cat,
+        'supplier': f_sup,
+        'search': f_search
+    }
+    df_materials = material_service.get_all_materials(conn, filters)
 
     # --- 4. Logic: Detail View OR Grid View ---
 
