@@ -117,7 +117,8 @@ def login(conn, username: str, password: str) -> dict | None:
                 'id': user['id'],
                 'username': user['username'],
                 'role': user['role'],
-                'name': user['name'] or user['username']
+                'name': user['name'] or user['username'],
+                'force_password_change': user.get('force_password_change', 0)
             }
         
         return None
@@ -182,6 +183,47 @@ def require_login(conn):
     user = get_current_user()
     
     if user:
+        # Check for Forced Password Change
+        if user.get('force_password_change', 0) == 1:
+            # Hide sidebar
+            st.markdown("""
+                <style>
+                [data-testid="stSidebarNav"] {display: none;}
+                section[data-testid="stSidebar"] {display: none;}
+                </style>
+            """, unsafe_allow_html=True)
+            
+            st.warning("⚠️ Por segurança, você deve alterar sua senha antes de continuar.")
+            
+            with st.container(border=True):
+                st.subheader("🔄 Trocar Senha")
+                with st.form("force_pass_change_form"):
+                    new_pass = st.text_input("Nova Senha", type="password")
+                    conf_pass = st.text_input("Confirmar Nova Senha", type="password")
+                    
+                    if st.form_submit_button("Salvar Nova Senha", type="primary"):
+                        if new_pass != conf_pass:
+                            st.error("As senhas não coincidem.")
+                        elif len(new_pass) < 6:
+                            st.error("A senha deve ter pelo menos 6 caracteres.")
+                        else:
+                            try:
+                                cursor = conn.cursor()
+                                new_hash = hash_password(new_pass)
+                                cursor.execute("UPDATE users SET password_hash=?, force_password_change=0 WHERE id=?", (new_hash, user['id']))
+                                conn.commit()
+                                
+                                # Update session
+                                user['force_password_change'] = 0
+                                set_current_user(user)
+                                
+                                st.success("Senha alterada com sucesso! Redirecionando...")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao salvar: {e}")
+            return False
+
         return True
     
     # Hide sidebar if not logged in (Unified Login View)
@@ -279,11 +321,11 @@ def create_default_admin(conn):
     count = pd.read_sql("SELECT count(*) as c FROM users", conn).iloc[0]['c']
     
     if count == 0:
-        # Create default admin
+        # Create default admin with forced password change
         try:
             cursor.execute("""
-                INSERT INTO users (username, password_hash, role, name, active, created_at)
-                VALUES (?, ?, ?, ?, 1, ?)
+                INSERT INTO users (username, password_hash, role, name, active, created_at, force_password_change)
+                VALUES (?, ?, ?, ?, 1, ?, 1)
             """, ('admin', hash_password('admin'), 'admin', 'Administrador', datetime.now().isoformat()))
             conn.commit()
             return True

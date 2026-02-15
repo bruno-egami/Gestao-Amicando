@@ -13,7 +13,7 @@ DB_PATH = config.DB_PATH
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
-    # run_migrations(conn) # Ensure DB is always up to date (Removed: Locking DB)
+    run_migrations(conn) # Ensure DB is always up to date
     return conn
 
 @contextlib.contextmanager
@@ -25,47 +25,26 @@ def db_session():
     finally:
         conn.close()
 
-def run_migrations(conn):
-    cursor = conn.cursor()
-    
-    # --- Migrations for Existing Tables ---
-    
-    # 1. Materials: Add 'type', 'supplier_id', 'category_id', 'image_path'
-    try:
-        cursor.execute("ALTER TABLE materials ADD COLUMN type TEXT DEFAULT 'Material'")
-    except sqlite3.OperationalError as e:
-        logger.warning(f"Migration (materials.type): {e}")
-        
-    try:
-        cursor.execute("ALTER TABLE materials ADD COLUMN supplier_id INTEGER")
-    except sqlite3.OperationalError as e:
-        logger.warning(f"Migration (materials.supplier_id): {e}")
+def _migrate_v1(cursor):
+    """
+    Baseline migration: Applies all legacy column additions using try-except.
+    This ensures existing databases (Version 0) are brought up to the baseline state.
+    """
+    # 1. Materials
+    for col, dtype in [('type', "TEXT DEFAULT 'Material'"), ('supplier_id', 'INTEGER'), 
+                       ('category_id', 'INTEGER'), ('image_path', 'TEXT')]:
+        try: cursor.execute(f"ALTER TABLE materials ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError: pass
 
-    try:
-        cursor.execute("ALTER TABLE materials ADD COLUMN category_id INTEGER")
-    except sqlite3.OperationalError as e:
-        logger.warning(f"Migration (materials.category_id): {e}")
-
-    try:
-        cursor.execute("ALTER TABLE materials ADD COLUMN image_path TEXT")
-    except sqlite3.OperationalError as e:
-        logger.warning(f"Migration (materials.image_path): {e}")
-
-    # 2. Sales: Add 'client_id'
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN client_id INTEGER")
+    # 2. Sales
+    try: cursor.execute("ALTER TABLE sales ADD COLUMN client_id INTEGER")
     except sqlite3.OperationalError: pass
 
-    # 3. Commission Orders: Add 'image_paths' for reference photos
-    try:
-        cursor.execute("ALTER TABLE commission_orders ADD COLUMN image_paths TEXT")
+    # 3. Commission Orders
+    try: cursor.execute("ALTER TABLE commission_orders ADD COLUMN image_paths TEXT")
     except sqlite3.OperationalError: pass
 
-    # inventory transactions (stock history) - ensuring existence
-    # Moved to init_db or handled there.
-    # Check if table exists before create in migration is fine, but init_db handles creation.
-    
-    # 10. Production Losses (Migration stage)
+    # 10. Production Losses
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS production_losses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,45 +62,73 @@ def run_migrations(conn):
     ''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_losses_product ON production_losses(product_id)")
 
-    # 11. Student Consumptions: Add 'payment_date', 'material_id'
-    try:
-        cursor.execute("ALTER TABLE student_consumptions ADD COLUMN payment_date TEXT")
-    except sqlite3.OperationalError: pass
+    # 11. Student Consumptions
+    for col, dtype in [('payment_date', 'TEXT'), ('material_id', 'INTEGER'), ('amount_paid', 'REAL DEFAULT 0')]:
+        try: cursor.execute(f"ALTER TABLE student_consumptions ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError: pass
 
-    try:
-        cursor.execute("ALTER TABLE student_consumptions ADD COLUMN material_id INTEGER")
-    except sqlite3.OperationalError: pass
+    # 12. Tuitions
+    for col, dtype in [('created_at', 'TEXT'), ('amount_paid', 'REAL DEFAULT 0'), ('class_dates', 'TEXT')]:
+        try: cursor.execute(f"ALTER TABLE tuitions ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError: pass
 
-    try:
-        cursor.execute("ALTER TABLE tuitions ADD COLUMN created_at TEXT")
-    except sqlite3.OperationalError: pass
-
-    # 13. Settings Table
+    # 13. Settings
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
         )
     ''')
-    
-    # Initialize default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_frequency', 'Diário')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('last_backup_timestamp', '2000-01-01T00:00:00')")
 
-    # 14. Partial Payments (Classes Module)
+# Registry of migrations: {version_int: function_taking_cursor}
+def _migrate_v2(cursor):
+    """
+    Migration v2: Add 'force_password_change' to users.
+    """
     try:
-        cursor.execute("ALTER TABLE tuitions ADD COLUMN amount_paid REAL DEFAULT 0")
+        cursor.execute("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
-
+    
+    # Force existing admin to change password
     try:
-        cursor.execute("ALTER TABLE student_consumptions ADD COLUMN amount_paid REAL DEFAULT 0")
-    except sqlite3.OperationalError: pass
+        cursor.execute("UPDATE users SET force_password_change = 1 WHERE username = 'admin'")
+    except Exception: pass
 
-    try:
-        cursor.execute("ALTER TABLE tuitions ADD COLUMN class_dates TEXT")
-    except sqlite3.OperationalError: pass
+MIGRATIONS = {
+    1: _migrate_v1,
+    2: _migrate_v2
+}
 
-    conn.commit()
+def run_migrations(conn):
+    """
+    Check current DB version and apply pending migrations sequentially.
+    """
+    cursor = conn.cursor()
+    
+    # Get current version
+    current_version = cursor.execute("PRAGMA user_version").fetchone()[0]
+    logger.info(f"Database Current Version: {current_version}")
+    
+    # Determine max version
+    max_version = max(MIGRATIONS.keys()) if MIGRATIONS else 0
+    
+    if current_version < max_version:
+        for version in range(current_version + 1, max_version + 1):
+            if version in MIGRATIONS:
+                try:
+                    logger.info(f"Applying Migration v{version}...")
+                    MIGRATIONS[version](cursor)
+                    cursor.execute(f"PRAGMA user_version = {version}")
+                    conn.commit()
+                    logger.info(f"Migration v{version} applied successfully.")
+                except Exception as e:
+                    conn.rollback()
+                    logger.error(f"Migration v{version} Failed: {e}")
+                    raise e
+    else:
+        logger.info("Database is up to date.")
 
 def init_db():
     if not os.path.exists(DB_FOLDER):
