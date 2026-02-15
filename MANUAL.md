@@ -92,22 +92,17 @@ streamlit run Dashboard.py
 4. Seu navegador abrirá automaticamente com o sistema
 5. Se não abrir, acesse manualmente: **http://localhost:8501**
 
-### 1.6 Criar um Atalho (Opcional)
+### 1.6 Facilitar o Acesso (Atalhos)
 
-Para não precisar repetir os comandos toda vez:
+O sistema já vem com arquivos prontos para facilitar o seu dia a dia:
 
-1. Abra o Bloco de Notas
-2. Cole o texto abaixo:
+1. **Arquivo Principal**: Localize o arquivo `Abrir_Amicando.bat`. Você pode clicar duas vezes nele para iniciar o sistema.
+2. **Criar Atalho na Área de Trabalho**: 
+   - Clique duas vezes em `Configurar_Atalho.bat`.
+   - O sistema criará automaticamente um atalho chamado **"Amicando"** na sua Área de Trabalho com o logo oficial.
+   - Siga as instruções na tela e pronto!
 
-```
-cd /d "C:\CAMINHO\PARA\SUA\PASTA\Amicando"
-streamlit run Dashboard.py
-pause
-```
-
-3. Substitua `C:\CAMINHO\PARA\SUA\PASTA\Amicando` pelo caminho real onde você extraiu
-4. Salve como **"Iniciar Amicando.bat"** (não .txt)
-5. Clique duas vezes neste arquivo sempre que quiser abrir o sistema
+> 💡 Se você mover a pasta do sistema para outro lugar, basta rodar o `Configurar_Atalho.bat` novamente para atualizar o link.
 
 ### 1.7 Solução de Problemas na Instalação
 
