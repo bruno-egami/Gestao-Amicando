@@ -56,52 +56,179 @@ admin_utils.render_header_logo()
 st.title("📊 Dashboard")
 st.write(f"Hoje: **{date.today().strftime('%d/%m/%Y')}**")
 
-# --- PRODUCTION SUMMARY ---
-st.markdown("### 🔨 Resumo de Produção")
-
+# --- QUERIES & DATA LOADING ---
 try:
     today_str = date.today().isoformat()
     
-    # New: Breaking Alert
+    # 1. Encomendas (Orders)
+    orders_df = pd.read_sql("""
+        SELECT co.id, c.name as Client, co.date_due as DueDate, co.status,
+               GROUP_CONCAT(ci.quantity || 'x ' || p.name, ', ') as Items
+        FROM commission_orders co
+        JOIN clients c ON co.client_id = c.id
+        LEFT JOIN commission_items ci ON co.id = ci.order_id
+        LEFT JOIN products p ON ci.product_id = p.id
+        WHERE co.status != 'Entregue'
+        GROUP BY co.id
+        ORDER BY co.date_due ASC
+    """, conn)
+    
+    # 2. Alunos e Aulas (Classes)
+    from services import student_service
+    class_stats = student_service.get_module_summary_stats(conn)
+    debts_df = student_service.get_debts_summary(conn)
+    
+    # 3. Estoque (Inventory)
+    materials_df = pd.read_sql("""
+        SELECT name, stock_level, min_stock_alert, unit 
+        FROM materials 
+        WHERE type = 'Material'
+        ORDER BY stock_level ASC
+    """, conn)
+    low_stock_materials = materials_df[materials_df['stock_level'] <= materials_df['min_stock_alert']].copy()
+    products_df = pd.read_sql("SELECT name, stock_quantity, base_price FROM products ORDER BY name", conn)
+    inventory_val = (products_df['stock_quantity'] * products_df['base_price']).sum()
+    
+    # 4. Produção (Production)
+    # Today's production
+    today_production = pd.read_sql("SELECT SUM(quantity) as total FROM production_history WHERE timestamp LIKE ?", conn, params=(today_str + '%',))
+    today_total = today_production.iloc[0]['total'] or 0
+    # Week's production
+    week_start = (date.today() - pd.Timedelta(days=7)).isoformat()
+    week_production = pd.read_sql("SELECT SUM(quantity) as total FROM production_history WHERE timestamp >= ?", conn, params=(week_start,))
+    week_total = week_production.iloc[0]['total'] or 0
+    # Month's production
+    month_start = date.today().replace(day=1).isoformat()
+    month_production = pd.read_sql("SELECT SUM(quantity) as total FROM production_history WHERE timestamp >= ?", conn, params=(month_start,))
+    month_total = month_production.iloc[0]['total'] or 0
+    # Yield
+    month_losses = pd.read_sql("SELECT SUM(quantity) as total FROM production_losses WHERE timestamp >= ?", conn, params=(month_start,))
+    month_broken = month_losses.iloc[0]['total'] or 0
+    month_yield = (month_total / (month_total + month_broken) * 100) if (month_total + month_broken) > 0 else 100
+    
     today_losses = pd.read_sql("SELECT SUM(quantity) as total FROM production_losses WHERE timestamp LIKE ?", conn, params=(today_str + '%',))
     broken_today = today_losses.iloc[0]['total'] or 0
+
+    # ==============================================================================
+    # SECTION 1: ENCOMENDAS (ORDERS)
+    # ==============================================================================
+    st.markdown("### 📦 Encomendas Pendentes")
+    with st.container(border=True):
+        c_ord1, c_ord2 = st.columns([1, 3])
+        c_ord1.metric("📦 Total de Pedidos", len(orders_df))
+        
+        if not orders_df.empty:
+            # Format Date for display
+            display_orders = orders_df.copy()
+            display_orders['DueDate'] = pd.to_datetime(display_orders['DueDate']).dt.strftime('%d/%m/%Y')
+            
+            c_ord2.dataframe(
+                display_orders[['Client', 'Items', 'DueDate', 'status']],
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Client": "Cliente",
+                    "Items": "Resumo do Pedido",
+                    "DueDate": "Prazo",
+                    "status": "Status"
+                }
+            )
+            # Warn about delayed
+            delayed = orders_df[pd.to_datetime(orders_df['DueDate']).dt.date < date.today()]
+            if not delayed.empty:
+                st.error(f"⚠️ **{len(delayed)} Encomenda(s) Atrasada(s)!**")
+        else:
+            c_ord2.success("Incrível! Nenhuma encomenda pendente no momento. 🎉")
+    
+    st.divider()
+
+    # ==============================================================================
+    # SECTION 2: ALUNOS E AULAS (CLASSES)
+    # ==============================================================================
+    st.markdown("### 🎓 Gestão de Aulas e Alunos")
+    with st.container(border=True):
+        c_al1, c_al2 = st.columns([1, 3])
+        with c_al1:
+            st.metric("👥 Alunos Ativos", class_stats.get('total_students', 0))
+            st.metric("💸 Valor Pendente", f"R$ {class_stats.get('pending_revenue', 0):.2f}")
+        
+        with c_al2:
+            if not debts_df.empty:
+                st.write("**Mensalidades/Consumos Pendentes:**")
+                st.dataframe(
+                    debts_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "name": "Aluno",
+                        "months": "Mês(es)",
+                        "total_due": st.column_config.NumberColumn("Valor em Aberto", format="R$ %.2f")
+                    }
+                )
+            else:
+                st.success("Tudo em dia! Nenhum aluno com pendência financeira. ✅")
+
+    st.divider()
+
+    # ==============================================================================
+    # SECTION 3: ESTOQUE (INVENTORY)
+    # ==============================================================================
+    st.markdown("### 🏺 Estoque e Insumos")
+    
+    # Inventory Metrics
+    with st.container(border=True):
+        m1, m2, m3 = st.columns(3)
+        m1.metric("⚠️ Insumos em Alerta", len(low_stock_materials), delta_color="inverse")
+        m2.metric("🏺 Peças em Estoque", int(products_df['stock_quantity'].sum()))
+        m3.metric("💰 Valor em Estoque", f"R$ {inventory_val:,.2f}")
+    
+    # Stock Details
+    c_st1, c_st2 = st.columns(2, gap="large")
+    with c_st1:
+        st.caption("**⚠️ Alerta de Insumos:**")
+        if not low_stock_materials.empty:
+            st.dataframe(
+                low_stock_materials,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "name": "Insumo",
+                    "stock_level": st.column_config.NumberColumn("Estoque", format="%.2f"),
+                    "min_stock_alert": st.column_config.NumberColumn("Mínimo", format="%.2f"),
+                    "unit": "Unid."
+                }
+            )
+        else:
+            st.success("Estoque de insumos saudável. ✅")
+
+    with c_st2:
+        st.caption("**🏺 Resumo de Estoque (Peças):**")
+        st.dataframe(
+            products_df[['name', 'stock_quantity']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "name": "Peça",
+                "stock_quantity": st.column_config.NumberColumn("Qtd Atual", format="%d")
+            }
+        )
+
+    st.divider()
+
+    # ==============================================================================
+    # SECTION 4: PRODUÇÃO (PRODUCTION)
+    # ==============================================================================
+    st.markdown("### 🔨 Resumo de Produção")
+    
     if broken_today > 0:
         st.warning(f"💔 **Alerta de Perdas**: {int(broken_today)} peças foram registradas como quebra hoje.")
 
-    # Today's production
-    today_production = pd.read_sql("""
-        SELECT SUM(quantity) as total FROM production_history 
-        WHERE timestamp LIKE ?
-    """, conn, params=(today_str + '%',))
-    today_total = today_production.iloc[0]['total'] or 0
-    
-    # Week's production
-    week_start = (date.today() - pd.Timedelta(days=7)).isoformat()
-    week_production = pd.read_sql("""
-        SELECT SUM(quantity) as total FROM production_history 
-        WHERE timestamp >= ?
-    """, conn, params=(week_start,))
-    week_total = week_production.iloc[0]['total'] or 0
-    
-    # Month's production
-    month_start = date.today().replace(day=1).isoformat()
-    month_production = pd.read_sql("""
-        SELECT SUM(quantity) as total FROM production_history 
-        WHERE timestamp >= ?
-    """, conn, params=(month_start,))
-    month_total = month_production.iloc[0]['total'] or 0
-
     with st.container(border=True):
-        prod_c1, prod_c2, prod_c3, prod_c4 = st.columns(4)
-        prod_c1.metric("🔨 Hoje", f"{int(today_total)} un")
-        prod_c2.metric("📅 Últimos 7 dias", f"{int(week_total)} un")
-        prod_c3.metric("📆 Este mês", f"{int(month_total)} un")
-        
-        # Calculate Yield (Month)
-        month_losses = pd.read_sql("SELECT SUM(quantity) as total FROM production_losses WHERE timestamp >= ?", conn, params=(month_start,))
-        month_broken = month_losses.iloc[0]['total'] or 0
-        month_yield = (month_total / (month_total + month_broken) * 100) if (month_total + month_broken) > 0 else 100
-        prod_c4.metric("📈 Rendimento (Mês)", f"{month_yield:.1f}%")
+        p_c1, p_c2, p_c3, p_c4 = st.columns(4)
+        p_c1.metric("🔨 Hoje", f"{int(today_total)} un")
+        p_c2.metric("📅 Últimos 7 dias", f"{int(week_total)} un")
+        p_c3.metric("📆 Este mês", f"{int(month_total)} un")
+        p_c4.metric("📈 Rendimento", f"{month_yield:.1f}%")
 
     # WIP Status Bar
     st.write("📍 **Status Atual da Produção (Kanban):**")
@@ -111,7 +238,6 @@ try:
         
         if not wip_data.empty:
             wip_counts = wip_data.set_index('stage')['total'].reindex(stage_order).fillna(0)
-            # Display as a small bar chart or colorful columns
             w_cols = st.columns(len(stage_order))
             for i, s in enumerate(stage_order):
                 w_cols[i].caption(f"**{s}**")
@@ -132,157 +258,9 @@ try:
         for _, row in recent_prod.iterrows():
             ts = row['timestamp'][:16].replace('T', ' ')
             st.caption(f"🔹 {ts} — **{row['product_name']}** x{row['quantity']} ({row['username']})")
-    
-    st.divider()
-except Exception as e:
-    st.caption(f"(Histórico de produção ainda não disponível)")
-    st.divider()
-
-try:
-    # --- QUERIES ---
-    
-    # 1. Pending Orders (with items concatenation)
-    # We need to process in Python or use GROUP_CONCAT if SQLite supports it (it does).
-    orders_df = pd.read_sql("""
-        SELECT co.id, c.name as Client, co.date_due as DueDate, co.status,
-               GROUP_CONCAT(ci.quantity || 'x ' || p.name, ', ') as Items
-        FROM commission_orders co
-        JOIN clients c ON co.client_id = c.id
-        LEFT JOIN commission_items ci ON co.id = ci.order_id
-        LEFT JOIN products p ON ci.product_id = p.id
-        WHERE co.status != 'Entregue'
-        GROUP BY co.id
-        ORDER BY co.date_due ASC
-    """, conn)
-    
-    # 2. Low Stock Materials (Filter out 'Mão de Obra', 'Queima', etc.)
-    # Assuming 'type' column exists and we want only 'Material'
-    materials_df = pd.read_sql("""
-        SELECT name, stock_level, min_stock_alert, unit 
-        FROM materials 
-        WHERE type = 'Material'
-        ORDER BY stock_level ASC
-    """, conn)
-    
-    # Filter Low Stock
-    low_stock_materials = materials_df[materials_df['stock_level'] <= materials_df['min_stock_alert']].copy()
-    
-    # 3. Products Stock
-    products_df = pd.read_sql("SELECT name, stock_quantity, base_price FROM products ORDER BY name", conn)
-
-    # 4. Inventory Value
-    inventory_val = (products_df['stock_quantity'] * products_df['base_price']).sum()
-    
-    # 5. Class Highlights
-    from services import student_service
-    class_stats = student_service.get_module_summary_stats(conn)
-    debts_df = student_service.get_debts_summary(conn)
-
-    # --- METRICS ROW ---
-    with st.container(border=True):
-        c1, c2, c3, c4 = st.columns(4)
-        
-        pending_count = len(orders_df)
-        low_stock_count = len(low_stock_materials)
-        total_products = products_df['stock_quantity'].sum()
-        
-        c1.metric("📦 Encomendas Pendentes", pending_count)
-        c2.metric("⚠️ Insumos em Alerta", low_stock_count, delta_color="inverse")
-        c3.metric("🏺 Peças em Estoque", int(total_products))
-        c4.metric("💰 Valor em Estoque", f"R$ {inventory_val:,.2f}")
-
-    # Second Metrics Row: Classes
-    st.markdown("#### 🎓 Gestão de Aulas")
-    cl1, cl2, cl3, cl4 = st.columns(4)
-    cl1.metric("👥 Alunos Ativos", class_stats.get('total_students', 0))
-    cl2.metric("💸 Valor Pendente (Aulas)", f"R$ {class_stats.get('pending_revenue', 0):.2f}")
-    
-    if not debts_df.empty:
-        st.info(f"🎓 Existem **{len(debts_df)}** alunos com mensalidades ou consumos pendentes. [Ver Gestão de Aulas](Gestao_Aulas)")
-
-    st.divider()
-
-    # --- DETAIL COLUMNS ---
-    col_left, col_right = st.columns([1, 1], gap="large")
-
-    with col_left:
-        st.subheader("📋 Encomendas em Aberto")
-        if not orders_df.empty:
-            # Format Date
-            orders_df['DueDate'] = pd.to_datetime(orders_df['DueDate']).dt.strftime('%d/%m/%Y')
-            
-            # Simple Table
-            st.dataframe(
-                orders_df[['Client', 'Items', 'DueDate', 'status']],
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "Client": "Cliente",
-                    "Items": "Resumo do Pedido",
-                    "DueDate": "Prazo",
-                    "status": "Status"
-                }
-            )
-            
-            # Warn about delayed
-            delayed = orders_df[pd.to_datetime(orders_df['DueDate'], format='%d/%m/%Y').dt.date < date.today()]
-            if not delayed.empty:
-                st.error(f"⚠️ {len(delayed)} Encomenda(s) Atrasada(s)!")
-        else:
-            st.success("Nenhuma encomenda pendente! 🎉")
-
-    with col_right:
-        st.subheader("🎓 Mensalidades Pendentes")
-        if not debts_df.empty:
-             st.dataframe(
-                debts_df,
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "name": "Aluno",
-                    "months": "Mês(es)",
-                    "total_due": st.column_config.NumberColumn("Valor em Aberto", format="R$ %.2f")
-                }
-            )
-        else:
-            st.success("Todas as mensalidades estão em dia! 🎉")
-
-    st.divider()
-
-    # Lower Row: Stock & Low Stock
-    col_st_1, col_st_2 = st.columns([1, 1], gap="large")
-    
-    with col_st_1:
-        st.subheader("⚠️ Alerta de Insumos")
-        if not low_stock_materials.empty:
-            st.dataframe(
-                low_stock_materials,
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "name": "Insumo",
-                    "stock_level": st.column_config.NumberColumn("Estoque", format="%.2f"),
-                    "min_stock_alert": st.column_config.NumberColumn("Mínimo", format="%.2f"),
-                    "unit": "Unid."
-                }
-            )
-        else:
-            st.success("Estoque de insumos saudável. ✅")
-
-    with col_st_2:
-        st.subheader("🏺 Resumo de Estoque (Peças)")
-        # Small search and preview
-        st.dataframe(
-            products_df[['name', 'stock_quantity']],
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "name": "Peça",
-                "stock_quantity": st.column_config.NumberColumn("Qtd Atual", format="%d")
-            }
-        )
 
 except Exception as e:
     st.error(f"Erro no dashboard: {e}")
+    logger.exception("Dashboard error")
 finally:
     conn.close()
