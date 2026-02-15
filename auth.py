@@ -114,11 +114,11 @@ def login(conn, username: str, password: str) -> dict | None:
             conn.commit()
             
             return {
-                'id': user['id'],
+                'id': int(user['id']),
                 'username': user['username'],
                 'role': user['role'],
                 'name': user['name'] or user['username'],
-                'force_password_change': user.get('force_password_change', 0)
+                'force_password_change': int(user.get('force_password_change', 0))
             }
         
         return None
@@ -202,26 +202,29 @@ def require_login(conn):
                     conf_pass = st.text_input("Confirmar Nova Senha", type="password")
                     
                     if st.form_submit_button("Salvar Nova Senha", type="primary"):
-                        if new_pass != conf_pass:
-                            st.error("As senhas não coincidem.")
-                        elif len(new_pass) < 6:
-                            st.error("A senha deve ter pelo menos 6 caracteres.")
-                        else:
-                            try:
-                                cursor = conn.cursor()
-                                new_hash = hash_password(new_pass)
-                                cursor.execute("UPDATE users SET password_hash=?, force_password_change=0 WHERE id=?", (new_hash, user['id']))
-                                conn.commit()
-                                
-                                # Update session
-                                user['force_password_change'] = 0
-                                set_current_user(user)
-                                
-                                st.success("Senha alterada com sucesso! Redirecionando...")
-                                time.sleep(1)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao salvar: {e}")
+                            if new_pass != conf_pass:
+                                st.error("As senhas não coincidem.")
+                            elif len(new_pass) < 6:
+                                st.error("A senha deve ter pelo menos 6 caracteres.")
+                            else:
+                                try:
+                                    cursor = conn.cursor()
+                                    new_hash = hash_password(new_pass)
+                                    # Ensure ID is native int
+                                    uid = int(user['id'])
+                                    cursor.execute("UPDATE users SET password_hash=?, force_password_change=0 WHERE id=?", (new_hash, uid))
+                                    conn.commit()
+                                    
+                                    # Update session
+                                    user['force_password_change'] = 0
+                                    set_current_user(user)
+                                    
+                                    st.success("Senha alterada com sucesso! Redirecionando...")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Erro ao salvar: {e}")
+                                    print(f"Password Update Error: {e}")
             return False
 
         return True
