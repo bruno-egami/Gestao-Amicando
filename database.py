@@ -135,6 +135,10 @@ def init_db():
         os.makedirs(DB_FOLDER)
 
     conn = sqlite3.connect(DB_PATH)
+    init_db_from_conn(conn)
+    conn.close()
+
+def init_db_from_conn(conn):
     cursor = conn.cursor()
 
     # --- Table Creations ---
@@ -298,124 +302,8 @@ def init_db():
 
     # ... (rest of tables)
 
-    # Seed Categories
-    cursor.execute("SELECT count(*) FROM expense_categories")
-    if cursor.fetchone()[0] == 0:
-        defaults = ["Gasto Eventual", "Custo Fixo Mensal (Pagamento)", "Compra de Insumo", "Manutenção", "Impostos", "Outros", "Aluguel", "Energia", "Água", "Internet", "Transporte", "Marketing"]
-        for d in defaults:
-            try:
-                cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (d,))
-            except Exception:
-                pass
-        conn.commit()
-
-    # Firings (Update existing if needed, else created above)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS firings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            type TEXT,
-            power_consumption_kwh REAL,
-            cost REAL,
-            kiln_id INTEGER,
-            observation TEXT,
-            image_path TEXT,
-            FOREIGN KEY (kiln_id) REFERENCES kilns (id)
-        )
-    ''')
-    
-    # ...
-
-    # --- Migrations for Existing Tables ---
-    
-    # ... (previous materials migrations)
-
-    # 3. Firings: Add 'kiln_id', 'observation', 'image_path'
-    try:
-        cursor.execute("ALTER TABLE firings ADD COLUMN kiln_id INTEGER")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE firings ADD COLUMN observation TEXT")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE firings ADD COLUMN image_path TEXT")
-    except sqlite3.OperationalError: pass
-
-    # 4. Fixed Costs: Add 'due_day', 'periodicity', 'category'
-    try:
-        cursor.execute("ALTER TABLE fixed_costs ADD COLUMN due_day INTEGER")
-    except sqlite3.OperationalError: pass
-    
-    try:
-        cursor.execute("ALTER TABLE fixed_costs ADD COLUMN periodicity TEXT")
-    except sqlite3.OperationalError: pass
-    
-    try:
-        cursor.execute("ALTER TABLE fixed_costs ADD COLUMN category TEXT")
-    except sqlite3.OperationalError: pass
-
-    # 5. Sales: Add 'discount', 'payment_method', 'notes', 'salesperson'
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN discount REAL DEFAULT 0")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN payment_method TEXT")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN notes TEXT")
-    except sqlite3.OperationalError: pass
-    
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN salesperson TEXT")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN order_id TEXT")
-    except sqlite3.OperationalError: pass
-
-    # 6. Sales & Commission Items: Add 'variant_id'
-    try:
-        cursor.execute("ALTER TABLE sales ADD COLUMN variant_id INTEGER REFERENCES product_variants(id)")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE commission_items ADD COLUMN variant_id INTEGER REFERENCES product_variants(id)")
-    except sqlite3.OperationalError: pass
-
-    # 7. Create product_kits table (Migration)
-    # 7. Create product_kits table (Migration) - Handled in init_db bottom section or consolidated
-    # Removing duplicate create here if it exists below.
-    # Actually, keep it here if it's considered a migration for old DBs? 
-    # But init_db has it at the bottom.
+    # ... (Seed and Migration blocks moved below)
     pass
-
-
-    # 8. Students: Add 'class_id' (Migration)
-    try:
-        cursor.execute("ALTER TABLE students ADD COLUMN class_id INTEGER")
-    except sqlite3.OperationalError: pass
-    
-    # 9. Product Variants (Migration)
-    try:
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS product_variants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_id INTEGER,
-                variant_name TEXT,
-                stock_quantity INTEGER DEFAULT 0,
-                price_adder REAL DEFAULT 0.0,
-                material_id INTEGER,
-                FOREIGN KEY (product_id) REFERENCES products(id),
-                FOREIGN KEY (material_id) REFERENCES materials(id)
-            )
-        ''')
-        # Check if indices exist, if not create them (Migration safe)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_prod_variants_product ON product_variants(product_id)")
-    except Exception: pass
 
     # 10. Commission Items: Add 'notes', 'variant_id'
     try:
@@ -445,25 +333,8 @@ def init_db():
         cursor.execute("ALTER TABLE product_variants ADD COLUMN material_quantity REAL DEFAULT 0.0")
     except sqlite3.OperationalError: pass
 
-    # 14. Refactor Student Fees (Migration)
-    # Classes: Add 'weekday' (0=Monday, 6=Sunday)
-    try:
-        cursor.execute("ALTER TABLE classes ADD COLUMN weekday INTEGER")
-    except sqlite3.OperationalError: pass
-
-    # Students: Add 'price_per_class'
-    try:
-        cursor.execute("ALTER TABLE students ADD COLUMN price_per_class REAL")
-    except sqlite3.OperationalError: pass
-
-    # Tuitions: Add 'class_count', 'unit_price'
-    try:
-        cursor.execute("ALTER TABLE tuitions ADD COLUMN class_count INTEGER")
-    except sqlite3.OperationalError: pass
-
-    try:
-        cursor.execute("ALTER TABLE tuitions ADD COLUMN unit_price REAL")
-    except sqlite3.OperationalError: pass
+    # ... (Refactor blocks moved below)
+    pass
 
 
 
@@ -688,6 +559,19 @@ def init_db():
         )
     ''')
 
+    # Class Cancellations
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS class_cancellations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_id INTEGER,
+            date TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT,
+            FOREIGN KEY (class_id) REFERENCES classes(id),
+            UNIQUE(class_id, date)
+        )
+    ''')
+
     # Tuitions (Mensalidades)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tuitions (
@@ -793,15 +677,51 @@ def init_db():
     conn.commit()
 
     
-    # Run migrations for existing databases that might miss new columns
-    run_migrations(conn)
-    
-    # Ensure default data for categories
     # Ensure default data for categories (Duplicate removed)
     pass
+    
+    # --- GLOBAL MIGRATIONS (Try-Except for idempotency) ---
+    
+    # Firings Fix
+    for col, dtype in [('kiln_id', 'INTEGER'), ('observation', 'TEXT'), ('image_path', 'TEXT')]:
+        try: cursor.execute(f"ALTER TABLE firings ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError: pass
 
-    conn.close()
-    print(f"Database initialized and migrated at {DB_PATH}")
+    # Fixed Costs Fix
+    for col, dtype in [('due_day', 'INTEGER'), ('periodicity', 'TEXT'), ('category', 'TEXT')]:
+        try: cursor.execute(f"ALTER TABLE fixed_costs ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError: pass
+
+    # Sales Fix
+    for col, dtype in [('discount', 'REAL DEFAULT 0'), ('payment_method', 'TEXT'), ('notes', 'TEXT'), ('salesperson', 'TEXT'), ('order_id', 'TEXT'), ('variant_id', 'INTEGER')]:
+        try: cursor.execute(f"ALTER TABLE sales ADD COLUMN {col} {dtype}")
+        except sqlite3.OperationalError: pass
+
+    # Student Management Fix
+    try: cursor.execute("ALTER TABLE students ADD COLUMN class_id INTEGER")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE classes ADD COLUMN weekday INTEGER")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE students ADD COLUMN price_per_class REAL")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE tuitions ADD COLUMN class_count INTEGER")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE tuitions ADD COLUMN unit_price REAL")
+    except sqlite3.OperationalError: pass
+    
+    # Seed Data
+    cursor.execute("SELECT count(*) FROM expense_categories")
+    if cursor.fetchone()[0] == 0:
+        defaults = ["Gasto Eventual", "Custo Fixo Mensal (Pagamento)", "Compra de Insumo", "Manutenção", "Impostos", "Outros", "Aluguel", "Energia", "Água", "Internet", "Transporte", "Marketing"]
+        for d in defaults:
+            try: cursor.execute("INSERT OR IGNORE INTO expense_categories (name) VALUES (?)", (d,))
+            except Exception: pass
+        conn.commit()
+
+    # Run versioned migrations
+    run_migrations(conn)
+
+    print(f"Database schema initialized.")
 
 if __name__ == "__main__":
     init_db()

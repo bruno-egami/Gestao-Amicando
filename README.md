@@ -193,4 +193,24 @@ Este software é proprietário e de uso exclusivo do Atelier Amicando.
 
 ---
 
+## 🧪 Testes Automatizados
+
+O projeto utiliza **pytest** para garantir a integridade da lógica de negócio na camada de serviços.
+
+### Como Rodar os Testes
+
+1. Certifique-se de que as dependências de teste estão instaladas:
+```bash
+pip install pytest pytest-mock
+```
+
+2. Execute todos os testes a partir da raiz do projeto:
+```bash
+pytest tests/
+```
+
+Os testes utilizam um banco de dados SQLite **em memória**, garantindo que as execuções sejam rápidas e não alterem seus dados reais de produção.
+
+---
+
 *Desenvolvido com ❤️ e ☕ por Bruno Egami*

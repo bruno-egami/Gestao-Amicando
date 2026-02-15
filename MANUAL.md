@@ -1,6 +1,6 @@
 # 📖 Manual do Usuário - Sistema Amicando
 
-**Versão:** 2.0  
+**Versão:** 2.1  
 **Data:** Fevereiro 2026  
 **Sistema de Gestão para Atelier de Cerâmica**
 **https://github.com/bruno-egami/Gestao-Amicando**
@@ -23,7 +23,8 @@
 12. [Gestão de Aulas](#12-gestão-de-aulas)
 13. [Relatórios](#13-relatórios)
 14. [Administração](#14-administração)
-15. [Dicas e Melhores Práticas](#15-dicas-e-melhores-práticas)
+15. [Testes e Verificação](#15-testes-e-verificação)
+16. [Dicas e Melhores Práticas](#16-dicas-e-melhores-práticas)
 
 ---
 
@@ -121,7 +122,7 @@ pause
 
 ## 2. Introdução
 
-O **Sistema Amicando** foi desenvolvido para auxiliar na gestão de ateliês de cerâmica artesanal. Ele permite controlar o ciclo de produção, desde a compra de insumos até a venda ao cliente.
+O **Sistema Amicando** foi desenvolvido para auxiliar na gestão de ateliês de cerâmica artesanal. Ele permite controlar o ciclo de produção, desde a compra de insumos até a venda ao cliente. A versão 2.1 traz melhorias significativas de performance e confiabilidade através de otimizações de banco de dados e testes automatizados.
 
 ### 2.1 Funcionalidades
 
@@ -220,7 +221,7 @@ Gerencia matérias-primas (argilas, esmaltes, etc.).
 1. Localize o insumo
 2. Clique em **"📦 Movimentar"**
 3. Escolha: ENTRADA, SAÍDA ou AJUSTE
-4. Informe quantidade e confirme
+4. Informe quantidade e confirme. O sistema agora utiliza precisão de 4 casas decimais para evitar erros de arredondamento.
 
 ---
 
@@ -400,6 +401,7 @@ A aba **"💰 Gestão Financeira"** centraliza tudo:
 2. **Gerar Mensalidades**: Ferramenta em lote para criar cobranças para todos os alunos ativos.
 3. **Controle de Pagamento**:
    - Marque mensalidades como PAGAS.
+   - O sistema realiza alocação inteligente de pagamentos parciais, quitando as dívidas mais antigas primeiro.
    - Envie comprovantes via WhatsApp (abertura automática).
    - Visualize alunos com 3+ mensalidades em atraso (destaque em vermelho).
 
@@ -488,10 +490,25 @@ Importe dados via Excel:
 2. Preencha
 3. Faça upload
 4. Confirme
+    
+### 14.5 Performance
+O sistema foi otimizado para lidar com grandes volumes de dados. Filtros e buscas agora são processados diretamente no banco de dados, resultando em respostas mais rápidas e menor consumo de memória no computador.
 
 ---
 
-## 15. Dicas e Melhores Práticas
+## 15. Testes e Verificação
+
+Para garantir que o sistema continue funcionando corretamente após atualizações, foi implementada uma infraestrutura de testes automatizados.
+
+### 15.1 Como Rodar os Testes (Desenvolvedor)
+Se você deseja validar o código após fazer alterações:
+1. Abra o terminal na pasta do sistema.
+2. Execute o comando: `pytest tests/`
+3. O sistema validará automaticamente 17 fluxos críticos, incluindo cálculos financeiros e estoque.
+
+---
+
+## 16. Dicas e Melhores Práticas
 
 ### 15.1 Organização
 
@@ -523,5 +540,5 @@ Importe dados via Excel:
 
 ---
 
-*Manual do Sistema Amicando v2.0*  
+*Manual do Sistema Amicando v2.1*  
 *Atualização: Fevereiro 2026*

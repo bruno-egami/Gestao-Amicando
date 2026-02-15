@@ -162,7 +162,8 @@ def calculate_tuition(conn, student_id, month_year):
     student_id = int(student_id)
     row = pd.read_sql("SELECT s.class_id, c.weekday FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.id=?", conn, params=(student_id,)).iloc[0]
     
-    if pd.isna(row['class_id']) or pd.isna(row['weekday']):
+    if pd.isna(row['class_id']) or row['weekday'] is None or pd.isna(row['weekday']):
+        logger.warning(f"Student {student_id} or class data missing: class_id={row['class_id']}, weekday={row['weekday']}")
         return 0, 0.0, 0.0
         
     class_id = int(row['class_id'])
@@ -319,8 +320,8 @@ def process_material_consumption(conn, student_id, material_id, quantity, date, 
     mat = pd.read_sql("SELECT name, price_per_unit, stock_level FROM materials WHERE id=?", conn, params=(material_id,)).iloc[0]
     base_price = mat['price_per_unit']
     
-    # Calculate Marked-up price as a multiplier (Markup 2 = 200%)
-    unit_price = base_price * markup
+    # Calculate Marked-up price (Markup 50 = 50% more)
+    unit_price = base_price * (1 + (markup / 100.0))
     total_val = unit_price * quantity
     desc = f"Consumo: {mat['name']}"
     
@@ -486,30 +487,49 @@ def process_partial_payment(conn, student_id, payment_amount):
     try:
         student_id = int(student_id)
         cursor = conn.cursor()
-        for item in pending_items:
-            if remaining_payment <= 0.009: # Float epsilon safety
+        
+        # 1. Fetch all pending debts
+        tuitions = pd.read_sql("SELECT id, amount, amount_paid, month_year as date, 'tuition' as type FROM tuitions WHERE student_id=? AND status='Pendente'", conn, params=(student_id,))
+        consumptions = pd.read_sql("SELECT id, total_value as amount, amount_paid, date, 'consumption' as type FROM student_consumptions WHERE student_id=? AND status='Pendente'", conn, params=(student_id,))
+        
+        # Combine
+        pending = pd.concat([tuitions, consumptions])
+        if pending.empty:
+            return True, "Nenhuma dívida pendente encontrada."
+            
+        # Add 'due' column and handle NaNs in amount_paid
+        pending['amount_paid'] = pending['amount_paid'].fillna(0.0)
+        pending['due'] = pending['amount'] - pending['amount_paid']
+        
+        # Sort by date (oldest first). For month_year, we might need a better sort, but simple string sort works for same year.
+        pending = pending.sort_values('date')
+        
+        remaining_payment = float(payment_amount)
+        items_paid = []
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        for _, item in pending.iterrows():
+            if remaining_payment <= 0.009:
                 break
                 
             pay_this_item = min(remaining_payment, item['due'])
             
-            # Update logic
             if item['type'] == 'tuition':
                 cursor.execute("UPDATE tuitions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
-                # Check if fully paid
-                if abs(pay_this_item - item['due']) < 0.01:
+                if abs((item['amount_paid'] + pay_this_item) - item['amount']) < 0.01:
                     cursor.execute("UPDATE tuitions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
             else:
                 cursor.execute("UPDATE student_consumptions SET amount_paid = COALESCE(amount_paid, 0) + ? WHERE id=?", (pay_this_item, item['id']))
-                if abs(pay_this_item - item['due']) < 0.01:
+                if abs((item['amount_paid'] + pay_this_item) - item['amount']) < 0.01:
                     cursor.execute("UPDATE student_consumptions SET status='Pago', payment_date=? WHERE id=?", (now_str, item['id']))
-                    
+            
             remaining_payment -= pay_this_item
             items_paid.append(f"{item['type']} {item['id']} ({pay_this_item:.2f})")
             
         conn.commit()
         audit.log_action(conn, 'PARTIAL_PAYMENT', 'finance', student_id, None, {'amount': payment_amount, 'items': items_paid}, commit=False)
         
-        return True, f"Pagamento de R$ {payment_amount:.2f} registrado com sucesso!"
+        return True, f"Pagamento registrado! {len(items_paid)} itens afetados."
     except Exception as e:
         conn.rollback()
         logger.error(f"Erro ao processar pagamento parcial para aluno {student_id}: {e}")
