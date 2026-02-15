@@ -629,7 +629,7 @@ def generate_receipt_pdf(order_data):
 
     return bytes(pdf.output(dest='S'))
 
-def generate_student_statement(student_data, items, total_due=None):
+def generate_student_statement(student_data, items, total_due=None, cancellations=None):
     """
     Generates a PDF statement for a student with centered header and quantity column.
     """
@@ -670,6 +670,12 @@ def generate_student_statement(student_data, items, total_due=None):
     pdf.cell(20, 6, "Aluno(a):", align='L')
     pdf.set_font('Helvetica', '', 10)
     pdf.cell(0, 6, f"{student_data.get('name')}", align='L', new_x="LMARGIN", new_y="NEXT")
+
+    if student_data.get('class_name'):
+         pdf.set_font('Helvetica', 'B', 10)
+         pdf.cell(15, 6, "Turma:", align='L')
+         pdf.set_font('Helvetica', '', 10)
+         pdf.cell(0, 6, f"{student_data.get('class_name')}", align='L', new_x="LMARGIN", new_y="NEXT")
     
     if student_data.get('month'):
          pdf.set_font('Helvetica', 'B', 10)
@@ -725,12 +731,37 @@ def generate_student_statement(student_data, items, total_due=None):
         if status == 'Pendente':
              calc_total_due += remaining
         
+        # Format Description with dates if available
+        desc = str(item.get('description', '-'))
+        class_dates = item.get('class_dates')
+        if class_dates:
+             # Parse dates if JSON string
+             if isinstance(class_dates, str):
+                  try:
+                       import json
+                       class_dates = json.loads(class_dates)
+                  except:
+                       pass
+             
+             if isinstance(class_dates, list) and class_dates:
+                  # Format: "Datas: 03, 10, 17, 24/02"
+                  try:
+                       d_objs = [datetime.strptime(d, '%Y-%m-%d') for d in class_dates]
+                       d_objs.sort()
+                       days = ", ".join([d.strftime('%d') for d in d_objs[:-1]])
+                       if days: days += " e "
+                       days += d_objs[-1].strftime('%d')
+                       month_str = d_objs[-1].strftime('%m')
+                       desc += f" (Datas: {days}/{month_str})"
+                  except:
+                       pass
+
         # Format Qty
         qty_str = f"{int(qty_val)}" if qty_val == int(qty_val) else f"{qty_val:.2f}"
         
         row_data = [
             str(item.get('date', '-')),
-            str(item.get('description', '-'))[:35], # truncated
+            desc[:60], # increased limit slightly as we added dates
             qty_str,
             f"{val:.2f}",
             f"{paid:.2f}",
@@ -738,12 +769,61 @@ def generate_student_statement(student_data, items, total_due=None):
             status
         ]
         
-        for i, dh in enumerate(row_data):
-            align = 'R' if i in [2, 3, 4, 5] else 'L' # Numbers right aligned
-            if i == 6: align = 'C' # Status centered
-            pdf.cell(col_widths[i], 7, dh, border=1, fill=fill, align=align)
+        # Calculate Height
+        # Description is index 1, width 60
+        # Font is Helvetica 8
+        # Get string width
         
-        pdf.ln()
+        # Approximate chars per line for width 60 at font 8 -> ~35-40 chars?
+        # Better: use get_string_width
+        
+        # Helper to get max height
+        line_height = 5
+        
+        # Calculate height needed for Description
+        # Split description into lines
+        # pdf.multi_cell(w, h, txt, dry_run=True?) -> Not available in standard FPDF 1.7.
+        # We simulate:
+        desc_lines = []
+        words = row_data[1].split(' ')
+        current_line = ""
+        for word in words:
+            if pdf.get_string_width(current_line + word) < col_widths[1] - 2:
+                current_line += word + " "
+            else:
+                desc_lines.append(current_line)
+                current_line = word + " "
+        desc_lines.append(current_line)
+        
+        n_lines = len(desc_lines)
+        row_height = max(7, n_lines * line_height)
+        
+        # Draw cells
+        # Data (0)
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
+        
+        # Check page break
+        if y_start + row_height > 270:
+            pdf.add_page()
+            y_start = pdf.get_y()
+            # Reprint header? Maybe not needed for short extract
+            
+        pdf.cell(col_widths[0], row_height, row_data[0], border=1, fill=fill, align='C')
+        
+        # Description (1) - MultiCell
+        x_desc = pdf.get_x()
+        pdf.rect(x_desc, y_start, col_widths[1], row_height, 'DF' if fill else 'D')
+        pdf.multi_cell(col_widths[1], line_height, row_data[1], border=0, align='L', fill=False)
+        pdf.set_xy(x_desc + col_widths[1], y_start) # Move cursor back to top right of multicell
+        
+        # Rest of columns
+        for i in range(2, 7):
+            align = 'R' if i in [2, 3, 4, 5] else 'L'
+            if i == 6: align = 'C'
+            pdf.cell(col_widths[i], row_height, row_data[i], border=1, fill=fill, align=align)
+            
+        pdf.ln(row_height)
         fill = not fill
     
     # Totals Section
@@ -756,5 +836,34 @@ def generate_student_statement(student_data, items, total_due=None):
     pdf.set_font('Helvetica', 'B', 12)
     pdf.cell(130, 10, "Total a Pagar:", align='R')
     pdf.cell(60, 10, f"R$ {float(final_total):.2f}", align='R', border=1)
+    
+    # Cancellations Section
+    if cancellations:
+        pdf.ln(10)
+        pdf.set_font('Helvetica', 'B', 10)
+        pdf.cell(0, 6, "Detalhamento de Cancelamentos / Feriados (Não Cobrados)", align='L', new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+        
+        # Simple Table for Cancellations
+        # Cols: Data (30), Motivo (Remaining)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.cell(30, 7, "Data", border=1, fill=True, align='C')
+        pdf.cell(0, 7, "Motivo", border=1, fill=True, align='L', new_x="LMARGIN", new_y="NEXT")
+        
+        pdf.set_font('Helvetica', '', 9)
+        for c in cancellations:
+             # c is expected to be dict {date, reason}
+             d_str = c.get('date', '-')
+             try:
+                 d_obj = datetime.strptime(d_str, '%Y-%m-%d')
+                 d_fmt = d_obj.strftime('%d/%m/%Y')
+             except:
+                 d_fmt = d_str
+                 
+             reason = c.get('reason', '-')
+             
+             pdf.cell(30, 7, d_fmt, border=1, align='C')
+             pdf.cell(0, 7, reason, border=1, align='L', new_x="LMARGIN", new_y="NEXT")
     
     return io.BytesIO(pdf.output(dest='S'))

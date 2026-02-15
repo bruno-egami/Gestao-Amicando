@@ -117,6 +117,10 @@ def run_migrations(conn):
         cursor.execute("ALTER TABLE student_consumptions ADD COLUMN amount_paid REAL DEFAULT 0")
     except sqlite3.OperationalError: pass
 
+    try:
+        cursor.execute("ALTER TABLE tuitions ADD COLUMN class_dates TEXT")
+    except sqlite3.OperationalError: pass
+
     conn.commit()
 
 def init_db():
@@ -434,6 +438,26 @@ def init_db():
         cursor.execute("ALTER TABLE product_variants ADD COLUMN material_quantity REAL DEFAULT 0.0")
     except sqlite3.OperationalError: pass
 
+    # 14. Refactor Student Fees (Migration)
+    # Classes: Add 'weekday' (0=Monday, 6=Sunday)
+    try:
+        cursor.execute("ALTER TABLE classes ADD COLUMN weekday INTEGER")
+    except sqlite3.OperationalError: pass
+
+    # Students: Add 'price_per_class'
+    try:
+        cursor.execute("ALTER TABLE students ADD COLUMN price_per_class REAL")
+    except sqlite3.OperationalError: pass
+
+    # Tuitions: Add 'class_count', 'unit_price'
+    try:
+        cursor.execute("ALTER TABLE tuitions ADD COLUMN class_count INTEGER")
+    except sqlite3.OperationalError: pass
+
+    try:
+        cursor.execute("ALTER TABLE tuitions ADD COLUMN unit_price REAL")
+    except sqlite3.OperationalError: pass
+
 
 
 
@@ -666,6 +690,9 @@ def init_db():
             amount REAL,
             status TEXT DEFAULT 'Pendente', -- Pendente, Pago
             payment_date TEXT,
+            class_count INTEGER,
+            unit_price REAL,
+            class_dates TEXT,
             FOREIGN KEY (student_id) REFERENCES students(id)
         )
     ''')

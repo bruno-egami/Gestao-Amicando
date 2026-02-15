@@ -48,7 +48,7 @@ def start_production(cursor, product_id, quantity, start_date, notes=None, varia
     """, (int(product_id), int(variant_id) if variant_id else None, int(quantity), start_date, history_json, notes))
     return cursor.lastrowid
 
-def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total_qty, selected_variant_id=None, deduct_glaze=False):
+def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total_qty, selected_variant_id=None, deduct_glaze=False, user_id=None, username='WIP'):
     """
     Advances items through stages with phased material deduction.
     Handles splitting cards if moving partial quantity.
@@ -72,7 +72,7 @@ def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total
     # 1. Automatic Material Deduction
     m_deducted = curr['materials_deducted']
     if next_stage == 'Modelagem' and m_deducted == 0:
-        product_service.deduct_production_materials_central(cursor, int(curr['product_id']), qty_move, filter_type='clay')
+        product_service.deduct_production_materials_central(cursor, int(curr['product_id']), qty_move, filter_type='clay', user_id=user_id)
         m_deducted = 1
         
     # Glaze (if moving to Esmaltação)
@@ -112,7 +112,7 @@ def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total
               next_stage, qty_move, curr['start_date'], int(m_deducted), history_json, curr['notes']))
     return True
 
-def finalize_production(cursor, item, qty, inc_stock):
+def finalize_production(cursor, item, qty, inc_stock, user_id=None, username='WIP'):
     """
     Completes production, updates final stock, handles material deduction for 'others',
     updates orders, and logs history.
@@ -136,7 +136,8 @@ def finalize_production(cursor, item, qty, inc_stock):
     product_service.deduct_production_materials_central(
         cursor, product_id, qty, 
         filter_type='others', 
-        exclude_ids=[glaze_mat_id] if glaze_mat_id else None
+        exclude_ids=[glaze_mat_id] if glaze_mat_id else None,
+        user_id=user_id
     )
 
     # 1. Update Order Item (if exists)
@@ -154,7 +155,7 @@ def finalize_production(cursor, item, qty, inc_stock):
     cursor.execute("""
         INSERT INTO production_history (timestamp, product_id, product_name, quantity, order_id, user_id, username)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (datetime.now().isoformat(), product_id, item['product_name'], qty, order_id, None, 'WIP'))
+    """, (datetime.now().isoformat(), product_id, item['product_name'], qty, order_id, user_id, username))
     
     # 4. Check Order Completion
     if order_id:
@@ -177,6 +178,8 @@ def finalize_production(cursor, item, qty, inc_stock):
     # Clear cache
     get_production_history_stats.clear()
     get_production_log_report.clear()
+    product_service.get_all_products.clear()
+    product_service.get_all_materials.clear()
     
     return True
 
@@ -202,8 +205,10 @@ def register_loss(cursor, item, stage, qty_loss, reason_loss):
     except Exception:
         history = {}
     
-    break_key = f"Quebra ({stage})"
-    history[break_key] = f"-{qty_loss} pcs | {datetime.now().isoformat(timespec='minutes')}"
+    # Use unique key to prevent overwriting previous breaks in same stage
+    timestamp_str = datetime.now().isoformat(timespec='seconds')
+    break_key = f"Quebra ({stage}) [{timestamp_str}]"
+    history[break_key] = f"-{qty_loss} pcs"
     history_json = json.dumps(history)
     
     # 3. Update WIP
@@ -212,20 +217,20 @@ def register_loss(cursor, item, stage, qty_loss, reason_loss):
     else:
         cursor.execute("UPDATE production_wip SET quantity = quantity - ?, stage_history=? WHERE id=?", (qty_loss, history_json, item_id))
     
-    # 4. Automated Replenishment (for Orders)
-    replenished = False
-    if order_id:
-        rep_history = {
-            "Iniciado": datetime.now().isoformat(timespec='minutes'), 
-            "Fila de Espera (Reposição)": datetime.now().isoformat(timespec='minutes')
-        }
-        rep_history_json = json.dumps(rep_history)
-        
-        cursor.execute("""
-            INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
-            VALUES (?, ?, ?, ?, 'Fila de Espera', ?, ?, 0, ?, ?)
-        """, (product_id, variant_id, order_id, order_item_id, qty_loss, date.today().isoformat(), rep_history_json, f"Reposição após quebra em {stage}"))
-        replenished = True
+    # 4. Automated Replenishment (Always replenish for now, as per user expectation)
+    # Previously restricted to: if order_id:
+    
+    rep_history = {
+        "Iniciado": datetime.now().isoformat(timespec='minutes'), 
+        "Fila de Espera (Reposição)": datetime.now().isoformat(timespec='minutes')
+    }
+    rep_history_json = json.dumps(rep_history)
+    
+    cursor.execute("""
+        INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
+        VALUES (?, ?, ?, ?, 'Fila de Espera', ?, ?, 0, ?, ?)
+    """, (product_id, variant_id, order_id, order_item_id, qty_loss, date.today().isoformat(), rep_history_json, f"Reposição após quebra em {stage}"))
+    replenished = True
         
     # Clear cache
     get_loss_statistics.clear()

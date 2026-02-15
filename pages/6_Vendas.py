@@ -307,7 +307,12 @@ with tab_pos:
                 # --- Qty & Disc ---
                 c_qty, c_disc = st.columns(2)
                 item_qty = c_qty.number_input("Qtd", min_value=1, step=1, value=1, key="item_qty")
-                item_disc = c_disc.number_input("Desconto (Item)", min_value=0.0, step=0.1, value=0.0, key="item_disc")
+                
+                # Checkbox for Discount (Discreet)
+                item_disc = 0.0
+                with c_disc:
+                    if st.checkbox("Desconto", key=f"chk_disc_{sel_row['id']}"):
+                        item_disc = st.number_input("Valor (R$)", min_value=0.0, step=0.1, value=0.0, key="item_disc")
                 
                 # Calc Preview
                 base_price_effective = sel_row['base_price'] + price_adder
@@ -343,18 +348,39 @@ with tab_pos:
                     if selected_variant:
                         product_display_name += f" ({selected_variant['name']})"
 
-                    cart_item = {
-                        "product_id": sel_row['id'],
-                        "product_name": product_display_name,
-                        "thumb": sel_row['thumb_path'],
-                        "qty": item_qty,
-                        "base_price": base_price_effective, 
-                        "discount": item_disc,
-                        "total": item_final,
-                        "variant_id": selected_variant['id'] if selected_variant else None,
-                        "variant_name": selected_variant['name'] if selected_variant else None
-                    }
-                    st.session_state['cart'].append(cart_item)
+                    # Check if item already exists in cart to merge
+                    existing_item = None
+                    for item in st.session_state['cart']:
+                        p_match = (item['product_id'] == sel_row['id'])
+                        v_match = (item.get('variant_id') == (selected_variant['id'] if selected_variant else None))
+                        if p_match and v_match:
+                            existing_item = item
+                            break
+                    
+                    if existing_item:
+                        # Merge
+                        existing_item['qty'] += item_qty
+                        existing_item['discount'] += item_disc
+                        # Recalculate total
+                        base_val = existing_item['qty'] * existing_item['base_price']
+                        existing_item['total'] = max(0.0, base_val - existing_item['discount'])
+                        st.toast(f"Item atualizado no carrinho! Qtd: {existing_item['qty']}", icon="🔄")
+                    else:
+                        # Add New
+                        cart_item = {
+                            "product_id": sel_row['id'],
+                            "product_name": product_display_name,
+                            "thumb": sel_row['thumb_path'],
+                            "qty": item_qty,
+                            "base_price": base_price_effective, 
+                            "discount": item_disc,
+                            "total": item_final,
+                            "variant_id": selected_variant['id'] if selected_variant else None,
+                            "variant_name": selected_variant['name'] if selected_variant else None
+                        }
+                        st.session_state['cart'].append(cart_item)
+                        st.toast("Item adicionado ao carrinho!", icon="🛒")
+
                     st.session_state['selected_product_id'] = None # Deselect
                     st.rerun()
 
@@ -367,16 +393,26 @@ with tab_pos:
             cart_df = pd.DataFrame(st.session_state['cart'])
             if 'exclude' not in cart_df.columns:
                 cart_df['exclude'] = False
+            
+            # Reorder columns for better UX (Delete First)
+            # Ensure these cols exist
+            cols_order = ['exclude', 'product_name', 'qty', 'base_price', 'discount', 'total']
+            # Add others that might be present but hidden
+            existing_cols = cart_df.columns.tolist()
+            final_order = [c for c in cols_order if c in existing_cols] + [c for c in existing_cols if c not in cols_order]
+            cart_df = cart_df[final_order]
 
             with st.container(height=400):
                 edited_cart = st.data_editor(
                     cart_df,
                     column_config={
+                        "exclude": st.column_config.CheckboxColumn("🗑️", width="small", help="Marque para excluir"),
                         "product_name": st.column_config.TextColumn("Produto", width="medium", disabled=True),
-                        "qty": st.column_config.NumberColumn("Qtd", width="small"),
-                        "total": st.column_config.NumberColumn("Total", format="R$ %.2f", width="small", disabled=True),
-                        "exclude": st.column_config.CheckboxColumn("🗑️", help="Marque para excluir do carrinho"),
-                        "product_id": None, "thumb": None, "base_price": None, "discount": None
+                        "qty": st.column_config.NumberColumn("Qtd", width="small", min_value=1),
+                        "base_price": st.column_config.NumberColumn("Preço Unit.", format="R$ %.2f", disabled=True),
+                        "discount": st.column_config.NumberColumn("Desc.", format="R$ %.2f", min_value=0.0, step=0.1),
+                        "total": st.column_config.NumberColumn("Total", format="R$ %.2f", disabled=True),
+                        "product_id": None, "thumb": None, "variant_id": None, "variant_name": None
                     },
                     num_rows="fixed", hide_index=True, use_container_width=True, key="cart_editor"
                 )
@@ -392,8 +428,15 @@ with tab_pos:
                 final_cart.append(clean_item)
                 
             if final_cart != st.session_state['cart']:
+                # Recalculate totals if Qty or Discount changed
                 for item in final_cart:
-                    item['total'] = item['qty'] * item['base_price']
+                    # Protect against NaN
+                    qty = float(item.get('qty', 1))
+                    price = float(item.get('base_price', 0))
+                    disc = float(item.get('discount', 0))
+                    item['total'] = max(0.0, (qty * price) - disc)
+                    item['qty'] = int(qty)
+                    
                 st.session_state['cart'] = final_cart
                 st.rerun()
             

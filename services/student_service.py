@@ -34,11 +34,11 @@ def get_all_classes(conn):
     """
     return pd.read_sql(query, conn)
 
-def create_class(conn, name, schedule, notes):
+def create_class(conn, name, schedule, notes, weekday=None):
     """Creates a new class."""
     try:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO classes (name, schedule, notes) VALUES (?, ?, ?)", (name, schedule, notes))
+        cursor.execute("INSERT INTO classes (name, schedule, notes, weekday) VALUES (?, ?, ?, ?)", (name, schedule, notes, weekday))
         rid = cursor.lastrowid
         audit.log_action(conn, 'CREATE', 'classes', rid, None, {'name': name}, commit=False)
         conn.commit()
@@ -48,12 +48,12 @@ def create_class(conn, name, schedule, notes):
         logger.error(f"Erro ao criar turma '{name}': {e}")
         raise
 
-def update_class(conn, class_id, name, schedule, notes):
+def update_class(conn, class_id, name, schedule, notes, weekday=None):
     """Updates a class."""
     old = pd.read_sql("SELECT * FROM classes WHERE id=?", conn, params=(class_id,)).iloc[0].to_dict()
     try:
         cursor = conn.cursor()
-        cursor.execute("UPDATE classes SET name=?, schedule=?, notes=? WHERE id=?", (name, schedule, notes, class_id))
+        cursor.execute("UPDATE classes SET name=?, schedule=?, notes=?, weekday=? WHERE id=?", (name, schedule, notes, weekday, class_id))
         audit.log_action(conn, 'UPDATE', 'classes', class_id, old, {'name': name}, commit=False)
         conn.commit()
     except Exception as e:
@@ -100,8 +100,153 @@ def update_student(conn, student_id, name, phone, active):
     except Exception as e:
         logger.warning(f"WAL Checkpoint (PASSIVE) failed: {e}")
 
+# ... (update_student_class remains same) ...
+
+# --- Settings Helpers ---
+def get_global_price_per_class(conn):
+    """Fetches global price per class from settings."""
+    try:
+        res = conn.execute("SELECT value FROM settings WHERE key='global_price_per_class'").fetchone()
+        return float(res[0]) if res else 87.50 # Default if not set
+    except:
+        return 87.50
+
+def set_global_price_per_class(conn, price):
+    """Updates global price per class."""
+    try:
+        price = float(price)
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('global_price_per_class', ?)", (str(price),))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error setting global price: {e}")
+        return False
+
+# --- Class Cancellation Helpers ---
+def add_class_cancellation(conn, class_id, date_str, reason=""):
+    """Adds a cancellation record."""
+    try:
+        # Enforce native int
+        class_id = int(class_id)
+        conn.execute("INSERT INTO class_cancellations (class_id, date, reason, created_at) VALUES (?, ?, ?, ?)", 
+                     (class_id, date_str, reason, datetime.now().isoformat()))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error adding cancellation: {e}")
+        return False
+
+def delete_class_cancellation(conn, cancellation_id):
+    """Removes a cancellation record."""
+    try:
+        conn.execute("DELETE FROM class_cancellations WHERE id=?", (cancellation_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting cancellation: {e}")
+        return False
+
+def get_class_cancellations(conn, class_id):
+    """Returns DataFrame of cancellations for a class."""
+    class_id = int(class_id)
+    return pd.read_sql("SELECT * FROM class_cancellations WHERE class_id=? ORDER BY date DESC", conn, params=(class_id,))
+
+def calculate_tuition(conn, student_id, month_year):
+    """
+    Calculates tuition based on student's class weekday and month days.
+    Subtracts any class cancellations in that month.
+    Returns: (count_of_days, price_per_class, total_amount)
+    """
+    # 1. Get Student Class Weekday
+    student_id = int(student_id)
+    row = pd.read_sql("SELECT s.class_id, c.weekday FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.id=?", conn, params=(student_id,)).iloc[0]
+    
+    if pd.isna(row['class_id']) or pd.isna(row['weekday']):
+        return 0, 0.0, 0.0
+        
+    class_id = int(row['class_id'])
+    weekday = int(row['weekday']) # 0=Mon, 6=Sun
+    price = get_global_price_per_class(conn)
+    
+    # 2. Count occurrences of weekday in month_year (MM/YYYY)
+    try:
+        m, y = map(int, month_year.split('/'))
+        import calendar
+        # calendar.monthcalendar returns list of weeks (lists of days). 
+        # Days outside month are 0.
+        cal = calendar.monthcalendar(y, m)
+        
+        # Get all valid dates for this weekday in the month
+        valid_dates = []
+        for week in cal:
+            d = week[weekday]
+            if d != 0:
+                valid_dates.append(f"{y:04d}-{m:02d}-{d:02d}")
+                
+        total_days = len(valid_dates)
+        
+        # 3. Check for Cancellations
+        # We need to query cancellations for this class_id and filter by the valid_dates we found.
+        # SQLite 'IN' clause with many dates is okay, or just fetch all for month.
+        # Let's fetch all cancellations for this class and filter in python for simplicity with dates.
+        cancellations = pd.read_sql("SELECT date FROM class_cancellations WHERE class_id=?", conn, params=(class_id,))
+        
+        cancelled_count = 0
+        if not cancellations.empty:
+            # Filter cancellations that match our valid meeting dates
+            # Ensure format matches YYYY-MM-DD
+            cancelled_dates = cancellations['date'].tolist()
+            for d in valid_dates:
+                if d in cancelled_dates:
+                    cancelled_count += 1
+        
+        final_count = max(0, total_days - cancelled_count)
+        
+        # Get purely final dates (removing cancelled ones)
+        if cancelled_count > 0:
+            final_dates = [d for d in valid_dates if d not in cancelled_dates]
+        else:
+            final_dates = valid_dates
+            
+    except Exception as e:
+        logger.error(f"Error calculating tuition: {e}")
+        final_count = 0
+        final_dates = []
+        
+    total = final_count * price
+    return final_count, price, total, final_dates
+
+def generate_tuition_record(conn, student_id, month_year, amount, class_count=None, unit_price=None, class_dates=None):
+    """Generates a monthly tuition record if not exists."""
+    student_id = int(student_id)
+    cursor = conn.cursor()
+    # Check dup
+    exist = cursor.execute("SELECT id FROM tuitions WHERE student_id=? AND month_year=?", (student_id, month_year)).fetchone()
+    if exist:
+        return False, "Mensalidade já gerada."
+        
+    import json
+    dates_str = json.dumps(class_dates) if class_dates else None
+
+    try:
+        cursor.execute("""
+            INSERT INTO tuitions (student_id, month_year, amount, status, created_at, class_count, unit_price, class_dates) 
+            VALUES (?, ?, ?, 'Pendente', ?, ?, ?, ?)
+        """, (student_id, month_year, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), class_count, unit_price, dates_str))
+        conn.commit()
+        return True, "Gerada com sucesso."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error generating tuition: {e}")
+        return False, f"Erro: {e}"
+        conn.rollback()
+        logger.error(f"Erro ao gerar mensalidade para aluno {student_id}: {e}")
+        raise
+
 def update_student_class(conn, student_id, class_id):
     """Updates only the student's class."""
+    student_id = int(student_id)
+    class_id = int(class_id)
     # Get old data for audit
     try:
         old = pd.read_sql("SELECT class_id FROM students WHERE id=?", conn, params=(student_id,)).iloc[0].to_dict()
@@ -139,6 +284,7 @@ def add_consumption(conn, student_id, description, quantity, unit_price, total_v
     IF they come from the UI, but let's ensure we store the markup % for audit.
     """
     try:
+        student_id = int(student_id)
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -164,6 +310,8 @@ def process_material_consumption(conn, student_id, material_id, quantity, date, 
     3. Log consumption record with markup applied.
     4. Log inventory transaction.
     """
+    student_id = int(student_id)
+    material_id = int(material_id)
     cursor = conn.cursor()
     
     # 1. Fetch Material
@@ -214,11 +362,18 @@ def get_student_financial_summary(conn, student_id, month_year_filter=None):
     """
     Returns tuple: (tuitions_df, consumptions_df, total_due)
     """
+    student_id = int(student_id)
     # Tuitions
-    t_query = "SELECT * FROM tuitions WHERE student_id=? AND status='Pendente'"
+    t_query = """
+        SELECT t.*, c.name as class_name 
+        FROM tuitions t 
+        JOIN students s ON t.student_id = s.id 
+        LEFT JOIN classes c ON s.class_id = c.id 
+        WHERE t.student_id=? AND t.status='Pendente'
+    """
     t_params = [student_id]
     if month_year_filter:
-        t_query += " AND month_year=?"
+        t_query += " AND t.month_year=?"
         t_params.append(month_year_filter)
     tuitions = pd.read_sql(t_query, conn, params=t_params)
     
@@ -237,6 +392,7 @@ def get_student_payment_history(conn, student_id):
     """
     Returns tuple: (tuitions_df, consumptions_df) of paid items.
     """
+    student_id = int(student_id)
     tuitions = pd.read_sql("SELECT * FROM tuitions WHERE student_id=? AND status='Pago' ORDER BY payment_date DESC", conn, params=(student_id,))
     consumptions = pd.read_sql("SELECT * FROM student_consumptions WHERE student_id=? AND status='Pago' ORDER BY payment_date DESC", conn, params=(student_id,))
     return tuitions, consumptions
@@ -282,10 +438,10 @@ def get_payment_history(conn, start_date=None, end_date=None, student_id=None, p
     w, p = get_common_filters(t_date_sql, student_id, class_id); t_where_pend += w; params_t_pend = p
     w, p = get_common_filters("sc.date", student_id, class_id); c_where_pend += w; params_c_pend = p
     
-    t_query_pago = f"SELECT t.payment_date as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Recebimento' as movement_type, 'Pago' as status FROM tuitions t JOIN students s ON t.student_id = s.id WHERE {' AND '.join(t_where_pago)}"
-    c_query_pago = f"SELECT sc.payment_date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Recebimento' as movement_type, 'Pago' as status FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pago)}"
-    t_query_pend = f"SELECT {t_date_sql} as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status FROM tuitions t JOIN students s ON t.student_id = s.id WHERE {' AND '.join(t_where_pend)}"
-    c_query_pend = f"SELECT sc.date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pend)}"
+    t_query_pago = f"SELECT t.payment_date as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Recebimento' as movement_type, 'Pago' as status, t.class_count, t.class_dates, c.name as class_name FROM tuitions t JOIN students s ON t.student_id = s.id LEFT JOIN classes c ON s.class_id = c.id WHERE {' AND '.join(t_where_pago)}"
+    c_query_pago = f"SELECT sc.payment_date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Recebimento' as movement_type, 'Pago' as status, NULL as class_count, NULL as class_dates, NULL as class_name FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pago)}"
+    t_query_pend = f"SELECT {t_date_sql} as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status, t.class_count, t.class_dates, c.name as class_name FROM tuitions t JOIN students s ON t.student_id = s.id LEFT JOIN classes c ON s.class_id = c.id WHERE {' AND '.join(t_where_pend)}"
+    c_query_pend = f"SELECT sc.date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status, NULL as class_dates, NULL as class_name FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pend)}"
     
     dfs = []
     if status_filter in ['Todos', 'Pago']:
@@ -311,27 +467,12 @@ def get_payment_history(conn, start_date=None, end_date=None, student_id=None, p
     
     return combined
 
-def generate_tuition_record(conn, student_id, month_year, amount):
-    """Generates a monthly tuition record if not exists."""
-    cursor = conn.cursor()
-    # Check dup
-    exist = cursor.execute("SELECT id FROM tuitions WHERE student_id=? AND month_year=?", (student_id, month_year)).fetchone()
-    if exist:
-        return False, "Mensalidade já gerada."
-        
-    try:
-        cursor.execute("INSERT INTO tuitions (student_id, month_year, amount, status, created_at) VALUES (?, ?, ?, 'Pendente', ?)", 
-                       (student_id, month_year, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
-        return True, "Gerada com sucesso."
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Erro ao gerar mensalidade para aluno {student_id}: {e}")
-        raise
+
 
 def confirm_payment_all_pending(conn, student_id):
     """Marks all pending items as Paid for a student."""
     try:
+        student_id = int(student_id)
         cursor = conn.cursor()
         now_str = datetime.now().strftime('%Y-%m-%d')
         
@@ -353,6 +494,7 @@ def process_partial_payment(conn, student_id, payment_amount):
     Allocates a payment amount to the oldest pending debts first.
     """
     try:
+        student_id = int(student_id)
         cursor = conn.cursor()
         for item in pending_items:
             if remaining_payment <= 0.009: # Float epsilon safety
@@ -385,6 +527,7 @@ def process_partial_payment(conn, student_id, payment_amount):
 
 def cancel_consumption(conn, consumption_id):
     """Cancels a consumption and restores stock if it was a material."""
+    consumption_id = int(consumption_id)
     cursor = conn.cursor()
     # Get record
     res = cursor.execute("SELECT material_id, quantity, student_id, total_value, status FROM student_consumptions WHERE id=?", (consumption_id,)).fetchone()
@@ -416,6 +559,7 @@ def cancel_consumption(conn, consumption_id):
 
 def cancel_tuition(conn, tuition_id):
     """Cancels a tuition record."""
+    tuition_id = int(tuition_id)
     cursor = conn.cursor()
     res = cursor.execute("SELECT status FROM tuitions WHERE id=?", (tuition_id,)).fetchone()
     if not res: return False, "Registro não encontrado."
@@ -435,6 +579,7 @@ def cancel_tuition(conn, tuition_id):
 
 def update_tuition(conn, tuition_id, amount):
     """Updates tuition amount."""
+    tuition_id = int(tuition_id)
     cursor = conn.cursor()
     old = pd.read_sql("SELECT amount FROM tuitions WHERE id=?", conn, params=(tuition_id,)).iloc[0].to_dict()
     try:
@@ -451,6 +596,7 @@ def update_consumption(conn, consumption_id, description, total_value):
     """Updates consumption description or value."""
     # Note: Quantity/Unit Price changes are complex for materials due to stock. 
     # For now, we allow description and total value adjustments.
+    consumption_id = int(consumption_id)
     cursor = conn.cursor()
     old = pd.read_sql("SELECT description, total_value FROM student_consumptions WHERE id=?", conn, params=(consumption_id,)).iloc[0].to_dict()
     try:

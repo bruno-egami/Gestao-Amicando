@@ -7,6 +7,7 @@ import services.product_service as product_service
 import admin_utils
 from datetime import date, datetime
 import json
+import os
 from utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -203,7 +204,12 @@ with tab_kanban:
                                 cursor_write = conn_write.cursor()
                                 try:
                                     cursor_write.execute("BEGIN TRANSACTION")
-                                    production_service.move_stage(cursor_write, conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze)
+                                    # Get current user
+                                    user = auth.get_current_user()
+                                    u_id = user['id'] if user else None
+                                    u_name = user['username'] if user else 'Unknown'
+                                    
+                                    production_service.move_stage(cursor_write, conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze, user_id=u_id, username=u_name)
                                     conn_write.commit()
                                     st.toast(f"Movido para {next_s}!", icon="✅")
                                     st.rerun()
@@ -227,7 +233,12 @@ with tab_kanban:
                                 cursor_write = conn_write.cursor()
                                 try:
                                     cursor_write.execute("BEGIN TRANSACTION")
-                                    production_service.finalize_production(cursor_write, item, qty, inc_stock)
+                                    # Get current user
+                                    user = auth.get_current_user()
+                                    u_id = user['id'] if user else None
+                                    u_name = user['username'] if user else 'Unknown'
+
+                                    production_service.finalize_production(cursor_write, item, qty, inc_stock, user_id=u_id, username=u_name)
                                     conn_write.commit()
                                     admin_utils.show_feedback_dialog(f"Produção de {item['product_name']} finalizada!", level="success")
                                 except Exception as e:
@@ -252,7 +263,7 @@ with tab_kanban:
                                     replenished = production_service.register_loss(cursor_write, item, stage, qty_loss, reason_loss)
                                     conn_write.commit()
                                     if replenished:
-                                        st.info(f"🔄 Um novo card de {qty_loss} peças foi criado em **Fila de Espera** para repor a quebra da encomenda.")
+                                        st.info(f"🔄 Um novo card de {qty_loss} peças foi criado em **Fila de Espera** para repor a quebra.")
                                     admin_utils.show_feedback_dialog(f"Registrado: {qty_loss} peças perdidas em {stage}.", level="warning")
                                 except Exception as e:
                                     conn_write.rollback()
@@ -264,56 +275,114 @@ with tab_kanban:
 # --- TAB 2: NOVA PRODUÇÃO (ESTOQUE) ---
 with tab_new:
     st.header("Iniciar Produção para Estoque")
+
+    # --- DIALOG FOR PRODUCTION START ---
+    @st.dialog("🚀 Iniciar Produção")
+    def show_production_dialog(product_row):
+        # Use a fresh connection to avoid "closed database" issues in dialogs
+        ctx_conn = database.get_connection()
+        try:
+            st.markdown(f"### {product_row['name']}")
+            
+            # Image in dialog
+            if product_row['thumb_path'] and os.path.exists(product_row['thumb_path']):
+                st.image(product_row['thumb_path'], width=150)
+                
+            pid = product_row['id']
+            
+            # Variants Logic using clean connection
+            variants = product_service.get_product_variants(ctx_conn, pid)
+            vid = None
+            
+            # Form
+            with st.form("prod_start_form"):
+                c1, c2 = st.columns(2)
+                qty_new = c1.number_input("Quantidade", 1, 1000, 1)
+                start_dt = c2.date_input("Data Início", value=date.today())
+                
+                if not variants.empty:
+                    vname = st.selectbox("Variação (Opcional)", ["Padrão"] + variants['variant_name'].tolist())
+                    if vname != "Padrão":
+                        vid = variants[variants['variant_name'] == vname].iloc[0]['id']
+                
+                obs = st.text_area("Observações")
+                
+                if st.form_submit_button("Confirmar Produção", type="primary"):
+                    conn_write = database.get_connection()
+                    cursor_write = conn_write.cursor()
+                    try:
+                        cursor_write.execute("BEGIN TRANSACTION")
+                        production_service.start_production(cursor_write, pid, qty_new, start_dt.isoformat(), obs, vid)
+                        conn_write.commit()
+                        st.toast(f"Produção iniciada: {qty_new} un de {product_row['name']}", icon="✅")
+                        st.rerun()
+                    except Exception as e:
+                        conn_write.rollback()
+                        st.error(f"Erro: {e}")
+                    finally:
+                        cursor_write.close()
+                        conn_write.close()
+        finally:
+             ctx_conn.close()
+
+    # --- CATALOG FILTERING ---
+    # 1. Filters
+    filter_col1, filter_col2 = st.columns([1, 2])
     
-    # 1. Category Filter
+    # Categories
     cats_list = product_service.get_categories(conn)
-    sel_cat = st.selectbox("Filtrar por Categoria", ["Todas"] + sorted(cats_list))
+    sel_cat = filter_col1.selectbox("Filtrar por Categoria", ["Todas"] + sorted(cats_list), key="new_prod_cat")
     
-    # 2. Product Selection
-    # Get all products and filter in Python
+    # Search
+    search_prod = filter_col2.text_input("🔍 Buscar Produto", placeholder="Nome do produto...", key="new_prod_search")
+    
+    # 2. Get Data
     all_prods = product_service.get_all_products(conn)
-    if not all_prods.empty:
-        if sel_cat != "Todas":
-            products = all_prods[all_prods['category'] == sel_cat]
-        else:
-            products = all_prods
-        products = products.sort_values('name')
-    else:
-        products = pd.DataFrame()
-        
-    sel_prod_name = st.selectbox("Produto", products['name'] if not products.empty else [])
     
-    if sel_prod_name:
-        pid = products[products['name'] == sel_prod_name].iloc[0]['id']
+    # 3. Apply Filters
+    if not all_prods.empty:
+        filtered_prods = all_prods.copy()
         
-        # Variants
-        variants = product_service.get_product_variants(conn, pid)
-        vid = None
-        if not variants.empty:
-            vname = st.selectbox("Variação (Opcional)", ["Padrão"] + variants['variant_name'].tolist())
-            if vname != "Padrão":
-                vid = variants[variants['variant_name'] == vname].iloc[0]['id']
+        if sel_cat != "Todas":
+            filtered_prods = filtered_prods[filtered_prods['category'] == sel_cat]
+            
+        if search_prod:
+            filtered_prods = filtered_prods[filtered_prods['name'].str.contains(search_prod, case=False)]
+            
+        filtered_prods = filtered_prods.sort_values('name')
+    else:
+        filtered_prods = pd.DataFrame()
+
+    # --- GRID DISPLAY ---
+    if not filtered_prods.empty:
+        st.divider()
+        st.caption(f"{len(filtered_prods)} produtos encontrados.")
         
-        qty_new = st.number_input("Quantidade", 1, 1000, 1)
-        start_dt = st.date_input("Data Início", value=date.today())
-        obs = st.text_area("Observações")
+        # Determine Grid Columns (e.g. 4 columns)
+        cols_per_row = 4
         
-        # Phased deduction is now automatic, no checkbox needed
-        
-        if st.button("🚀 Iniciar Produção", type="primary"):
-            conn_write = database.get_connection()
-            cursor_write = conn_write.cursor()
-            try:
-                cursor_write.execute("BEGIN TRANSACTION")
-                production_service.start_production(cursor_write, pid, qty_new, start_dt.isoformat(), obs, vid)
-                conn_write.commit()
-                admin_utils.show_feedback_dialog(f"Produção iniciada: {qty_new} un de {sel_prod_name}", level="success")
-            except Exception as e:
-                conn_write.rollback()
-                admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
-            finally:
-                cursor_write.close()
-                conn_write.close()
+        # Iterate in chunks
+        for i in range(0, len(filtered_prods), cols_per_row):
+            cols = st.columns(cols_per_row)
+            batch = filtered_prods.iloc[i:i+cols_per_row]
+            
+            for idx, (_, row) in enumerate(batch.iterrows()):
+                with cols[idx]:
+                    with st.container(border=True):
+                        # Image
+                        if row['thumb_path'] and os.path.exists(row['thumb_path']):
+                            st.image(row['thumb_path'], use_container_width=True)
+                        else:
+                            # Placeholder or empty space
+                            st.markdown("📷 *Sem imagem*")
+                            
+                        st.markdown(f"**{row['name']}**")
+                        st.caption(f"{row['category']}")
+                        
+                        if st.button("Produzir 🏭", key=f"start_prod_{row['id']}", use_container_width=True):
+                            show_production_dialog(row)
+    else:
+        st.info("Nenhum produto encontrado com os filtros selecionados.")
 
 # --- TAB 3: HISTÓRICO ---
 with tab_hist:
