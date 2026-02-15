@@ -300,6 +300,21 @@ def init_db_from_conn(conn):
         )
     ''')
 
+    # Firings (Quemas)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS firings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            type TEXT, -- 'Biscoito', 'Esmaltação'
+            kiln_id INTEGER,
+            power_consumption_kwh REAL DEFAULT 0,
+            cost REAL DEFAULT 0,
+            observation TEXT,
+            image_path TEXT,
+            FOREIGN KEY (kiln_id) REFERENCES kilns(id)
+        )
+    ''')
+
     # ... (rest of tables)
 
     # ... (Seed and Migration blocks moved below)
