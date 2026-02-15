@@ -18,8 +18,24 @@ DB_PATH = config.DB_PATH
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
-    database_schema.run_migrations(conn) # Ensure DB is always up to date
     return conn
+
+def initialize():
+    """Initializes the database and runs migrations."""
+    logger.info("Initializing database...")
+    if not os.path.exists(DB_FOLDER):
+        os.makedirs(DB_FOLDER)
+    
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        database_schema.init_db_from_conn(conn)
+        # database_schema.run_migrations(conn) # init_db_from_conn already calls run_migrations
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        raise e
+    finally:
+        conn.close()
+
 
 @contextlib.contextmanager
 def db_session():

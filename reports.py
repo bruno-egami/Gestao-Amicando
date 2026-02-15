@@ -495,7 +495,7 @@ def generate_quote_pdf(quote_data):
     
     return io.BytesIO(pdf.output(dest='S'))
 
-def generate_receipt_pdf(order_data):
+def generate_commission_receipt_pdf(order_data):
     """Generates a PDF receipt for a commission order."""
     pdf = PDFReport(f"Recibo de Encomenda #{order_data['id']}", orientation='P')
     

@@ -7,6 +7,14 @@ import auth
 import utils.ui_components as ui_components
 import utils.backup_utils as backup_utils
 
+
+# Initialize Database (Runs once)
+@st.cache_resource
+def init_app():
+    database.initialize()
+
+init_app()
+
 # Page config
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
@@ -16,15 +24,9 @@ import utils.styles as styles
 # Apply Global Styles (Premium/Glassmorphism)
 styles.apply_custom_style()
 
-@st.cache_resource
-def startup_db():
-    database.init_db()
 
-startup_db()
 
-# Run automatic backup check (utility handles frequency logic)
-with database.db_session() as conn_bkp:
-    backup_utils.run_backup_if_needed(conn_bkp)
+
 
 def get_db_connection():
     return database.get_connection()

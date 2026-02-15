@@ -26,9 +26,7 @@ def apply_custom_style():
         
         h1, h2, h3 {
             font-weight: 800 !important;
-            background: -webkit-linear-gradient(45deg, var(--primary-color), var(--secondary-color));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: var(--primary-color) !important;
         }
 
         /* --- SIDEBAR --- */

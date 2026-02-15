@@ -363,7 +363,7 @@ else:
             # Direct Download Button
             c_act4.download_button(
                 label="📄 PDF",
-                data=reports.generate_receipt_pdf({
+                data=reports.generate_commission_receipt_pdf({
                         "id": formatted_id,
                         "type": "Encomenda",
                         "date": created_dt.strftime('%d/%m/%Y'),
@@ -588,7 +588,7 @@ else:
                         }
                         
                         # Generate PDF
-                        pdf_bytes = reports.generate_receipt_pdf(rec_data)
+                        pdf_bytes = reports.generate_commission_receipt_pdf(rec_data)
                         
                         # Set Session State to show Download Button after rerun
                         st.session_state['delivered_pdf'] = pdf_bytes

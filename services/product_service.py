@@ -23,7 +23,6 @@ def get_valid_path(paths_str):
         return None
 
 @st.cache_data(ttl=60, show_spinner=False)
-@st.cache_data(ttl=60, show_spinner=False)
 def get_all_products(_conn, search_term=None, category=None):
     """Fetches products for the catalog view with optional SQL filtering."""
     query = "SELECT id, name, base_price, stock_quantity, image_paths, category FROM products WHERE 1=1"
@@ -310,66 +309,6 @@ def check_recipe_availability(cursor, product_id, quantity, filter_type=None, ex
         return False, missing
     return True, []
 
-def deduct_production_materials_central(cursor, product_id, quantity, filter_type=None, exclude_ids=None, note_suffix="", user_id=None):
-    """
-    Deducts raw materials from stock based on product recipe (recursive for kits).
-    filter_type: 'clay' (only materials with Massa/Argila in name), 
-                 'others' (everything except clay and material_ids in exclude_ids)
-    """
-    from datetime import date
-    
-    # 1. Validation Logic
-    available, missing = check_recipe_availability(cursor, product_id, quantity, filter_type, exclude_ids)
-    if not available:
-        raise ValueError(f"Estoque insuficiente para os seguintes insumos: {', '.join(missing)}")
-
-    # 2. Collect all recipes (Recursive for Kits)
-    recipes_to_deduct = []
-    
-    def collect_recipes(pid, mul):
-        # Direct recipes for this product
-        # Added m.price_per_unit to query
-        query = "SELECT m.id, m.name, r.quantity as qty_per_unit, m.price_per_unit FROM product_recipes r JOIN materials m ON r.material_id = m.id WHERE r.product_id=?"
-        cursor.execute(query, (int(pid),))
-        for mid, mname, qty_unit, price in cursor.fetchall():
-            recipes_to_deduct.append({
-                'id': mid,
-                'name': mname,
-                'qty_total': qty_unit * mul * quantity,
-                'price': price
-            })
-            
-        # If it's a kit, collect children recipes
-        cursor.execute("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", (int(pid),))
-        for child_id, child_qty in cursor.fetchall():
-            collect_recipes(child_id, mul * child_qty)
-            
-    collect_recipes(product_id, 1.0)
-    
-    logs = []
-    for r in recipes_to_deduct:
-        # Exempt Services/Labor/Firing from stock deduction (logic should match availability check if possible, 
-        # but here we are DEDUCTING. If we skip deduction for them, we don't track cost? 
-        # Usually we WANT to track cost even if we don't track stock... 
-        # But 'stock_level' update doesn't make sense for infinite items.
-        # However, checking availability was skipped.
-        # Let's verify if we should skip DEDUCTION for services.
-        # If 'stock_level' is typically 0 or ignored, maybe we DO want to log the usage (transaction)?
-        # User complained about "Estoque insuficiente".
-        # If I skip availability check, I might still try to deduct.
-        # If I deduct from 0, it goes to negative.
-        # Ideally, services shouldn't have stock deducted, BUT we want the cost history.
-        # The schema uses 'inventory_transactions' which links to 'materials'.
-        # If I want cost history, I MUST insert into inventory_transactions.
-        # BUT I should probably NOT update 'materials.stock_level' for services.
-        
-        # Checking if it's a service (using same logic as availability check, though I didn't verify 'type' here yet.
-        # I need to fetch 'type' in collect_recipes too?
-        # Let's add 'type' to query.
-        pass
-
-    # Re-writing the function with 'type' fetching and logic.
-    pass
     
 def deduct_production_materials_central(cursor, product_id, quantity, filter_type=None, exclude_ids=None, note_suffix="", user_id=None):
     """
