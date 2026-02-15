@@ -23,6 +23,14 @@ def render_header_logo():
     except Exception:
         pass  # Logo missing or error
 
+def get_all_users(conn):
+    """Fetches all users for dropdown lists."""
+    import pandas as pd
+    try:
+        return pd.read_sql("SELECT id, username FROM users ORDER BY username", conn)
+    except Exception:
+        return pd.DataFrame(columns=['id', 'username'])
+
 def save_image(uploaded_file, folder):
     """Saves an uploaded file to the specified folder. Returns the file path."""
     import os

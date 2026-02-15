@@ -8,6 +8,8 @@ from datetime import datetime, date, timedelta
 import plotly.express as px
 import io
 import services.finance_service as finance_service
+import services.supplier_service as supplier_service
+import services.material_service as material_service
 
 st.set_page_config(page_title="Gestão Financeira", page_icon="💰", layout="wide")
 
@@ -47,7 +49,7 @@ with tab_gestao:
         st.session_state.fix_edit_id = None
 
     # Helper to fetch suppliers
-    suppliers = pd.read_sql("SELECT id, name FROM suppliers", conn)
+    suppliers = supplier_service.get_all_suppliers(conn)
     sup_map = {row['name']: row['id'] for _, row in suppliers.iterrows()}
     sup_options = [""] + list(sup_map.keys())
 
@@ -231,7 +233,13 @@ with tab_gestao:
                 qty_bought = 0.0
                 if not is_edit and e_cat == "Compra de Insumo":
                     st.info("Adicionar ao estoque?")
-                    materials = pd.read_sql("SELECT id, name, unit FROM materials WHERE type != 'Labor'", conn)
+                    # Use material service
+                    materials = material_service.get_all_materials(conn)
+                    # Helper currently fetches full df, we need to map name+unit to id
+                    # Filter out labor if needed or assume service returns all physical items?
+                    # The original query filtered 'Labor'. The service get_all_materials returns all.
+                    # We might need to filter in python or add filter to service.
+                    materials = materials[materials['type'] != 'Labor']
                     mat_dict = {f"{row['name']} ({row['unit']})": row['id'] for _, row in materials.iterrows()}
                     mat_choice = st.selectbox("Insumo", ["(Nenhum)"] + list(mat_dict.keys()))
                     if mat_choice != "(Nenhum)":

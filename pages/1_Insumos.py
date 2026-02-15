@@ -423,7 +423,8 @@ with tab_hist_global:
         # I'll use direct SQL for now to avoid creating User Service right now.
         # Wait, I removed sqlite3 import.
         # I can use pd.read_sql since pandas is imported.
-        u_names = pd.read_sql("SELECT username FROM users ORDER BY username", conn)
+        # Use admin_utils helper
+        u_names = admin_utils.get_all_users(conn)
         h_user_opts = ["Todos"] + u_names['username'].tolist()
         h_user = st.selectbox("Usuário", h_user_opts)
         
