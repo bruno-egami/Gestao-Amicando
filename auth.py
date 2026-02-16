@@ -332,17 +332,17 @@ def create_default_admin(conn):
     if count == 0:
         # Create default admin with forced password change
         try:
-            # Generate random password
-            random_password = secrets.token_urlsafe(8)
-            logger.warning(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{random_password}'. CHANGE IMMEDIATELLY!")
-            print(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{random_password}'") # Print to console as well for visibility
+            # Fixed password for development convenience as requested
+            default_password = 'admin'
+            logger.warning(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{default_password}'. CHANGE IMMEDIATELLY!")
+            print(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{default_password}'") # Print to console as well for visibility
 
             with safe_transaction(conn):
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO users (username, password_hash, role, name, active, created_at, force_password_change)
                     VALUES (?, ?, ?, ?, 1, ?, 1)
-                """, ('admin', hash_password(random_password), 'admin', 'Administrador', datetime.now().isoformat()))
+                """, ('admin', hash_password(default_password), 'admin', 'Administrador', datetime.now().isoformat()))
             return True
         except sqlite3.IntegrityError:
             # Race condition or user already exists despite count=0 check
