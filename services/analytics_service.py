@@ -111,21 +111,84 @@ def get_material_consumption(conn: sqlite3.Connection, start_date: date, end_dat
     return pd.read_sql(query, conn, params=params)
 
 def get_product_profitability(conn: sqlite3.Connection, cat_filter: str = "Todas") -> pd.DataFrame:
-    """Fetches product profitability data."""
-    query = (
-        "SELECT p.id, p.name as 'Produto', p.category as 'Categoria', p.base_price as 'Preço Venda', "
-        "COALESCE((SELECT SUM(pr.quantity * m.price_per_unit) FROM product_recipes pr JOIN materials m ON pr.material_id = m.id WHERE pr.product_id = p.id), 0) as 'Custo Produção', "
-        "p.stock_quantity as 'Estoque' FROM products p WHERE 1=1"
-    )
-    params = []
+    """Fetches product profitability data, calculating costs recursively for kits in memory."""
     
+    # 1. Fetch Products
+    query_prod = "SELECT id, name, category, base_price, stock_quantity FROM products"
+    params = []
     if cat_filter != "Todas":
-        query += " AND p.category = ?"
+        query_prod += " WHERE category = ?"
         params.append(cat_filter)
     
-    query += " ORDER BY p.name"
+    df_prods = pd.read_sql(query_prod, conn, params=params)
+    if df_prods.empty:
+        return pd.DataFrame(columns=['id', 'Produto', 'Categoria', 'Preço Venda', 'Custo Produção', 'Estoque', 'Margem', 'Margem %'])
+
+    # 2. Fetch auxiliary data (global or filtered if possible, but global is safer for dependencies)
+    # We need global recipes/kits because a filtered product might depend on an excluded product component.
+    df_mats = pd.read_sql("SELECT id, price_per_unit FROM materials", conn)
+    mat_cost_map = df_mats.set_index('id')['price_per_unit'].to_dict()
     
-    return pd.read_sql(query, conn, params=params)
+    df_recipes = pd.read_sql("SELECT product_id, material_id, quantity FROM product_recipes", conn)
+    df_kits = pd.read_sql("SELECT parent_product_id, child_product_id, quantity FROM product_kits", conn)
+    
+    # Build Lookups
+    # recipes_map: product_id -> list of (material_id, qty)
+    recipes_map = {}
+    for _, row in df_recipes.iterrows():
+        pid = row['product_id']
+        recipes_map.setdefault(pid, []).append((row['material_id'], row['quantity']))
+        
+    # kits_map: product_id -> list of (child_id, qty)
+    kits_map = {}
+    for _, row in df_kits.iterrows():
+        pid = row['parent_product_id']
+        kits_map.setdefault(pid, []).append((row['child_product_id'], row['quantity']))
+        
+    # 3. Calculate Cost (Memoized Recursion)
+    cost_cache = {}
+    
+    def get_cost(pid):
+        if pid in cost_cache:
+            return cost_cache[pid]
+        
+        total_cost = 0.0
+        
+        # Direct Materials
+        if pid in recipes_map:
+            for mid, qty in recipes_map[pid]:
+                total_cost += qty * mat_cost_map.get(mid, 0.0)
+                
+        # Kit Components
+        if pid in kits_map:
+            for child_id, qty in kits_map[pid]:
+                # Recursion for child cost
+                # Note: This assumes child cost is fully determined by its materials/sub-kits.
+                # If child has a base_price (manufacturing cost?), we might double count or miss "labor" tracked as price.
+                # But typically "Custo Produção" implies Material Cost.
+                total_cost += qty * get_cost(child_id)
+        
+        cost_cache[pid] = total_cost
+        return total_cost
+
+    # 4. Apply to DataFrame
+    df_prods['Custo Produção'] = df_prods['id'].apply(get_cost)
+    
+    # Rename for view compatibility
+    df_prods = df_prods.rename(columns={
+        'name': 'Produto', 
+        'category': 'Categoria', 
+        'base_price': 'Preço Venda',
+        'stock_quantity': 'Estoque'
+    })
+    
+    # Optional: Calculate Margin
+    df_prods['Margem'] = df_prods['Preço Venda'] - df_prods['Custo Produção']
+    df_prods['Margem %'] = df_prods.apply(
+        lambda x: (x['Margem'] / x['Preço Venda'] * 100) if x['Preço Venda'] > 0 else 0, axis=1
+    )
+    
+    return df_prods.sort_values('Produto')
 
 def get_sales_trend(conn: sqlite3.Connection, year: int) -> pd.DataFrame:
     """Fetches monthly sales data for a specific year."""

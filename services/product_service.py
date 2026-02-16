@@ -283,51 +283,77 @@ def deduct_stock(cursor, product_id, quantity, check_kits=True, variant_id=None)
             
     return logs
 
-def check_recipe_availability(cursor, product_id, quantity, filter_type=None, exclude_ids=None):
+def get_product_bom(cursor, product_id, quantity=1.0):
     """
-    Checks if all required materials for a product (and its kit components) are available in stock.
-    Returns (True, []) if all available, or (False, [missing_items_list]) if not.
+    Calculates the total Bill of Materials (BOM) for a product (recursive for kits).
+    Returns a dict: {material_id: {'name': str, 'needed': float, 'type': str, 'price': float}}
     """
-    recipes_needed = []
+    bom = {}
     
-    def collect_recipes(pid, mul):
-        # Added m.type to query
-        query = "SELECT m.id, m.name, r.quantity as qty_per_unit, m.stock_level, m.type FROM product_recipes r JOIN materials m ON r.material_id = m.id WHERE r.product_id=?"
-        cursor.execute(query, (int(pid),))
-        for mid, mname, qty_unit, s_level, mtype in cursor.fetchall():
-            recipes_needed.append({
-                'id': mid,
-                'name': mname,
-                'needed': qty_unit * mul * quantity,
-                'available': s_level,
-                'type': mtype
-            })
-            
+    def _recurse(pid, mul):
+        # 1. Fetch direct recipes
+        cursor.execute("SELECT m.id, m.name, r.quantity, m.price_per_unit, m.type FROM product_recipes r JOIN materials m ON r.material_id = m.id WHERE r.product_id=?", (int(pid),))
+        for mid, mname, qty_unit, price, mtype in cursor.fetchall():
+            total_qty = qty_unit * mul
+            if mid in bom:
+                bom[mid]['needed'] += total_qty
+            else:
+                bom[mid] = {
+                    'name': mname,
+                    'needed': total_qty,
+                    'type': mtype,
+                    'price': price
+                }
+        
+        # 2. Fetch kit children
         cursor.execute("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", (int(pid),))
         for child_id, child_qty in cursor.fetchall():
-            collect_recipes(child_id, mul * child_qty)
+            _recurse(child_id, mul * child_qty)
             
-    collect_recipes(product_id, 1.0)
+    _recurse(product_id, quantity)
+    return bom
+
+def check_recipe_availability(cursor, product_id, quantity, filter_type=None, exclude_ids=None):
+    """
+    Checks if all required materials for a product are available in stock.
+    Optimized to use Bulk Read for stock levels.
+    """
+    bom = get_product_bom(cursor, product_id, quantity)
+    
+    if not bom:
+        return True, []
+        
+    # Bulk fetch stock levels
+    material_ids = list(bom.keys())
+    if not material_ids:
+         return True, []
+         
+    placeholders = ",".join(["?"] * len(material_ids))
+    cursor.execute(f"SELECT id, stock_level FROM materials WHERE id IN ({placeholders})", material_ids)
+    stock_map = {row[0]: row[1] for row in cursor.fetchall()}
     
     missing = []
-    for r in recipes_needed:
-        # Exempt Services/Labor/Firing from stock check
-        if r['type'] in ['Mão de Obra', 'Serviço', 'Queima', 'Queimas']:
+    
+    for mid, item in bom.items():
+        # Exempt Services
+        if item['type'] in ['Mão de Obra', 'Serviço', 'Queima', 'Queimas']:
             continue
 
-        is_clay = any(keyword in r['name'].lower() for keyword in ['massa', 'argila'])
+        is_clay = any(keyword in item['name'].lower() for keyword in ['massa', 'argila'])
         
         apply_check = False
         if filter_type == 'clay' and is_clay:
             apply_check = True
         elif filter_type == 'others' and not is_clay:
-            if not exclude_ids or r['id'] not in exclude_ids:
+            if not exclude_ids or mid not in exclude_ids:
                 apply_check = True
         elif filter_type is None:
             apply_check = True
             
-        if apply_check and r['needed'] > r['available']:
-            missing.append(f"{r['name']} (Necessário: {r['needed']:.3f}, Disponível: {r['available']:.3f})")
+        if apply_check:
+            available = stock_map.get(mid, 0)
+            if item['needed'] > available:
+                missing.append(f"{item['name']} (Necessário: {item['needed']:.3f}, Disponível: {available:.3f})")
             
     if missing:
         return False, missing
@@ -337,80 +363,83 @@ def check_recipe_availability(cursor, product_id, quantity, filter_type=None, ex
 def deduct_production_materials_central(cursor, product_id, quantity, filter_type=None, exclude_ids=None, note_suffix="", user_id=None):
     """
     Deducts raw materials from stock based on product recipe (recursive for kits).
-    filter_type: 'clay' (only materials with Massa/Argila in name), 
-                 'others' (everything except clay and material_ids in exclude_ids)
+    Uses get_product_bom for efficiency and atomic updates.
     """
     from datetime import date
     
-    # 1. Validation Logic
-    available, missing = check_recipe_availability(cursor, product_id, quantity, filter_type, exclude_ids)
-    if not available:
-        raise ValueError(f"Estoque insuficiente para os seguintes insumos: {', '.join(missing)}")
+    # 1. Calculate BOM once
+    bom = get_product_bom(cursor, product_id, quantity)
+    
+    if not bom:
+        return []
 
-    # 2. Collect all recipes (Recursive for Kits)
-    recipes_to_deduct = []
+    # 2. Bulk fetch availability & Validate
+    material_ids = list(bom.keys())
+    placeholders = ",".join(["?"] * len(material_ids))
+    cursor.execute(f"SELECT id, stock_level FROM materials WHERE id IN ({placeholders})", material_ids)
+    stock_map = {row[0]: row[1] for row in cursor.fetchall()}
     
-    def collect_recipes(pid, mul):
-        # Direct recipes for this product
-        # Added m.price_per_unit, m.type to query
-        query = "SELECT m.id, m.name, r.quantity as qty_per_unit, m.price_per_unit, m.type FROM product_recipes r JOIN materials m ON r.material_id = m.id WHERE r.product_id=?"
-        cursor.execute(query, (int(pid),))
-        for mid, mname, qty_unit, price, mtype in cursor.fetchall():
-            recipes_to_deduct.append({
-                'id': mid,
-                'name': mname,
-                'qty_total': qty_unit * mul * quantity,
-                'price': price,
-                'type': mtype
-            })
-            
-        # If it's a kit, collect children recipes
-        cursor.execute("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", (int(pid),))
-        for child_id, child_qty in cursor.fetchall():
-            collect_recipes(child_id, mul * child_qty)
-            
-    collect_recipes(product_id, 1.0)
+    missing = []
+    to_deduct = []
     
-    logs = []
-    for r in recipes_to_deduct:
-        is_clay = any(keyword in r['name'].lower() for keyword in ['massa', 'argila'])
-        is_service = r['type'] in ['Mão de Obra', 'Serviço', 'Queima', 'Queimas']
+    for mid, item in bom.items():
+        # Logic for filtering
+        is_clay = any(keyword in item['name'].lower() for keyword in ['massa', 'argila'])
+        is_service = item['type'] in ['Mão de Obra', 'Serviço', 'Queima', 'Queimas']
         
         should_deduct = False
         if filter_type == 'clay' and is_clay:
             should_deduct = True
         elif filter_type == 'others' and not is_clay:
-            if not exclude_ids or r['id'] not in exclude_ids:
+            if not exclude_ids or mid not in exclude_ids:
                 should_deduct = True
         elif filter_type is None:
             should_deduct = True
             
         if should_deduct:
-            d_qty = r['qty_total']
-            cost = d_qty * r['price']
+            needed = item['needed']
             
-            # Update Stock (Skip for Services)
+            # Check availability (skip check for services, but usually we don't deduct services stock anyway)
             if not is_service:
-                cursor.execute("""
-                    UPDATE materials 
-                    SET stock_level = stock_level - ? 
-                    WHERE id = ? AND stock_level >= ?
-                """, (d_qty, r['id'], d_qty))
-                
-                if cursor.rowcount == 0:
-                     # Fetch current stock for error message
-                     cursor.execute("SELECT stock_level FROM materials WHERE id=?", (r['id'],))
-                     row = cursor.fetchone()
-                     curr_stock = row[0] if row else 0
-                     raise ValueError(f"Estoque insuficiente para material '{r['name']}' (ID {r['id']}). Disponível: {curr_stock:.3f}, Necessário: {d_qty:.3f}")
+                available = stock_map.get(mid, 0)
+                if needed > available:
+                    missing.append(f"{item['name']} (Necessário: {needed:.3f}, Disponível: {available:.3f})")
             
-            # Insert Transaction (Always record cost/usage)
+            to_deduct.append((mid, mapped_item := item)) # walrus to capture item
+    
+    if missing:
+         raise ValueError(f"Estoque insuficiente para os seguintes insumos: {', '.join(missing)}")
+         
+    logs = []
+    
+    # 3. Execute Deductions (Atomic Updates)
+    for mid, item in to_deduct:
+        d_qty = item['needed']
+        cost = d_qty * item['price']
+        is_service = item['type'] in ['Mão de Obra', 'Serviço', 'Queima', 'Queimas']
+        
+        if not is_service:
             cursor.execute("""
-                INSERT INTO inventory_transactions (date, material_id, quantity, type, cost, user_id, notes) 
-                VALUES (?, ?, ?, 'SAIDA', ?, ?, ?)
-            """, (date.today().isoformat(), r['id'], d_qty, cost, user_id, f"Produção ID {product_id} {note_suffix}"))
+                UPDATE materials 
+                SET stock_level = stock_level - ? 
+                WHERE id = ? AND stock_level >= ?
+            """, (d_qty, mid, d_qty))
             
-            logs.append(f"Deduzido {d_qty} de {r['name']}")
+            # Double check (paranoia check / race condition safety)
+            if cursor.rowcount == 0:
+                 # Re-fetch specific stock to give accurate error
+                 cursor.execute("SELECT stock_level FROM materials WHERE id=?", (mid,))
+                 row = cursor.fetchone()
+                 curr = row[0] if row else 0
+                 raise ValueError(f"Estoque insuficiente para material '{item['name']}' (ID {mid}) na hora da gravação. Disponível: {curr:.3f}")
+        
+        # Insert Transaction
+        cursor.execute("""
+            INSERT INTO inventory_transactions (date, material_id, quantity, type, cost, user_id, notes) 
+            VALUES (?, ?, ?, 'SAIDA', ?, ?, ?)
+        """, (date.today().isoformat(), mid, d_qty, cost, user_id, f"Produção ID {product_id} {note_suffix}"))
+        
+        logs.append(f"Deduzido {d_qty:.3f} de {item['name']}")
             
     return logs
 
