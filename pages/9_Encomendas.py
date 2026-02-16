@@ -6,7 +6,7 @@ import admin_utils
 import services.product_service as product_service
 import services.order_service as order_service
 import audit
-import reports
+import services.reporting as reports
 import time
 import auth
 import uuid

@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, date
 import admin_utils
 import auth
-import reports
+import services.reporting as reports
 from services import product_service, order_service, sales_service
 from utils.logging_config import get_logger
 

@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-import reports
+import services.reporting as reports
 import admin_utils
 from services import order_service
 

@@ -6,7 +6,7 @@ import io
 import zipfile
 import database
 import admin_utils
-import reports
+import services.reporting as reports
 from services import student_service
 
 # ==============================================================================

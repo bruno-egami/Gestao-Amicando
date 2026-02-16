@@ -8,6 +8,10 @@ import time
 import pandas as pd
 import sqlite3
 from datetime import datetime
+import secrets
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Role definitions
 ROLES = {
@@ -90,7 +94,7 @@ def login(conn, username: str, password: str) -> dict | None:
     """
     Attempt to login a user. Returns user dict if successful, None otherwise.
     """
-    import pandas as pd
+
     
     try:
         user_df = pd.read_sql(
@@ -317,7 +321,7 @@ def render_user_info():
 
 def create_default_admin(conn):
     """Create default admin user if no users exist."""
-    import pandas as pd
+
     
     cursor = conn.cursor()
     
@@ -327,10 +331,15 @@ def create_default_admin(conn):
     if count == 0:
         # Create default admin with forced password change
         try:
+            # Generate random password
+            random_password = secrets.token_urlsafe(8)
+            logger.warning(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{random_password}'. CHANGE IMMEDIATELLY!")
+            print(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{random_password}'") # Print to console as well for visibility
+
             cursor.execute("""
                 INSERT INTO users (username, password_hash, role, name, active, created_at, force_password_change)
                 VALUES (?, ?, ?, ?, 1, ?, 1)
-            """, ('admin', hash_password('admin'), 'admin', 'Administrador', datetime.now().isoformat()))
+            """, ('admin', hash_password(random_password), 'admin', 'Administrador', datetime.now().isoformat()))
             conn.commit()
             return True
         except sqlite3.IntegrityError:

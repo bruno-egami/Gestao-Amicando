@@ -1,4 +1,7 @@
 import streamlit as st
+import pandas as pd
+import os
+import uuid
 
 
 
@@ -20,7 +23,7 @@ def render_header_logo():
 
 def get_all_users(conn):
     """Fetches all users for dropdown lists."""
-    import pandas as pd
+
     try:
         return pd.read_sql("SELECT id, username FROM users ORDER BY username", conn)
     except Exception:
@@ -28,12 +31,12 @@ def get_all_users(conn):
 
 def save_image(uploaded_file, folder):
     """Saves an uploaded file to the specified folder. Returns the file path."""
-    import os
+
     if uploaded_file:
         if not os.path.exists(folder):
             os.makedirs(folder)
         # Security: Unique filename
-        import uuid
+
         ext = os.path.splitext(uploaded_file.name)[1]
         unique_name = f"{uuid.uuid4().hex}{ext}"
         file_path = os.path.join(folder, unique_name)
