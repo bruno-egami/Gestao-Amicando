@@ -55,21 +55,24 @@ def perform_backup(conn):
     """Execute the database backup."""
     if not os.path.exists(BACKUP_FOLDER):
         os.makedirs(BACKUP_FOLDER)
-        
-    # Standard SQLite backup requires closing or using a specialized method for WAL mode
-    # Since we use WAL, we should be careful. shutil.copy is usually fine if no writers.
-    # But better to use itercdump or vacuum into for total safety.
-    # For simplicity and given the usage, we will use 'VACUUM INTO' which is safe.
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     backup_filename = f"backup_{timestamp}.db"
     backup_path = os.path.join(BACKUP_FOLDER, backup_filename)
     
     try:
+        # Validate path is within the expected backup folder
+        safe_path = os.path.abspath(backup_path)
+        expected_folder = os.path.abspath(BACKUP_FOLDER)
+        if not safe_path.startswith(expected_folder + os.sep) and safe_path != expected_folder:
+            raise ValueError(f"Caminho de backup fora do diretório permitido: {safe_path}")
+        
         # VACUUM INTO is a safe way to create a backup of a live DB
+        # Note: SQLite does not support parameterized queries for VACUUM INTO,
+        # so we use f-string after validating the path above
         cursor = conn.cursor()
-        # Note: If file exists, it fails. We use a unique timestamp.
-        cursor.execute(f"VACUUM INTO '{backup_path}'")
+        escaped_path = safe_path.replace("'", "''")
+        cursor.execute(f"VACUUM INTO '{escaped_path}'")
         
         # Update last run
         cursor.execute("UPDATE settings SET value = ? WHERE key = 'last_backup_timestamp'", (datetime.now().isoformat(),))

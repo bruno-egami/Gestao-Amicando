@@ -46,13 +46,5 @@ def db_session():
     finally:
         conn.close()
 
-def init_db():
-    if not os.path.exists(DB_FOLDER):
-        os.makedirs(DB_FOLDER)
-
-    conn = sqlite3.connect(DB_PATH)
-    database_schema.init_db_from_conn(conn)
-    conn.close()
-
 if __name__ == "__main__":
-    init_db()
+    initialize()
