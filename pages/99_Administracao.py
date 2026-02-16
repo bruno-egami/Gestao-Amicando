@@ -19,8 +19,7 @@ styles.apply_custom_style()
 
 with database.db_session() as conn:
 
-    # Ensure default admin exists
-    auth.create_default_admin(conn)
+    # Ensure default admin exists - Handled in Dashboard.py
 
     # Authentication & Authorization
     if not auth.require_login(conn):

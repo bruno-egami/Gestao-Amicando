@@ -2,12 +2,12 @@ import streamlit as st
 import database
 import admin_utils
 import auth
-import views.reports.stock as stock_view
-import views.reports.financial as financial_view
-import views.reports.production as production_view
-import views.reports.stakeholders as stakeholders_view
-import views.reports.tools as tools_view
-import views.reports.common as common_view
+import views.report_pages.stock as stock_view
+import views.report_pages.financial as financial_view
+import views.report_pages.production as production_view
+import views.report_pages.stakeholders as stakeholders_view
+import views.report_pages.tools as tools_view
+import views.report_pages.common as common_view
 
 st.set_page_config(page_title="Relatórios", page_icon="📊", layout="wide")
 

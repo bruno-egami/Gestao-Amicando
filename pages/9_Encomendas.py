@@ -61,16 +61,13 @@ with database.db_session() as conn:
     
     # Logic to Delete Order (and restore stock)
     def delete_order(oid):
-        conn_del = database.get_connection()
         try:
-            order_service.delete_commission_order(conn_del, oid)
+            order_service.delete_commission_order(conn, oid)
             return True
         except Exception as e:
             log_exception(logger, f"Error deleting order {oid}", e)
             admin_utils.show_feedback_dialog(f"Erro ao excluir encomenda: {e}", level="error")
             return False
-        finally:
-            conn_del.close()
 
     # --- Filters ---
     kf1, kf2, kf3 = st.columns([1.5, 1.5, 2])
@@ -190,15 +187,12 @@ with database.db_session() as conn:
                                     st.image(img_path, width=150)
                                     if st.button("🗑️", key=f"del_img_{order['id']}_{idx}"):
                                         order_images.pop(idx)
-                                        conn_write = database.get_connection()
                                         try:
-                                            order_service.update_order_images(conn_write, order['id'], order_images)
+                                            order_service.update_order_images(conn, order['id'], order_images)
                                             st.rerun()
                                         except Exception as e:
                                             log_exception(logger, f"Error deleting image for order {order['id']}", e)
                                             st.error(f"Erro ao excluir imagem: {e}")
-                                        finally:
-                                            conn_write.close()
                     else:
                         st.caption("Nenhuma foto anexada")
                 
@@ -225,15 +219,12 @@ with database.db_session() as conn:
                                     order_images.append(file_path)
                             
                                 # Save to database
-                                conn_write = database.get_connection()
                                 try:
-                                    order_service.update_order_images(conn_write, order['id'], order_images)
+                                    order_service.update_order_images(conn, order['id'], order_images)
                                     admin_utils.show_feedback_dialog(f"{len(new_photos)} foto(s) salva(s)!", level="success")
                                 except Exception as e:
                                     log_exception(logger, f"Error uploading photos for order {order['id']}", e)
                                     admin_utils.show_feedback_dialog(f"Erro ao salvar fotos: {e}", level="error")
-                                finally:
-                                    conn_write.close()
                             else:
                                 admin_utils.show_feedback_dialog("Selecione pelo menos uma foto.", level="warning")
 
@@ -297,10 +288,11 @@ with database.db_session() as conn:
                                 else:
                                     price = p_row['base_price'] + price_mod
                                 
-                                    conn_write = database.get_connection()
+                                    price = p_row['base_price'] + price_mod
+                                
                                     try:
                                         order_service.add_commission_item_with_stock(
-                                            conn_write, order['id'], int(p_row['id']), new_qty, 
+                                            conn, order['id'], int(p_row['id']), new_qty, 
                                             int(qty_res_new), float(price), 
                                             int(sel_variant_id) if sel_variant_id else None
                                         )
@@ -309,8 +301,6 @@ with database.db_session() as conn:
                                     except Exception as e:
                                         log_exception(logger, f"Error adding item to order {order['id']}", e)
                                         admin_utils.show_feedback_dialog(f"Erro ao adicionar item: {e}", level="error")
-                                    finally:
-                                        conn_write.close()
                 # Edit Order Button
                 with c_act2:
                     with st.popover("✏️ Editar"):
@@ -426,18 +416,15 @@ with database.db_session() as conn:
                                     diff = qty_edit - old_qty
                                 
                                     if diff != 0:
-                                        conn_write = database.get_connection()
                                         try:
                                             order_service.update_item_quantity(
-                                                conn_write, order['id'], item['id'], qty_edit, old_qty,
+                                                conn, order['id'], item['id'], qty_edit, old_qty,
                                                 item['quantity_from_stock'], item['unit_price'], item['product_id']
                                             )
                                             st.rerun()
                                         except Exception as e:
                                             log_exception(logger, f"Error updating qty for item {item['id']}", e)
                                             admin_utils.show_feedback_dialog(f"Erro na operação: {e}", level="error")
-                                        finally:
-                                            conn_write.close()
 
                         st.caption(f"Reservado: {item['quantity_from_stock']} | A Produzir: {target_prod}")
                 
@@ -471,13 +458,13 @@ with database.db_session() as conn:
                                                 user_id = st.session_state.current_user.get('id')
                                                 username = st.session_state.current_user.get('username', 'unknown')
                                         
-                                            conn_write = database.get_connection()
+                                        
                                             try:
                                                 def _deduct_mats(cursor, pid, amt):
                                                     product_service.deduct_production_materials_central(cursor, pid, amt, note_suffix=f"Produção Rápida Encomenda #{fmt_id}")
                                             
                                                 order_service.quick_produce_item(
-                                                    conn_write, order['id'], item['id'], item['product_id'], amount,
+                                                    conn, order['id'], item['id'], item['product_id'], amount,
                                                     old_order_status, item['quantity_produced'],
                                                     deduct_materials_fn=_deduct_mats,
                                                     user_id=user_id, username=username
@@ -488,8 +475,6 @@ with database.db_session() as conn:
                                             except Exception as e:
                                                 log_exception(logger, f"Error quick producing item {item['id']}", e)
                                                 admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
-                                            finally:
-                                                conn_write.close()
 
                                 with b_wip:
                                     with st.popover("⏳ Iniciar Produção", use_container_width=True):
@@ -498,10 +483,9 @@ with database.db_session() as conn:
                                         wip_date = st.date_input("Data Início", value=date.today(), key=f"wip_date_{item['id']}")
                                     
                                         if st.button("Iniciar", key=f"wip_go_{item['id']}", type="primary"):
-                                            conn_write = database.get_connection()
                                             try:
                                                 order_service.start_wip_production(
-                                                    conn_write, order['id'], item['id'], item['product_id'], 
+                                                    conn, order['id'], item['id'], item['product_id'], 
                                                     item['variant_id'], wip_amount, wip_date.isoformat(),
                                                     notes=item.get('notes'), old_order_status=order['status']
                                                 )
@@ -511,18 +495,15 @@ with database.db_session() as conn:
                                             except Exception as e:
                                                 log_exception(logger, f"Error starting WIP for item {item['id']}", e)
                                                 admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
-                                            finally:
-                                                conn_write.close()
                         else:
                             st.info("✅ Produção Concluída (ou Totalmente Reservado)")
 
                     # Delete Item Button
                     with ci3:
                         if st.button("❌", key=f"del_item_{item['id']}", help="Remover item da encomenda"):
-                            conn_write = database.get_connection()
                             try:
                                 order_service.delete_commission_item(
-                                    conn_write, order['id'], item['id'], item['product_id'],
+                                    conn, order['id'], item['id'], item['product_id'],
                                     item['quantity'], item['quantity_from_stock'], item['unit_price']
                                 )
                                 st.session_state['expanded_order_id'] = order['id']
@@ -530,8 +511,6 @@ with database.db_session() as conn:
                             except Exception as e:
                                 log_exception(logger, f"Error deleting item {item['id']}", e)
                                 admin_utils.show_feedback_dialog(f"Erro ao excluir item: {e}", level="error")
-                            finally:
-                                conn_write.close()
 
                 st.divider()
             
@@ -540,20 +519,16 @@ with database.db_session() as conn:
                     # Option to mark as "Ready" (Concluído) without delivering yet
                     if order['status'] != 'Concluída':
                         if st.button("🏁 Marcar como Pronto", key=f"ready_{order['id']}", help="Marcar produção como finalizada e aguardando retirada"):
-                            conn_write = database.get_connection()
                             try:
-                                order_service.update_order_status(conn_write, order['id'], 'Concluída', old_status=order['status'])
+                                order_service.update_order_status(conn, order['id'], 'Concluída', old_status=order['status'])
                                 st.session_state['expanded_order_id'] = order['id']
                                 admin_utils.show_feedback_dialog("Status atualizado para Concluído!", level="success")
                                 st.rerun()
                             except Exception as e:
                                 log_exception(logger, f"Error marking ready order {order['id']}", e)
                                 admin_utils.show_feedback_dialog(f"Erro ao atualizar status: {e}", level="error")
-                            finally:
-                                conn_write.close()
 
                     if st.button("📦 Realizar Entrega", key=f"dlv_{order['id']}"):
-                        conn_write = database.get_connection()
                         try:
                             order_data_dict = {
                                 'client_id': order['client_id'],
@@ -561,7 +536,7 @@ with database.db_session() as conn:
                                 'deposit_amount': order['deposit_amount'],
                                 'status': order['status']
                             }
-                            order_service.deliver_order(conn_write, order['id'], order_data_dict, items)
+                            order_service.deliver_order(conn, order['id'], order_data_dict, items)
                     
                             # Prepare data for Receipt
                             rec_data = {
@@ -599,6 +574,4 @@ with database.db_session() as conn:
                         except Exception as e:
                             log_exception(logger, f"Error delivering order {order['id']}", e)
                             admin_utils.show_feedback_dialog(f"Erro na entrega: {e}", level="error")
-                        finally:
-                            conn_write.close()
 

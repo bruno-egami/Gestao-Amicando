@@ -26,7 +26,7 @@ def initialize():
     if not os.path.exists(DB_FOLDER):
         os.makedirs(DB_FOLDER)
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     try:
         database_schema.init_db_from_conn(conn)
         # database_schema.run_migrations(conn) # init_db_from_conn already calls run_migrations

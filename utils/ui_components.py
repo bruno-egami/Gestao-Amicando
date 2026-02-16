@@ -3,7 +3,7 @@ Reusable UI Components conforming to the new Design System.
 """
 import streamlit as st
 
-def card_metric(label, value, delta=None, icon=None, help_text=None, color=None):
+def card_metric(label, value, delta=None, help_text=None):
     """
     Renders a styled metric card.
     Note: Standard st.metric is already styled by styles.py, but this allows custom HTML if needed.

@@ -5,6 +5,7 @@ Handles logging of data changes and rollback capabilities.
 import json
 from datetime import datetime
 import streamlit as st
+import pandas as pd
 
 def get_current_user_info():
     """Get current user ID and username from session state."""
@@ -52,7 +53,6 @@ def get_record_history(conn, table_name: str, record_id: int):
     
     Returns a list of audit log entries for the record.
     """
-    import pandas as pd
     
     df = pd.read_sql("""
         SELECT id, timestamp, username, action, old_data, new_data
@@ -64,7 +64,6 @@ def get_record_history(conn, table_name: str, record_id: int):
     return df
 
 def get_all_usernames(conn):
-    import pandas as pd
     return pd.read_sql("SELECT DISTINCT username FROM audit_log ORDER BY username", conn)
 
 def get_audit_log(conn, filters: dict = None, limit: int = 100):
@@ -134,7 +133,6 @@ def rollback_record(conn, audit_id: int) -> bool:
     
     Returns True if successful, False otherwise.
     """
-    import pandas as pd
     
     # Get the audit log entry
     entry = pd.read_sql(

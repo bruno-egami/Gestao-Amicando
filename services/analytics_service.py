@@ -281,3 +281,82 @@ def get_supplier_purchases_all(conn: sqlite3.Connection, start_date: date, end_d
         "GROUP BY s.id ORDER BY ValorTotal DESC"
     )
     return pd.read_sql(query, conn, params=[start_date, end_date])
+
+# ==============================================================================
+# DASHBOARD QUERY METHODS
+# ==============================================================================
+
+def get_dashboard_active_orders(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Fetches active orders for the dashboard."""
+    query = """
+        SELECT co.id, c.name as Client, co.date_due as DueDate, co.status,
+               GROUP_CONCAT(ci.quantity || 'x ' || p.name, ', ') as Items
+        FROM commission_orders co
+        JOIN clients c ON co.client_id = c.id
+        LEFT JOIN commission_items ci ON co.id = ci.order_id
+        LEFT JOIN products p ON ci.product_id = p.id
+        WHERE co.status != 'Entregue'
+        GROUP BY co.id
+        ORDER BY co.date_due ASC
+    """
+    return pd.read_sql(query, conn)
+
+def get_low_stock_materials(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Fetches materials with low stock for the dashboard."""
+    return pd.read_sql("""
+        SELECT name, stock_level, min_stock_alert, unit 
+        FROM materials 
+        WHERE type = 'Material'
+        ORDER BY stock_level ASC
+    """, conn)
+
+def get_products_inventory(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Fetches product inventory for dashboard summary."""
+    return pd.read_sql("SELECT name, stock_quantity, base_price FROM products ORDER BY name", conn)
+
+def get_production_metrics(conn: sqlite3.Connection, today_str: str) -> Dict[str, float]:
+    """Fetches production metrics for today, week, and month."""
+    # Today
+    today_prod = pd.read_sql("SELECT SUM(quantity) as total FROM production_history WHERE timestamp LIKE ?", conn, params=(today_str + '%',))
+    today_total = today_prod.iloc[0]['total'] or 0
+    
+    # Week
+    week_start = (pd.to_datetime(today_str) - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
+    week_prod = pd.read_sql("SELECT SUM(quantity) as total FROM production_history WHERE timestamp >= ?", conn, params=(week_start,))
+    week_total = week_prod.iloc[0]['total'] or 0
+    
+    # Month
+    month_start = pd.to_datetime(today_str).replace(day=1).strftime('%Y-%m-%d')
+    month_prod = pd.read_sql("SELECT SUM(quantity) as total FROM production_history WHERE timestamp >= ?", conn, params=(month_start,))
+    month_total = month_prod.iloc[0]['total'] or 0
+    
+    # Losses
+    month_losses = pd.read_sql("SELECT SUM(quantity) as total FROM production_losses WHERE timestamp >= ?", conn, params=(month_start,))
+    broken_today = pd.read_sql("SELECT SUM(quantity) as total FROM production_losses WHERE timestamp LIKE ?", conn, params=(today_str + '%',)).iloc[0]['total'] or 0
+    month_broken = month_losses.iloc[0]['total'] or 0
+    
+    # Calculate Yield
+    month_yield = (month_total / (month_total + month_broken) * 100) if (month_total + month_broken) > 0 else 100
+
+    return {
+        'today': today_total,
+        'week': week_total,
+        'month': month_total,
+        'broken_today': broken_today,
+        'month_broken': month_broken,
+        'month_yield': month_yield
+    }
+
+def get_wip_kanban(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Fetches WIP production data grouped by stage."""
+    return pd.read_sql("SELECT stage, SUM(quantity) as total FROM production_wip GROUP BY stage", conn)
+
+def get_recent_production_history(conn: sqlite3.Connection, limit: int = 5) -> pd.DataFrame:
+    """Fetches recent production history entries."""
+    query = """
+        SELECT timestamp, product_name, quantity, username
+        FROM production_history
+        ORDER BY timestamp DESC
+        LIMIT ?
+    """
+    return pd.read_sql(query, conn, params=[limit])

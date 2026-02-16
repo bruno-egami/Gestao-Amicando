@@ -8,6 +8,9 @@ import database
 import admin_utils
 import services.reporting as reports
 from services import student_service
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # ==============================================================================
 # DIALOGS & HELPERS
@@ -138,7 +141,8 @@ def render_financial_management(conn):
                     match_name = match.iloc[0]['name']
                     if match_name in qa_classes:
                         pre_sel_index = qa_classes.index(match_name)
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"Error pre-selecting class for cancellation: {e}")
 
         qa_cls_sel = c_q2.selectbox("Turma", qa_classes, index=pre_sel_index, key=f"qa_cls_{qa_date}")
         qa_reason = c_q3.text_input("Motivo", placeholder="Feriado...", key="qa_reason")
@@ -525,14 +529,16 @@ def render_financial_history(conn):
                 if 'class_count' in row and pd.notnull(row['class_count']):
                      try:
                          desc += f" ({int(row['class_count'])} aulas)"
-                     except: pass
+                     except Exception as e:
+                         logger.debug(f"Error formatting class count: {e}")
                 
                 if "Mensalidade" in str(row.get('cat', '')):
                      try:
                          parts = row['description'].split(' ')
                          if len(parts) >= 2:
                              involved_months_hist.add(parts[-1])
-                     except: pass
+                     except Exception as e:
+                         logger.debug(f"Error parsing month from description: {e}")
                 
                 paid_val = row.get('amount_paid', 0)
                 if not paid_val and row['status'] == 'Pago': paid_val = row['amount']
