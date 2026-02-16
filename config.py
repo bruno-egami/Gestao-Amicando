@@ -18,4 +18,4 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Assets & Backups
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-BACKUP_DIR = os.path.join(BASE_DIR, "backups")
+BACKUP_DIR = os.path.join(BASE_DIR, "data", "backups")

@@ -64,14 +64,19 @@ def _migrate_v1(cursor):
 
 def _migrate_v2(cursor):
     """Migration v2: Add 'force_password_change' to users."""
+    column_created = False
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0")
-    except sqlite3.OperationalError: pass
+        column_created = True
+    except sqlite3.OperationalError: 
+        # Column likely already exists
+        pass
     
-    # Force existing admin to change password
-    try:
-        cursor.execute("UPDATE users SET force_password_change = 1 WHERE username = 'admin'")
-    except Exception: pass
+    # Force existing admin to change password only if we just added the column
+    if column_created:
+        try:
+            cursor.execute("UPDATE users SET force_password_change = 1 WHERE username = 'admin'")
+        except Exception: pass
 
 MIGRATIONS = {
     1: _migrate_v1,

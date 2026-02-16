@@ -48,6 +48,15 @@ with tab_gestao:
     if "fix_edit_id" not in st.session_state:
         st.session_state.fix_edit_id = None
 
+    # ==========================================
+    # AUTO-CONSOLIDATION LOGIC
+    # ==========================================
+    # Check if we need to generate fixed costs for THIS month
+    # Run BEFORE fetching data to avoid double-render
+    added_count = finance_service.auto_process_monthly_fixed_costs(conn)
+    if added_count > 0:
+        st.toast(f"✅ {added_count} custos fixos do mês foram lançados automaticamente!", icon="🤖")
+
     # Helper to fetch suppliers
     suppliers = supplier_service.get_all_suppliers(conn)
     sup_map = {row['name']: row['id'] for _, row in suppliers.iterrows()}
@@ -335,14 +344,7 @@ with tab_gestao:
             else:
                 st.info("Sem lançamentos.")
 
-    # ==========================================
-    # AUTO-CONSOLIDATION LOGIC
-    # ==========================================
-    # Check if we need to generate fixed costs for THIS month
-    added_count = finance_service.auto_process_monthly_fixed_costs(conn)
-    if added_count > 0:
-        st.toast(f"✅ {added_count} custos fixos do mês foram lançados automaticamente!", icon="🤖")
-        st.rerun()
+
 
     # ==========================================
     # SUBTAB 2: Gastos Recorrentes

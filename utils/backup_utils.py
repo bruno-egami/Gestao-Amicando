@@ -4,11 +4,12 @@ import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
 import database
+import config
 from utils.logging_config import get_logger, log_exception
 
 logger = get_logger(__name__)
 
-BACKUP_FOLDER = os.path.join("data", "backups")
+BACKUP_FOLDER = config.BACKUP_DIR
 
 def get_backup_settings(conn):
     """Fetch backup frequency and last run timestamp."""
