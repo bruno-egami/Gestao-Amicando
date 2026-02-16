@@ -122,34 +122,22 @@ with database.db_session() as conn:
                         # --- Priority (Every stage) ---
                         p_cols = st.columns(2)
                         if p_cols[0].button("Subir 🔼", key=f"pri_up_{item['id']}", use_container_width=True):
-                            conn_write = database.get_connection()
-                            cursor_write = conn_write.cursor()
                             try:
-                                cursor_write.execute("BEGIN TRANSACTION")
-                                production_service.update_priority(cursor_write, item['id'], 1)
-                                conn_write.commit()
+                                with database.db_session() as conn_write:
+                                    cursor_write = conn_write.cursor()
+                                    production_service.update_priority(cursor_write, item['id'], 1)
                                 st.rerun()
                             except Exception as e:
-                                conn_write.rollback()
                                 st.error(f"Erro: {e}")
-                            finally:
-                                cursor_write.close()
-                                conn_write.close()
                     
                         if p_cols[1].button("Baixar 🔽", key=f"pri_dn_{item['id']}", use_container_width=True):
-                            conn_write = database.get_connection()
-                            cursor_write = conn_write.cursor()
                             try:
-                                cursor_write.execute("BEGIN TRANSACTION")
-                                production_service.update_priority(cursor_write, item['id'], -1)
-                                conn_write.commit()
+                                with database.db_session() as conn_write:
+                                    cursor_write = conn_write.cursor()
+                                    production_service.update_priority(cursor_write, item['id'], -1)
                                 st.rerun()
                             except Exception as e:
-                                conn_write.rollback()
                                 st.error(f"Erro: {e}")
-                            finally:
-                                cursor_write.close()
-                                conn_write.close()
                     
                         # --- Timeline ---
                         import json
@@ -174,10 +162,7 @@ with database.db_session() as conn:
                             with st.popover(pop_label, use_container_width=True):
                                 qty = st.number_input("Qtd a avançar", 1, int(item['quantity']), int(item['quantity']), key=f"mv_{item['id']}")
                             
-                                # --- Esmaltação Logic (Triggered when moving FROM Esmaltação? No, triggered when moving TO Esmaltação usually? 
-                                # Logic revision: User said 'When moving from Biscoito to Esmaltação'.
-                                # So if CURRENT stage is Biscoito and NEXT is Esmaltacao.
-                            
+                                # --- Esmaltação Logic
                                 selected_variant_id = item['variant_id']
                                 deduct_glaze = False
                             
@@ -200,25 +185,19 @@ with database.db_session() as conn:
                                     deduct_glaze = st.checkbox("Baixar estoque esmalte?", value=True, key=f"glz_{item['id']}")
                             
                                 if st.button("Confirmar", key=f"go_{item['id']}", type="primary"):
-                                    conn_write = database.get_connection()
-                                    cursor_write = conn_write.cursor()
                                     try:
-                                        cursor_write.execute("BEGIN TRANSACTION")
-                                        # Get current user
-                                        user = auth.get_current_user()
-                                        u_id = user['id'] if user else None
-                                        u_name = user['username'] if user else 'Unknown'
-                                    
-                                        production_service.move_stage(cursor_write, conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze, user_id=u_id, username=u_name)
-                                        conn_write.commit()
+                                        with database.db_session() as conn_write:
+                                            cursor_write = conn_write.cursor()
+                                            # Get current user
+                                            user = auth.get_current_user()
+                                            u_id = user['id'] if user else None
+                                            u_name = user['username'] if user else 'Unknown'
+                                        
+                                            production_service.move_stage(cursor_write, conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze, user_id=u_id, username=u_name)
                                         st.toast(f"Movido para {next_s}!", icon="✅")
                                         st.rerun()
                                     except Exception as e:
-                                        conn_write.rollback()
                                         st.error(f"Erro ao mover: {e}")
-                                    finally:
-                                        cursor_write.close()
-                                        conn_write.close()
                     
                         else: # LAST STAGE (Queima de Alta) -> Finish
                             with st.popover("✅ Concluir", use_container_width=True):
@@ -229,24 +208,18 @@ with database.db_session() as conn:
                                 inc_stock = st.checkbox("Incrementar Estoque Produto?", value=default_inc, key=f"inc_{item['id']}")
                             
                                 if st.button("Finalizar", key=f"end_{item['id']}", type="primary"):
-                                    conn_write = database.get_connection()
-                                    cursor_write = conn_write.cursor()
                                     try:
-                                        cursor_write.execute("BEGIN TRANSACTION")
-                                        # Get current user
-                                        user = auth.get_current_user()
-                                        u_id = user['id'] if user else None
-                                        u_name = user['username'] if user else 'Unknown'
+                                        with database.db_session() as conn_write:
+                                            cursor_write = conn_write.cursor()
+                                            # Get current user
+                                            user = auth.get_current_user()
+                                            u_id = user['id'] if user else None
+                                            u_name = user['username'] if user else 'Unknown'
 
-                                        production_service.finalize_production(cursor_write, item, qty, inc_stock, user_id=u_id, username=u_name)
-                                        conn_write.commit()
+                                            production_service.finalize_production(cursor_write, item, qty, inc_stock, user_id=u_id, username=u_name)
                                         admin_utils.show_feedback_dialog(f"Produção de {item['product_name']} finalizada!", level="success")
                                     except Exception as e:
-                                        conn_write.rollback()
                                         st.error(f"Erro: {e}")
-                                    finally:
-                                        cursor_write.close()
-                                        conn_write.close()
 
                         # 3. Breakage (Loss) Logic - Only for items IN production (not in Fila de Espera)
                         if stage != 'Fila de Espera':
@@ -256,21 +229,15 @@ with database.db_session() as conn:
                                 reason_loss = st.text_input("Motivo (opcional)", key=f"loss_reason_{item['id']}")
                             
                                 if st.button("Confirmar Quebra", key=f"loss_btn_{item['id']}", type="secondary"):
-                                    conn_write = database.get_connection()
-                                    cursor_write = conn_write.cursor()
                                     try:
-                                        cursor_write.execute("BEGIN TRANSACTION")
-                                        replenished = production_service.register_loss(cursor_write, item, stage, qty_loss, reason_loss)
-                                        conn_write.commit()
+                                        with database.db_session() as conn_write:
+                                            cursor_write = conn_write.cursor()
+                                            replenished = production_service.register_loss(cursor_write, item, stage, qty_loss, reason_loss)
                                         if replenished:
                                             st.info(f"🔄 Um novo card de {qty_loss} peças foi criado em **Fila de Espera** para repor a quebra.")
                                         admin_utils.show_feedback_dialog(f"Registrado: {qty_loss} peças perdidas em {stage}.", level="warning")
                                     except Exception as e:
-                                        conn_write.rollback()
                                         admin_utils.show_feedback_dialog(f"Erro ao registrar quebra: {e}", level="error")
-                                    finally:
-                                        cursor_write.close()
-                                        conn_write.close()
 
     # --- TAB 2: NOVA PRODUÇÃO (ESTOQUE) ---
     with tab_new:
@@ -280,50 +247,46 @@ with database.db_session() as conn:
         @st.dialog("🚀 Iniciar Produção")
         def show_production_dialog(product_row):
             # Use a fresh connection to avoid "closed database" issues in dialogs
-            ctx_conn = database.get_connection()
+            # Since dialog breaks out of main context, we need a fresh connection.
+            # db_session is perfect here too.
             try:
-                st.markdown(f"### {product_row['name']}")
-            
-                # Image in dialog
-                if product_row['thumb_path'] and os.path.exists(product_row['thumb_path']):
-                    st.image(product_row['thumb_path'], width=150)
+                with database.db_session() as ctx_conn:
+                    st.markdown(f"### {product_row['name']}")
                 
-                pid = product_row['id']
-            
-                # Variants Logic using clean connection
-                variants = product_service.get_product_variants(ctx_conn, pid)
-                vid = None
-            
-                # Form
-                with st.form("prod_start_form"):
-                    c1, c2 = st.columns(2)
-                    qty_new = c1.number_input("Quantidade", 1, 1000, 1)
-                    start_dt = c2.date_input("Data Início", value=date.today())
+                    # Image in dialog
+                    if product_row['thumb_path'] and os.path.exists(product_row['thumb_path']):
+                        st.image(product_row['thumb_path'], width=150)
+                    
+                    pid = product_row['id']
                 
-                    if not variants.empty:
-                        vname = st.selectbox("Variação (Opcional)", ["Padrão"] + variants['variant_name'].tolist())
-                        if vname != "Padrão":
-                            vid = variants[variants['variant_name'] == vname].iloc[0]['id']
+                    # Variants Logic
+                    variants = product_service.get_product_variants(ctx_conn, pid)
+                    vid = None
                 
-                    obs = st.text_area("Observações")
-                
-                    if st.form_submit_button("Confirmar Produção", type="primary"):
-                        conn_write = database.get_connection()
-                        cursor_write = conn_write.cursor()
-                        try:
-                            cursor_write.execute("BEGIN TRANSACTION")
-                            production_service.start_production(cursor_write, pid, qty_new, start_dt.isoformat(), obs, vid)
-                            conn_write.commit()
-                            st.toast(f"Produção iniciada: {qty_new} un de {product_row['name']}", icon="✅")
-                            st.rerun()
-                        except Exception as e:
-                            conn_write.rollback()
-                            st.error(f"Erro: {e}")
-                        finally:
-                            cursor_write.close()
-                            conn_write.close()
-            finally:
-                 ctx_conn.close()
+                    # Form
+                    with st.form("prod_start_form"):
+                        c1, c2 = st.columns(2)
+                        qty_new = c1.number_input("Quantidade", 1, 1000, 1)
+                        start_dt = c2.date_input("Data Início", value=date.today())
+                    
+                        if not variants.empty:
+                            vname = st.selectbox("Variação (Opcional)", ["Padrão"] + variants['variant_name'].tolist())
+                            if vname != "Padrão":
+                                vid = variants[variants['variant_name'] == vname].iloc[0]['id']
+                    
+                        obs = st.text_area("Observações")
+                    
+                        if st.form_submit_button("Confirmar Produção", type="primary"):
+                            try:
+                                with database.db_session() as conn_write:
+                                    cursor_write = conn_write.cursor()
+                                    production_service.start_production(cursor_write, pid, qty_new, start_dt.isoformat(), obs, vid)
+                                st.toast(f"Produção iniciada: {qty_new} un de {product_row['name']}", icon="✅")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro: {e}")
+            except Exception as e:
+                 st.error(f"Erro no diálogo: {e}")
 
         # --- CATALOG FILTERING ---
         # 1. Filters
@@ -497,4 +460,3 @@ with database.db_session() as conn:
                 st.caption("Sem dados de perdas para este filtro.")
         else:
             st.info("Nenhum dado encontrado para os filtros selecionados.")
-

@@ -95,9 +95,26 @@ def list_backups():
     return files[:10] # Return up to 10 for better visibility
 
 def delete_backup(filename):
-    """Delete a specific backup file."""
+    """Delete a specific backup file with path traversal protection."""
+    # Security: Ensure we only deal with the filename, no paths
+    filename = os.path.basename(filename)
+    
     path = os.path.join(BACKUP_FOLDER, filename)
+    
+    # Security: Validate resolved path is inside backup folder
+    safe_path = os.path.abspath(path)
+    safe_folder = os.path.abspath(BACKUP_FOLDER)
+    
+    if not safe_path.startswith(safe_folder):
+        logger.warning(f"Path traversal attempt blocked in delete_backup: {filename}")
+        return False
+        
     if os.path.exists(path):
-        os.remove(path)
-        return True
+        try:
+            os.remove(path)
+            logger.info(f"Backup deleted: {filename}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting backup {filename}: {e}")
+            return False
     return False
