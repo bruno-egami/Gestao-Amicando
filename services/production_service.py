@@ -62,8 +62,10 @@ def move_stage(cursor, conn, item_id, current_stage, next_stage, qty_move, total
     # Load existing history
     try:
         history = json.loads(curr['stage_history']) if curr['stage_history'] else {}
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Error parsing stage_history for item {item_id}: {e}")
         history = {}
+
     
     # Add next stage timestamp
     history[next_stage] = datetime.now().isoformat(timespec='minutes')
@@ -202,8 +204,10 @@ def register_loss(cursor, item, stage, qty_loss, reason_loss):
     # 2. Update Stage History
     try:
         history = json.loads(item['stage_history']) if item.get('stage_history') else {}
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Error parsing stage_history in register_loss for item {item['id']}: {e}")
         history = {}
+
     
     # Use unique key to prevent overwriting previous breaks in same stage
     timestamp_str = datetime.now().isoformat(timespec='seconds')
@@ -331,7 +335,8 @@ def get_stage_duration_stats(_conn):
                         if dt > today:
                             dt = dt.replace(year=today.year - 1)
                         entry_date_str = dt
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Error parsing legacy date string '{date_str}': {e}")
                         entry_date_str = today 
             else:
                 # Fallback to start_date

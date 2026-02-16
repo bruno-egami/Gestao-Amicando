@@ -347,7 +347,9 @@ def upsert_expense(cursor, row):
                 tid = int(row_id)
                 cursor.execute("SELECT id FROM expenses WHERE id=?", (tid,))
                 if cursor.fetchone(): target_id = tid
-            except Exception: pass
+            except Exception as e: 
+                logger.debug(f"Error parsing ID in upsert_expense: {e}")
+
     
     if target_id:
         cursor.execute("""
@@ -385,7 +387,9 @@ def upsert_sale(cursor, row):
                 tid = int(row_id)
                 cursor.execute("SELECT id FROM sales WHERE id=?", (tid,))
                 if cursor.fetchone(): target_id = tid
-            except Exception: pass
+            except Exception as e: 
+                logger.debug(f"Error parsing ID in upsert_sale: {e}")
+
     
     if target_id:
         cursor.execute("""
@@ -424,7 +428,9 @@ def upsert_client(cursor, row):
     dob = None
     if pd.notna(row['Data Nascimento']) and str(row['Data Nascimento']).strip():
         try: dob = pd.to_datetime(row['Data Nascimento']).strftime('%Y-%m-%d')
-        except Exception: pass
+        except Exception as e: 
+            logger.debug(f"Error parsing DOB in upsert_client: {e}")
+
 
     if res:
         cursor.execute("""

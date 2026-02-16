@@ -16,133 +16,132 @@ styles.apply_custom_style()
 admin_utils.render_sidebar_logo()
 
 # Auth Check
-conn = database.get_connection()
+with database.db_session() as conn:
 
-if not auth.require_login(conn):
-    st.stop()
+    if not auth.require_login(conn):
+        st.stop()
 
-if not auth.check_page_access("Fornecedores"):
-    st.stop()
+    if not auth.check_page_access("Fornecedores"):
+        st.stop()
 
-auth.render_custom_sidebar()
-st.title("🚚 Gestão de Fornecedores")
+    auth.render_custom_sidebar()
+    st.title("🚚 Gestão de Fornecedores")
 
-# Session State for Edit Mode
-if "sup_edit_id" not in st.session_state:
-    st.session_state.sup_edit_id = None
+    # Session State for Edit Mode
+    if "sup_edit_id" not in st.session_state:
+        st.session_state.sup_edit_id = None
 
-# --- LAYOUT: NEW + LIST ---
-col_form, col_list = st.columns([1, 2], gap="large")
+    # --- LAYOUT: NEW + LIST ---
+    col_form, col_list = st.columns([1, 2], gap="large")
 
-# === LEFT: NEW SUPPLIER FORM ===
-with col_form:
-    is_edit = st.session_state.sup_edit_id is not None
-    form_title = "✏️ Editar Fornecedor" if is_edit else "➕ Novo Fornecedor"
-    st.subheader(form_title)
+    # === LEFT: NEW SUPPLIER FORM ===
+    with col_form:
+        is_edit = st.session_state.sup_edit_id is not None
+        form_title = "✏️ Editar Fornecedor" if is_edit else "➕ Novo Fornecedor"
+        st.subheader(form_title)
     
-    # Defaults
-    def_name, def_contact, def_phone, def_email, def_notes = "", "", "", "", ""
+        # Defaults
+        def_name, def_contact, def_phone, def_email, def_notes = "", "", "", "", ""
     
-    if is_edit:
-        try:
-            edit_row = supplier_service.get_supplier_by_id(conn, st.session_state.sup_edit_id)
-            if edit_row:
-                def_name = edit_row['name'] or ""
-            def_contact = edit_row['contact'] or ""
-            def_phone = edit_row['phone'] or ""
-            def_email = edit_row['email'] or ""
-            def_notes = edit_row['notes'] or ""
-        except Exception:
-            st.session_state.sup_edit_id = None
-            st.rerun()
-    
-    if is_edit:
-        if st.button("⬅️ Cancelar Edição"):
-            st.session_state.sup_edit_id = None
-            st.rerun()
-    
-    with st.form("supplier_form", clear_on_submit=not is_edit):
-        f_name = st.text_input("Nome/Empresa *", value=def_name)
-        f_contact = st.text_input("Nome do Contato", value=def_contact)
-        f_phone = st.text_input("Telefone", value=def_phone)
-        f_email = st.text_input("Email", value=def_email)
-        f_notes = st.text_area("Observações", value=def_notes)
-        
-        btn_label = "💾 Salvar Alterações" if is_edit else "💾 Cadastrar"
-        if st.form_submit_button(btn_label, type="primary", use_container_width=True):
-            if not f_name:
-                admin_utils.show_feedback_dialog("Nome é obrigatório.", level="warning")
-            else:
-                if is_edit:
-                    try:
-                        supplier_service.update_supplier(conn, st.session_state.sup_edit_id, f_name, f_contact, f_phone, f_email, f_notes)
-                        admin_utils.show_feedback_dialog("Fornecedor atualizado!", level="success")
-                        st.session_state.sup_edit_id = None
-                    except Exception as e:
-                        st.error(f"Erro ao atualizar: {e}")
-                else:
-                    try:
-                        supplier_service.create_supplier(conn, f_name, f_contact, f_phone, f_email, f_notes)
-                        admin_utils.show_feedback_dialog("Fornecedor cadastrado!", level="success")
-                    except Exception as e:
-                        st.error(f"Erro ao criar: {e}")
+        if is_edit:
+            try:
+                edit_row = supplier_service.get_supplier_by_id(conn, st.session_state.sup_edit_id)
+                if edit_row:
+                    def_name = edit_row['name'] or ""
+                def_contact = edit_row['contact'] or ""
+                def_phone = edit_row['phone'] or ""
+                def_email = edit_row['email'] or ""
+                def_notes = edit_row['notes'] or ""
+            except Exception:
+                st.session_state.sup_edit_id = None
                 st.rerun()
+    
+        if is_edit:
+            if st.button("⬅️ Cancelar Edição"):
+                st.session_state.sup_edit_id = None
+                st.rerun()
+    
+        with st.form("supplier_form", clear_on_submit=not is_edit):
+            f_name = st.text_input("Nome/Empresa *", value=def_name)
+            f_contact = st.text_input("Nome do Contato", value=def_contact)
+            f_phone = st.text_input("Telefone", value=def_phone)
+            f_email = st.text_input("Email", value=def_email)
+            f_notes = st.text_area("Observações", value=def_notes)
+        
+            btn_label = "💾 Salvar Alterações" if is_edit else "💾 Cadastrar"
+            if st.form_submit_button(btn_label, type="primary", use_container_width=True):
+                if not f_name:
+                    admin_utils.show_feedback_dialog("Nome é obrigatório.", level="warning")
+                else:
+                    if is_edit:
+                        try:
+                            supplier_service.update_supplier(conn, st.session_state.sup_edit_id, f_name, f_contact, f_phone, f_email, f_notes)
+                            admin_utils.show_feedback_dialog("Fornecedor atualizado!", level="success")
+                            st.session_state.sup_edit_id = None
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar: {e}")
+                    else:
+                        try:
+                            supplier_service.create_supplier(conn, f_name, f_contact, f_phone, f_email, f_notes)
+                            admin_utils.show_feedback_dialog("Fornecedor cadastrado!", level="success")
+                        except Exception as e:
+                            st.error(f"Erro ao criar: {e}")
+                    st.rerun()
 
-# === RIGHT: LIST WITH SEARCH ===
-with col_list:
-    st.subheader("📋 Fornecedores Cadastrados")
+    # === RIGHT: LIST WITH SEARCH ===
+    with col_list:
+        st.subheader("📋 Fornecedores Cadastrados")
     
-    # Search
-    search_term = st.text_input("🔍 Buscar", placeholder="Nome, contato, telefone...")
+        # Search
+        search_term = st.text_input("🔍 Buscar", placeholder="Nome, contato, telefone...")
     
-    # Fetch Data
-    df = supplier_service.get_all_suppliers(conn)
+        # Fetch Data
+        df = supplier_service.get_all_suppliers(conn)
     
-    # Apply Search Filter
-    if search_term and not df.empty:
-        mask = df.apply(lambda row: search_term.lower() in str(row).lower(), axis=1)
-        df = df[mask]
+        # Apply Search Filter
+        if search_term and not df.empty:
+            mask = df.apply(lambda row: search_term.lower() in str(row).lower(), axis=1)
+            df = df[mask]
     
-    st.caption(f"{len(df)} fornecedor(es) encontrado(s)")
+        st.caption(f"{len(df)} fornecedor(es) encontrado(s)")
     
-    if not df.empty:
-        for _, row in df.iterrows():
-            with st.container(border=True):
-                c1, c2, c3 = st.columns([3, 1, 1])
+        if not df.empty:
+            for _, row in df.iterrows():
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([3, 1, 1])
                 
-                with c1:
-                    st.markdown(f"### {row['name']}")
-                    if row['contact']:
-                        st.write(f"👤 **Contato:** {row['contact']}")
-                    if row['phone']:
-                        st.write(f"📞 {row['phone']}")
-                    if row['email']:
-                        st.write(f"📧 {row['email']}")
-                    if row['notes']:
-                        st.caption(f"📝 {row['notes']}")
+                    with c1:
+                        st.markdown(f"### {row['name']}")
+                        if row['contact']:
+                            st.write(f"👤 **Contato:** {row['contact']}")
+                        if row['phone']:
+                            st.write(f"📞 {row['phone']}")
+                        if row['email']:
+                            st.write(f"📧 {row['email']}")
+                        if row['notes']:
+                            st.caption(f"📝 {row['notes']}")
                 
-                with c2:
-                    if st.button("✏️ Editar", key=f"edit_sup_{row['id']}", use_container_width=True):
-                        st.session_state.sup_edit_id = row['id']
-                        st.rerun()
+                    with c2:
+                        if st.button("✏️ Editar", key=f"edit_sup_{row['id']}", use_container_width=True):
+                            st.session_state.sup_edit_id = row['id']
+                            st.rerun()
                 
-                with c3:
-                    if st.button("🗑️ Excluir", key=f"del_sup_{row['id']}", use_container_width=True):
-                        def do_delete(sid=row['id'], sname=row['name']):
-                            try:
-                                with database.db_session() as ctx_conn:
-                                    supplier_service.delete_supplier(ctx_conn, sid)
-                                st.success(f"Fornecedor '{sname}' excluído.")
-                                time.sleep(1)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro: {e}")
+                    with c3:
+                        if st.button("🗑️ Excluir", key=f"del_sup_{row['id']}", use_container_width=True):
+                            def do_delete(sid=row['id'], sname=row['name']):
+                                try:
+                                    with database.db_session() as ctx_conn:
+                                        supplier_service.delete_supplier(ctx_conn, sid)
+                                    st.success(f"Fornecedor '{sname}' excluído.")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Erro: {e}")
 
-                        admin_utils.show_confirmation_dialog(
-                            f"Tem certeza que deseja excluir o fornecedor '{row['name']}'?",
-                            on_confirm=do_delete
-                        )
-    else:
-        st.info("Nenhum fornecedor cadastrado ou encontrado.")
+                            admin_utils.show_confirmation_dialog(
+                                f"Tem certeza que deseja excluir o fornecedor '{row['name']}'?",
+                                on_confirm=do_delete
+                            )
+        else:
+            st.info("Nenhum fornecedor cadastrado ou encontrado.")
 
-conn.close()

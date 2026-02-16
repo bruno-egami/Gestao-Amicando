@@ -935,6 +935,8 @@ def delete_quote(conn, quote_id):
         audit.log_action(conn, 'DELETE', 'quotes', quote_id, None, None) # Simple log
         conn.commit()
         return True
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        logger.debug(f"Error deleting quote {quote_id}: {e}")
         return False
+
