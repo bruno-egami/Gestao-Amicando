@@ -229,6 +229,39 @@ with database.db_session() as conn:
             for _, row in recent_prod.iterrows():
                 ts = row['timestamp'][:16].replace('T', ' ')
                 st.caption(f"🔹 {ts} — **{row['product_name']}** x{row['quantity']} ({row['username']})")
+                
+        st.divider()
+
+        # ==============================================================================
+        # SECTION 5: FINANCEIRO (FINANCIAL SUMMARY)
+        # ==============================================================================
+        from services import finance_service
+        
+        st.markdown("### 💰 Resumo Financeiro (Mês Atual)")
+        
+        # Calculate Current Month Dates
+        today = date.today()
+        start_month = today.replace(day=1)
+        if today.month == 12:
+            end_month = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            end_month = today.replace(month=today.month + 1, day=1)
+            
+        # Get Data
+        fin_data = finance_service.get_financial_summary(conn, start_month, end_month)
+        
+        with st.container(border=True):
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("💵 Faturamento", f"R$ {fin_data['gross_revenue']:,.2f}")
+            f2.metric("📤 Despesas", f"R$ {fin_data['total_expenses']:,.2f}")
+            
+            profit = fin_data['net_profit']
+            f3.metric("💰 Lucro Líquido", f"R$ {profit:,.2f}", 
+                     delta=f"R$ {profit:,.2f}", delta_color="normal" if profit >= 0 else "inverse")
+            
+            # Simple margin
+            margin = (profit / fin_data['gross_revenue'] * 100) if fin_data['gross_revenue'] > 0 else 0.0
+            f4.metric("📈 Margem", f"{margin:.1f}%")
 
     except Exception as e:
         from utils.logging_config import get_logger

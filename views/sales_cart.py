@@ -7,6 +7,7 @@ import auth
 import services.reporting as reports
 from services import product_service, order_service, sales_service
 from utils.logging_config import get_logger
+import database
 from database import safe_transaction
 
 logger = get_logger(__name__)
@@ -38,6 +39,33 @@ def show_receipt_dialog(order_data):
         if str(order_data.get('id', '')).startswith('ENC'):
              formatted_id = order_data.get('id') 
              type_lbl = "Encomenda"
+             current_dt = datetime.now()
+             # If it's already ENC-YYMMDD-ID, we keep it. If it's ENC-ID, we reformat if we have the date.
+             if "-" in formatted_id and len(formatted_id.split("-")) == 2:
+                  # ENC-ID -> ENC-YYMMDD-ID
+                  raw_id = formatted_id.split("-")[1]
+                  formatted_id = f"ENC-{current_dt.strftime('%y%m%d')}-{raw_id}"
+
+             rep_data = {
+                 "id": formatted_id,
+                 "type": type_lbl,
+                 "date": current_dt.strftime("%d/%m/%Y"),
+                 "date_due": order_data.get('date_due', "-"),
+                 "client_name": order_data.get('client', 'Cliente'),
+                 "salesperson": order_data.get('salesperson', '-'),
+                 "notes": order_data.get('notes', ''),
+                 "items": [],
+                 "total": order_data.get('total', 0),
+                 "deposit": order_data.get('deposit', 0)
+             }
+             for item in order_data['items']:
+                 rep_data['items'].append({
+                     "name": item.get('product_name', item.get('name', 'Item')),
+                     "qty": item['qty'],
+                     "price": item.get('base_price', item.get('price', 0)),
+                     "notes": item.get('variant_name', '')
+                 })
+             pdf_bytes = reports.generate_commission_receipt_pdf(rep_data)
         else:
              current_dt = datetime.now()
              try:
@@ -53,30 +81,27 @@ def show_receipt_dialog(order_data):
              formatted_id = f"VEN-{current_dt.strftime('%y%m%d')}-{order_data.get('id')}"
              type_lbl = "Venda"
 
-        rep_data = {
-            "id": formatted_id,
-            "type": type_lbl,
-            "date": datetime.now().strftime("%d/%m/%Y"),
-            "client_name": order_data.get('client', 'Cliente'),
-            "salesperson": order_data.get('salesperson', '-'),
-            "payment_method": order_data.get('payment_method', '-'), 
-            "notes": order_data.get('notes', ''), 
-            "date_due": order_data.get('date_due', None),
-            "items": [],
-            "total": order_data.get('total', 0),
-            "discount": 0, 
-            "deposit": order_data.get('deposit', 0)
-        }
-        
-        # Items
-        for item in order_data['items']:
-            rep_data['items'].append({
-                "name": item['product_name'],
-                "qty": item['qty'],
-                "price": item['base_price']
-            })
-            
-        pdf_bytes = reports.generate_receipt_pdf(rep_data)
+             rep_data = {
+                 "id": formatted_id,
+                 "type": type_lbl,
+                 "date": datetime.now().strftime("%d/%m/%Y"),
+                 "client_name": order_data.get('client', 'Cliente'),
+                 "salesperson": order_data.get('salesperson', '-'),
+                 "payment_method": order_data.get('payment_method', '-'), 
+                 "notes": order_data.get('notes', ''), 
+                 "items": [],
+                 "total": order_data.get('total', 0),
+                 "discount": 0, 
+                 "deposit": order_data.get('deposit', 0)
+             }
+             for item in order_data['items']:
+                 rep_data['items'].append({
+                     "name": item.get('product_name', item.get('name', 'Item')),
+                     "qty": item['qty'],
+                     "price": item.get('base_price', item.get('price', 0)),
+                     "total": item.get('total', item['qty'] * item.get('base_price', item.get('price', 0)))
+                 })
+             pdf_bytes = reports.generate_receipt_pdf(rep_data)
         
         st.download_button(
             label="📄 Baixar Recibo (PDF)",
@@ -85,10 +110,10 @@ def show_receipt_dialog(order_data):
             mime="application/pdf"
         )
     except Exception as e:
-        admin_utils.show_feedback_dialog(f"Erro ao gerar PDF: {e}", level="error")
+        st.error(f"Erro ao gerar PDF: {e}")
 
 @st.dialog("Criar Orçamento")
-def quote_creation_dialog(conn, client_display_name, initial_notes, cart_items, cli_choice_val, n_name, n_phone, c_dict):
+def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_choice_val, n_name, n_phone, c_dict):
      st.write(f"Cliente: {client_display_name}")
      
      qd_valid = st.number_input("Validade (dias)", value=30, min_value=1)
@@ -98,46 +123,48 @@ def quote_creation_dialog(conn, client_display_name, initial_notes, cart_items, 
      
      if st.button("Confirmar Criação", type="primary"):
          try:
-             # Create Client if needed
-             final_cid = None
-             if cli_choice_val == "++ Cadastrar Novo ++":
-                  final_cid = order_service.create_client(conn, n_name, n_phone)
-             else:
-                  final_cid = c_dict[cli_choice_val]
-             
-             if isinstance(final_cid, bytes): final_cid = int.from_bytes(final_cid, "little")
+             with database.db_session() as conn:
+                 # Create Client if needed
+                 final_cid = None
+                 if cli_choice_val == "++ Cadastrar Novo ++":
+                      final_cid = order_service.create_client(conn, n_name, n_phone)
+                 else:
+                      final_cid = c_dict[cli_choice_val]
+                 
+                 if isinstance(final_cid, bytes): final_cid = int.from_bytes(final_cid, "little")
 
-             # Prepare Items for Service
-             service_items = []
-             for item in cart_items:
-                 note_txt = ""
-                 if item.get('variant_name'):
-                     note_txt = f"Variação: {item['variant_name']}"
-                     
-                 service_items.append({
-                     'product_id': int(item['product_id']),
-                     'qty': int(item['qty']),
-                     'price': float(item['base_price']),
-                     'notes': note_txt
-                 })
+                 # Prepare Items for Service
+                 service_items = []
+                 for item in cart_items:
+                     note_txt = ""
+                     if item.get('variant_name'):
+                         note_txt = f"Variação: {item['variant_name']}"
+                         
+                     service_items.append({
+                         'product_id': int(item['product_id']),
+                         'qty': int(item['qty']),
+                         'price': float(item['base_price']),
+                         'notes': note_txt
+                     })
 
-             # Create Quote via Service
-             quote_id = order_service.create_quote(conn, {
-                 'client_id': final_cid,
-                 'notes': qd_note,
-                 'delivery_terms': qd_deliv,
-                 'payment_terms': qd_pay,
-                 'valid_days': qd_valid
-             }, service_items)
-             
-             if isinstance(quote_id, bytes): quote_id = int.from_bytes(quote_id, "little")
-             
-             st.session_state['cart'] = []
-             admin_utils.show_feedback_dialog(f"Orçamento #{quote_id} criado com sucesso!", level="success")
-             st.rerun()
+                 # Create Quote via Service
+                 quote_id = order_service.create_quote(conn, {
+                     'client_id': final_cid,
+                     'notes': qd_note,
+                     'delivery_terms': qd_deliv,
+                     'payment_terms': qd_pay,
+                     'valid_days': qd_valid
+                 }, service_items)
+                 
+                 if isinstance(quote_id, bytes): quote_id = int.from_bytes(quote_id, "little")
+                 
+                 st.session_state['cart'] = []
+                 st.success(f"Orçamento #{quote_id} criado com sucesso!")
+                 if st.button("Concluir", type="primary", use_container_width=True):
+                     st.rerun()
 
          except Exception as e:
-             admin_utils.show_feedback_dialog(f"Erro ao salvar orçamento: {e}", level="error")
+             st.error(f"Erro ao salvar orçamento: {e}")
 
 # ==============================================================================
 # RENDER CART & CHECKOUT
@@ -452,15 +479,15 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                 has_order = new_ord_id is not None
                                 
                                 st.session_state['last_order'] = {
-                                    "id": trans_uuid,
-                                    "client": final_client_name,
-                                    "salesperson": salesperson_choice,
-                                    "payment_method": pay_method_choice,
-                                    "notes": final_notes,
-                                    "total": cart_total,
-                                    "deposit": deposit_val if has_order else 0,
-                                    "date_due": d_comm.strftime("%d/%m/%Y") if has_order else None,
-                                    "items": st.session_state['cart'] 
+                                    "id": f"ENC-{new_ord_id}" if has_order else trans_uuid,
+                                   "client": final_client_name,
+                                   "salesperson": salesperson_choice,
+                                   "payment_method": pay_method_choice,
+                                   "notes": final_notes,
+                                   "total": cart_total,
+                                   "deposit": deposit_val if has_order else 0,
+                                   "date_due": d_comm.strftime("%d/%m/%Y") if has_order else None,
+                                   "items": st.session_state['cart'] 
                                 }
                                 st.session_state['cart'] = []
                                 st.rerun()
@@ -470,7 +497,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                     
                     # --- QUOTE BUTTON ---
                     if col_act3.button("📄 Salvar como Orçamento", type="secondary", use_container_width=True):
-                         quote_creation_dialog(conn, new_cli_name if cli_choice == '++ Cadastrar Novo ++' else cli_choice, notes_order, st.session_state['cart'], cli_choice, new_cli_name, new_cli_phone, client_dict)
+                         quote_creation_dialog(new_cli_name if cli_choice == '++ Cadastrar Novo ++' else cli_choice, notes_order, st.session_state['cart'], cli_choice, new_cli_name, new_cli_phone, client_dict)
 
                     lbl_b = "Finalizar Encomenda" 
                     force_order = col_act2.button(lbl_b, use_container_width=True, type="primary")

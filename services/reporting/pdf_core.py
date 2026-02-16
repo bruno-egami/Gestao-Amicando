@@ -14,19 +14,22 @@ class PDFReport(FPDF):
         self.add_page()
         
     def header(self):
-        # Logo (Try multiple formats)
         try:
-            # self.image('Logo amicando.png', x=10, y=8, w=33)
-            # Use smaller logo or text if not found
-             if self.orientation == 'P':
-                 self.set_font('Helvetica', 'B', 15)
-                 self.cell(0, 10, 'Atelier Amicando', 0, 1, 'C')
-             else:
-                 self.set_font('Helvetica', 'B', 15)
-                 self.cell(0, 10, 'Atelier Amicando', 0, 1, 'C')
+            # Logo (Try centered like receipt)
+            self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
         except Exception:
             pass
             
+        # Atelier Data
+        self.set_y(60)
+        self.set_font('Helvetica', 'B', 14)
+        self.cell(0, 6, 'Amicando Atelier de Cerâmicas', 0, 1, 'C')
+        self.set_font('Helvetica', '', 10)
+        self.cell(0, 5, 'Instagram: @amicandoatelier | WhatsApp: (54) 99912-1757', 0, 1, 'C')
+        self.cell(0, 5, 'Rua Alagoas, 45, sala 103, Bairro Humaitá', 0, 1, 'C')
+        self.cell(0, 5, 'Bento Gonçalves, Rio Grande do Sul', 0, 1, 'C')
+        
+        self.set_y(90)
         self.set_font('Helvetica', 'B', 12)
         self.cell(0, 10, self.report_title, 0, 1, 'C')
         self.ln(5)

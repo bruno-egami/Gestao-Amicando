@@ -107,6 +107,57 @@ def update_sale(conn, sale_id, updates):
     except Exception:
         raise
 
+def get_order_details_for_receipt(conn, order_id):
+    """
+    Fetches all sales associated with a specific order_id for receipt generation.
+    Returns a dict compatible with reports.generate_receipt_pdf.
+    """
+    # 1. Fetch sales
+    query = """
+        SELECT s.id, s.date, s.quantity, s.total_price, s.payment_method, s.salesperson, s.notes,
+               p.name as product_name, pv.variant_name, c.name as client_name, s.client_id,
+               p.base_price
+        FROM sales s
+        LEFT JOIN products p ON s.product_id = p.id
+        LEFT JOIN product_variants pv ON s.variant_id = pv.id
+        LEFT JOIN clients c ON s.client_id = c.id
+        WHERE s.order_id = ?
+    """
+    sales_df = pd.read_sql(query, conn, params=(order_id,))
+    
+    if sales_df.empty:
+        return None
+        
+    first = sales_df.iloc[0]
+    
+    # 2. Structure Data
+    receipt_data = {
+        "id": order_id,
+        "date": pd.to_datetime(first['date']),
+        "client_name": first['client_name'] if pd.notna(first['client_name']) else "Desconhecido",
+        "salesperson": first['salesperson'],
+        "payment_method": first['payment_method'],
+        "total": sales_df['total_price'].sum(),
+        "notes": first['notes'] if pd.notna(first['notes']) else "",
+        "items": []
+    }
+    
+    # 3. Add Items
+    for _, row in sales_df.iterrows():
+        p_name = row['product_name']
+        if pd.notna(row['variant_name']):
+            p_name += f" ({row['variant_name']})"
+            
+        receipt_data['items'].append({
+            "product_id": "N/A", # Not strictly needed for PDF
+            "name": p_name,
+            "qty": row['quantity'],
+            "price": row['total_price'] / row['quantity'] if row['quantity'] > 0 else 0,
+            "total": row['total_price']
+        })
+        
+    return receipt_data
+
 def delete_sale(conn, sale_id, restore_stock=True):
     """
     Deletes a sale and optionally restores stock (including kits).

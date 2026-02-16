@@ -14,14 +14,19 @@ from database import safe_transaction
 
 logger = get_logger(__name__)
 
+import ast
+
 def get_wip_items(conn, stage=None):
     """
-    Fetches WIP items with product, client, and order details.
+    Fetches WIP items with product, client, order details, image and variant.
     """
     query = """
-        SELECT w.*, p.name as product_name, p.category as product_category, p.image_paths, c.name as client_name, co.date_due, co.id as real_order_id
+        SELECT w.*, p.name as product_name, p.category as product_category, p.image_paths, 
+               c.name as client_name, co.date_due, co.id as real_order_id,
+               pv.variant_name
         FROM production_wip w
         JOIN products p ON w.product_id = p.id
+        LEFT JOIN product_variants pv ON w.variant_id = pv.id
         LEFT JOIN commission_orders co ON w.order_id = co.id
         LEFT JOIN clients c ON co.client_id = c.id
     """
@@ -32,7 +37,23 @@ def get_wip_items(conn, stage=None):
     
     # Sort by priority first, then date
     query += " ORDER BY w.priority DESC, w.start_date, co.date_due"
-    return pd.read_sql(query, conn, params=params)
+    df = pd.read_sql(query, conn, params=params)
+    
+    # Parse images for thumbnail
+    if not df.empty:
+        def get_thumb(paths_str):
+            try:
+                if not paths_str: return None
+                p = ast.literal_eval(paths_str)
+                if p and len(p) > 0: return p[0]
+                return None
+            except:
+                return None
+        df['thumb_path'] = df['image_paths'].apply(get_thumb)
+    else:
+        df['thumb_path'] = None
+        
+    return df
 
 def start_production(conn, product_id, quantity, start_date, notes=None, variant_id=None):
     """
@@ -127,6 +148,22 @@ def move_stage(conn, item_id, current_stage, next_stage, qty_move, total_qty, se
         logger.error(f"Erro ao mover estágio: {e}")
         raise
 
+def _safe_int(val):
+    if pd.isna(val): return None
+    if isinstance(val, int): return val
+    if isinstance(val, float): return int(val)
+    if isinstance(val, bytes):
+        # Handle bytes (e.g. b'\x01' -> 1)
+        # Try converting from bytes to int
+        try:
+            return int.from_bytes(val, "little")
+        except:
+            pass
+    try:
+        return int(val)
+    except:
+        return None
+
 def finalize_production(conn, item, qty, inc_stock, user_id=None, username='WIP'):
     """
     Completes production, updates final stock, handles material deduction for 'others',
@@ -137,10 +174,10 @@ def finalize_production(conn, item, qty, inc_stock, user_id=None, username='WIP'
             cursor = conn.cursor()
             # item is a dict/row from WIP
             item_id = item['id']
-            product_id = int(item['product_id'])
-            variant_id = int(item['variant_id']) if pd.notna(item['variant_id']) else None
-            order_id = int(item['real_order_id']) if pd.notna(item['real_order_id']) else None
-            order_item_id = int(item['order_item_id']) if pd.notna(item['order_item_id']) else None
+            product_id = _safe_int(item['product_id'])
+            variant_id = _safe_int(item['variant_id'])
+            order_id = _safe_int(item['real_order_id'])
+            order_item_id = _safe_int(item.get('order_item_id'))
 
             logger.info(f"Finalizing production: WIP#{item_id}, Product#{product_id}, qty={qty}, inc_stock={inc_stock}")
 

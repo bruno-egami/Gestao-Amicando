@@ -62,6 +62,39 @@ def render_sales_history(conn, client_opts):
                             },
                             hide_index=True, key="grouped_sales_editor"
                         )
+                        
+                        # --- Receipt Download Section ---
+                        st.divider()
+                        st.caption("📄 Emitir Recibo de Venda Antiga")
+                        
+                        # Filter Valid Order IDs (exclude 'None' or empty)
+                        valid_orders = grouped[grouped['order_id'].notna() & (grouped['order_id'] != '')]['order_id'].unique()
+                        
+                        if len(valid_orders) > 0:
+                            c_rec1, c_rec2 = st.columns([3, 1])
+                            sel_order_rec = c_rec1.selectbox("Selecione o Pedido para Recibo", valid_orders, key="hist_rec_sel")
+                            
+                            if c_rec2.button("Gerar Recibo", key="hist_rec_btn"):
+                                try:
+                                    # Get Data
+                                    rec_data = order_service.get_order_details_for_receipt(conn, sel_order_rec)
+                                    
+                                    if rec_data:
+                                        import services.reporting as reports
+                                        pdf_bytes = reports.generate_receipt_pdf(rec_data)
+                                        
+                                        c_rec2.download_button(
+                                            label="⬇️ Baixar PDF",
+                                            data=pdf_bytes,
+                                            file_name=f"Recibo_{sel_order_rec}.pdf",
+                                            mime="application/pdf"
+                                        )
+                                    else:
+                                        st.warning("Dados do pedido não encontrados ou incompletos.")
+                                except Exception as e:
+                                    st.error(f"Erro ao gerar recibo: {e}")
+                        else:
+                            st.info("Nenhum pedido com ID válido encontrado nesta visualização.")
                     else:
                         sales_view['remove'] = False 
                         edited_sales = st.data_editor(

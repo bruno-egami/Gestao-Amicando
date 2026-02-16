@@ -31,7 +31,7 @@ def show_success_summary(item_name, qty, total, movement_type="Lançamento"):
         st.rerun()
 
 @st.dialog("📝 Editar Mensalidade")
-def edit_tuition_dialog(conn, tid, sname, month, current_val, current_count=None, current_unit_price=None):
+def edit_tuition_dialog(tid, sname, month, current_val, current_count=None, current_unit_price=None):
     st.markdown(f"**Aluno:** {sname} | **Ref:** {month}")
     
     # Mode: Automatic vs Manual
@@ -50,25 +50,23 @@ def edit_tuition_dialog(conn, tid, sname, month, current_val, current_count=None
     final_val = manual_total if manual_total != current_val else msg_total
     
     if st.button("Salvar Alterações", type="primary", use_container_width=True):
-        student_service.update_tuition(conn, tid, final_val)
-        admin_utils.show_feedback_dialog("Valor da mensalidade atualizado!", level="success")
-        st.rerun()
+        try:
+            with database.db_session() as conn:
+                student_service.update_tuition(conn, tid, final_val)
+                st.success("Valor da mensalidade atualizado!")
+                if st.button("Concluir", type="primary", use_container_width=True):
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao salvar: {e}")
 
 @st.dialog("📝 Editar Consumo")
-def edit_consumption_dialog(conn, cid, sname, current_desc, current_val, current_qty=1.0, current_markup=1.0):
+def edit_consumption_dialog(cid, sname, current_desc, current_val, current_qty=1.0, current_markup=1.0):
     st.markdown(f"**Aluno:** {sname}")
     
     st.caption("Ajuste a quantidade e markup. O valor total será recalculado.")
     
     col_d1, col_d2 = st.columns([3, 1])
     new_desc = col_d1.text_input("Descrição", value=current_desc)
-    
-    # We infer unit price from current values if possible, otherwise use total/qty
-    # unit_price = current_val / (current_qty * current_markup) if current_qty and current_markup else current_val
-    # But for simplicity in UI, we can just let user edit Qty and Markup, and either:
-    # 1. Ask for Unit Price
-    # 2. Back-calculate Unit Price
-    # Let's try to back-calculate to show it, but allow editing Total directly too.
     
     try:
         inferred_unit_price = float(current_val) / (float(current_qty) * float(current_markup)) if float(current_qty) > 0 and float(current_markup) > 0 else 0.0
@@ -79,23 +77,23 @@ def edit_consumption_dialog(conn, cid, sname, current_desc, current_val, current
     new_qty = c1.number_input("Quantidade", value=float(current_qty), min_value=0.01, step=1.0)
     new_markup = c2.number_input("Markup", value=float(current_markup), min_value=1.0, step=0.1)
     
-    # Show inferred unit price (read-only or editable?) 
-    # If we want to recalculate Total, we need a base Unit Price. 
-    # Since we don't pass unit_price explicitly yet, let's allow user to adjust Total manually if calculation is off.
-    
     calc_total = inferred_unit_price * new_qty * new_markup
     
     c3.metric("Valor Unit. (Est.)", f"R$ {inferred_unit_price:.2f}")
     
     st.divider()
     
-    # Allow manual override of total because back-calculation might be slightly off due to rounding
     new_val = st.number_input("Valor Total (R$)", value=float(calc_total), min_value=0.0, step=0.5, help="Calculado: Qtd * Markup * Unitário. Ajuste se necessário.")
     
     if st.button("Salvar Alterações", type="primary", use_container_width=True):
-        student_service.update_consumption(conn, cid, new_desc, new_qty, new_markup, new_val)
-        admin_utils.show_feedback_dialog("Consumo atualizado!", level="success")
-        st.rerun()
+        try:
+            with database.db_session() as conn:
+                student_service.update_consumption(conn, cid, new_desc, new_qty, new_markup, new_val)
+                st.success("Consumo atualizado!")
+                if st.button("Concluir", type="primary", use_container_width=True):
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao salvar: {e}")
 
 # ==============================================================================
 # MAIN VIEWS
@@ -356,7 +354,6 @@ def render_financial_management(conn):
                                 ec1, ec2 = st.columns(2)
                                 if ec1.button("📝 Editar", key=f"edit_t_{t['id']}"):
                                     edit_tuition_dialog(
-                                        conn, 
                                         t['id'], 
                                         sname, 
                                         t['month_year'], 
@@ -384,7 +381,6 @@ def render_financial_management(conn):
                                 ec1, ec2 = st.columns(2)
                                 if ec1.button("📝 Editar", key=f"edit_c_{c['id']}"):
                                     edit_consumption_dialog(
-                                        conn, 
                                         c['id'], 
                                         sname, 
                                         c['description'], 

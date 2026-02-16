@@ -9,14 +9,24 @@ logger = get_logger(__name__)
 class PDFReceipt(FPDF):
     def header(self):
         try:
-            self.image('logo-amicando-RGB.jpg', x=10, y=8, w=33)
+            # Center the logo (A4 width is 210mm, logo w=40, x=85 centers it)
+            self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
         except:
             pass
+            
+        # Atelier Data (Full)
+        self.set_y(60) # Below logo
+        self.set_font('Helvetica', 'B', 14)
+        self.cell(0, 6, 'Amicando Atelier de Cerâmicas', 0, 1, 'C')
+        self.set_font('Helvetica', '', 10)
+        self.cell(0, 5, 'Instagram: @amicandoatelier | WhatsApp: (54) 99912-1757', 0, 1, 'C')
+        self.cell(0, 5, 'Rua Alagoas, 45, sala 103, Bairro Humaitá', 0, 1, 'C')
+        self.cell(0, 5, 'Bento Gonçalves, Rio Grande do Sul', 0, 1, 'C')
+        
+        self.set_y(90) # Move down for title
         self.set_font('Helvetica', 'B', 14)
         self.cell(0, 10, 'Comprovante de Venda', 0, 1, 'C')
-        self.set_font('Helvetica', '', 10)
-        self.cell(0, 5, 'Atelier Amicando', 0, 1, 'C')
-        self.ln(10)
+        self.ln(5)
 
     def footer(self):
         self.set_y(-15)
@@ -26,18 +36,6 @@ class PDFReceipt(FPDF):
 def generate_receipt_pdf(data):
     """
     Generates a PDF receipt for a generic sale.
-    data format expected:
-    {
-        "id": str,
-        "type": "Venda" or "Encomenda",
-        "date": str,
-        "date_due": str (optional),
-        "client_name": str,
-        "items": [ {"name": str, "qty": int, "price": float} ],
-        "total": float,
-        "discount": float,
-        "deposit": float (optional)
-    }
     """
     pdf = PDFReceipt()
     pdf.add_page()
@@ -45,49 +43,102 @@ def generate_receipt_pdf(data):
     # Info
     pdf.set_font('Helvetica', '', 11)
     pdf.cell(0, 6, f"ID: {data['id']}", 0, 1)
-    pdf.cell(0, 6, f"Data: {data['date']}", 0, 1)
+    pdf.cell(0, 6, f"Data: {data['date'].strftime('%d/%m/%Y') if hasattr(data['date'], 'strftime') else str(data['date'])[:10]}", 0, 1)
     pdf.cell(0, 6, f"Cliente: {data['client_name']}", 0, 1)
     pdf.ln(5)
     
     # Items
+    # Widths similar to statement if possible, but we don't need date/status col
+    # Statement: Date(30), Desc(85), Qty(15), Value(30), Status(30) -> Total 190
+    # Recipe: Item(100), Qty(20), Unit(35), Total(35) -> Total 190
+    
+    w_item = 100
+    w_qty = 20
+    w_unit = 35
+    w_total = 35
+    
+    pdf.set_fill_color(240, 240, 240)
     pdf.set_font('Helvetica', 'B', 10)
-    pdf.cell(80, 8, "Item", 1)
-    pdf.cell(20, 8, "Qtd", 1, 0, 'C')
-    pdf.cell(30, 8, "V. Unit", 1, 0, 'R')
-    pdf.cell(30, 8, "Total", 1, 1, 'R')
+    pdf.cell(w_item, 8, "Item", 1, 0, 'C', True)
+    pdf.cell(w_qty, 8, "Qtd", 1, 0, 'C', True)
+    pdf.cell(w_unit, 8, "V. Unit", 1, 0, 'C', True)
+    pdf.cell(w_total, 8, "Total", 1, 1, 'C', True)
     
     pdf.set_font('Helvetica', '', 10)
     for item in data['items']:
-        pdf.cell(80, 8, item['name'], 1)
-        pdf.cell(20, 8, str(item['qty']), 1, 0, 'C')
-        pdf.cell(30, 8, f"R$ {item['price']:.2f}", 1, 0, 'R')
-        pdf.cell(30, 8, f"R$ {item['qty']*item['price']:.2f}", 1, 1, 'R')
+        name = item['name']
         
-    pdf.ln(5)
+        # Calculate Row Height based on name wrapping
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
+        
+        # Check text height
+        pdf.multi_cell(w_item, 6, name, border=0, align='L')
+        h_text = pdf.get_y() - y_start
+        
+        # Minimum row height 8
+        h_row = max(h_text, 8)
+        
+        # Page break check? (Simple version: if y + h > page_break, add page... but FPDF handles automatic? 
+        # FPDF auto page break might mess up x_start/y_start logic if we effectively draw twice or draw out of order.
+        # Ideally check space left.
+        if (y_start + h_row) > (pdf.h - 15): # 15 margin
+            pdf.add_page()
+            # Re-print header? FPDF does header() auto.
+            # Reset X, Y
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+            # Recalc text height (should be same)
+            pdf.multi_cell(w_item, 6, name, border=0, align='L')
+            h_text = pdf.get_y() - y_start
+            h_row = max(h_text, 8)
+        
+        # Draw Name Cell Border/Content
+        pdf.set_xy(x_start, y_start)
+        pdf.multi_cell(w_item, 6, name, border=0, align='L') # Draw text
+        pdf.set_xy(x_start, y_start)
+        pdf.rect(x_start, y_start, w_item, h_row) # Draw border
+        
+        # Draw Other Cells
+        pdf.set_xy(x_start + w_item, y_start)
+        pdf.cell(w_qty, h_row, str(item['qty']), 1, 0, 'C')
+        
+        pdf.set_xy(x_start + w_item + w_qty, y_start)
+        pdf.cell(w_unit, h_row, f"R$ {item['price']:.2f}", 1, 0, 'R')
+        
+        pdf.set_xy(x_start + w_item + w_qty + w_unit, y_start)
+        pdf.cell(w_total, h_row, f"R$ {item['total']:.2f}", 1, 0, 'R')
+        
+        # Move cursor to next line
+        pdf.set_xy(x_start, y_start + h_row)
     
     # Totals
+    # Align with table: Label (100+20+35 = 155), Value (35)
+    w_label = 155
+    w_val = 35
+    
     pdf.set_font('Helvetica', '', 11)
-    pdf.cell(130, 6, "Total:", 0, 0, 'R')
-    pdf.cell(30, 6, f"R$ {data['total']:.2f}", 0, 1, 'R')
+    pdf.cell(w_label, 6, "Total:", 0, 0, 'R')
+    pdf.cell(w_val, 6, f"R$ {data['total']:.2f}", 0, 1, 'R')
     
     if data.get('discount', 0) > 0:
-        pdf.cell(130, 6, "Desconto:", 0, 0, 'R')
-        pdf.cell(30, 6, f"- R$ {data['discount']:.2f}", 0, 1, 'R')
+        pdf.cell(w_label, 6, "Desconto:", 0, 0, 'R')
+        pdf.cell(w_val, 6, f"- R$ {data['discount']:.2f}", 0, 1, 'R')
         
     if data.get('deposit', 0) > 0:
-        pdf.cell(130, 6, "Sinal Pago:", 0, 0, 'R')
-        pdf.cell(30, 6, f"R$ {data['deposit']:.2f}", 0, 1, 'R')
+        pdf.cell(w_label, 6, "Sinal Pago:", 0, 0, 'R')
+        pdf.cell(w_val, 6, f"R$ {data['deposit']:.2f}", 0, 1, 'R')
         
         remaining = data['total'] - data['deposit']
         pdf.set_font('Helvetica', 'B', 11)
-        pdf.cell(130, 6, "Restante:", 0, 0, 'R')
-        pdf.cell(30, 6, f"R$ {remaining:.2f}", 0, 1, 'R')
+        pdf.cell(w_label, 6, "Restante:", 0, 0, 'R')
+        pdf.cell(w_val, 6, f"R$ {remaining:.2f}", 0, 1, 'R')
     else:
         # Final Total
         final = data['total'] - data.get('discount', 0)
         pdf.set_font('Helvetica', 'B', 11)
-        pdf.cell(130, 6, "Total Final:", 0, 0, 'R')
-        pdf.cell(30, 6, f"R$ {final:.2f}", 0, 1, 'R')
+        pdf.cell(w_label, 6, "Total Final:", 0, 0, 'R')
+        pdf.cell(w_val, 6, f"R$ {final:.2f}", 0, 1, 'R')
 
     return io.BytesIO(pdf.output(dest='S'))
 

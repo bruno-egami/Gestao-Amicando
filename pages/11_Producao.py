@@ -86,6 +86,10 @@ with database.db_session() as conn:
             
                 for _, item in items.iterrows():
                     with st.container(border=True):
+                        # Image
+                        if item.get('thumb_path') and os.path.exists(item['thumb_path']):
+                            st.image(item['thumb_path'], use_container_width=True)
+
                         # Card Header
                         title_prefix = ""
                         days_msg = ""
@@ -100,6 +104,11 @@ with database.db_session() as conn:
                             logger.warning(f"Error calculating days in stage for item {item.get('id')}: {e}")
 
                         st.markdown(f"**{title_prefix}{item['product_name']}**{days_msg}")
+                        
+                        # Variant Display
+                        if item.get('variant_name'):
+                             st.caption(f"🎨 {item['variant_name']}")
+                             
                         st.markdown(f"📦 {item['quantity']} un")
                     
                         # Context Badge (Order vs Stock)
