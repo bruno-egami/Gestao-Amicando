@@ -10,6 +10,7 @@ import sqlite3
 import audit
 from datetime import datetime
 from utils.logging_config import get_logger, log_exception
+from database import safe_transaction
 
 logger = get_logger(__name__)
 
@@ -445,13 +446,13 @@ def deduct_production_materials_central(cursor, product_id, quantity, filter_typ
 
 def create_variant(conn, product_id, name, stock, price_adder, material_id=None, material_quantity=0.0):
     """Creates a new variant for a product."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            INSERT INTO product_variants (product_id, variant_name, stock_quantity, price_adder, material_id, material_quantity)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (int(product_id), name, int(stock), float(price_adder), material_id if material_id else None, float(material_quantity)))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO product_variants (product_id, variant_name, stock_quantity, price_adder, material_id, material_quantity)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (int(product_id), name, int(stock), float(price_adder), material_id if material_id else None, float(material_quantity)))
         return True
     except sqlite3.Error as e:
         log_exception(logger, f"Error creating variant for product {product_id}", e)
@@ -475,10 +476,10 @@ def get_variant_by_id(conn, variant_id):
 
 def update_variant_stock(conn, variant_id, new_quantity):
     """Updates the stock quantity of a variant."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE product_variants SET stock_quantity = ? WHERE id = ?", (int(new_quantity), int(variant_id)))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("UPDATE product_variants SET stock_quantity = ? WHERE id = ?", (int(new_quantity), int(variant_id)))
         return True
     except sqlite3.Error as e:
         log_exception(logger, f"Error updating variant stock {variant_id}", e)
@@ -486,10 +487,10 @@ def update_variant_stock(conn, variant_id, new_quantity):
 
 def delete_variant(conn, variant_id):
     """Deletes a variant."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM product_variants WHERE id = ?", (int(variant_id),))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM product_variants WHERE id = ?", (int(variant_id),))
         return True
     except sqlite3.Error as e:
         log_exception(logger, f"Error deleting variant {variant_id}", e)
@@ -497,10 +498,10 @@ def delete_variant(conn, variant_id):
 
 def update_variant_price(conn, variant_id, new_adder):
     """Updates the price adder of a variant."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE product_variants SET price_adder = ? WHERE id = ?", (float(new_adder), int(variant_id)))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("UPDATE product_variants SET price_adder = ? WHERE id = ?", (float(new_adder), int(variant_id)))
         return True
     except sqlite3.Error as e:
         log_exception(logger, f"Error updating variant price {variant_id}", e)
@@ -522,26 +523,25 @@ def get_category_list(conn):
 
 def add_category(conn, name):
     """Inserts a new category. Returns True on success."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (name,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO product_categories (name) VALUES (?)", (name,))
         return True
     except sqlite3.Error as e:
-        conn.rollback()
+        # Rollback is automatic with safe_transaction
         log_exception(logger, f"Error adding category '{name}'", e)
         raise
 
 
 def delete_category(conn, name):
     """Deletes a category by name."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM product_categories WHERE name=?", (name,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM product_categories WHERE name=?", (name,))
         return True
     except sqlite3.Error as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting category '{name}'", e)
         raise
 
@@ -552,18 +552,17 @@ def delete_category(conn, name):
 
 def create_product(conn, name, description, category, markup):
     """Creates a new product. Returns the new product ID."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
-            VALUES (?, ?, ?, ?, '[]', 0, 0)
-        """, (name, description, category, markup))
-        new_id = cursor.lastrowid
-        audit.log_action(conn, 'CREATE', 'products', new_id, None, {'name': name}, commit=False)
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
+                VALUES (?, ?, ?, ?, '[]', 0, 0)
+            """, (name, description, category, markup))
+            new_id = cursor.lastrowid
+            audit.log_action(conn, 'CREATE', 'products', new_id, None, {'name': name}, commit=False)
         return new_id
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error creating product '{name}'", e)
         raise
 
@@ -574,61 +573,60 @@ def duplicate_product(conn, source_product_id, source_product):
     source_product: dict/Series with name, description, category, markup.
     Returns the new product ID.
     """
-    cursor = conn.cursor()
     try:
+        new_prod_id = None
         new_name = f"{source_product['name']} (Cópia)"
-        cursor.execute("""
-            INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
-            VALUES (?, ?, ?, ?, '[]', 0, 0)
-        """, (new_name, source_product['description'], source_product['category'], source_product['markup']))
-        conn.commit()
-        new_prod_id = cursor.lastrowid
-
-        # Copy recipes
-        recipes = pd.read_sql("""
-            SELECT material_id, quantity FROM product_recipes WHERE product_id = ?
-        """, conn, params=(source_product_id,))
-        for _, rec in recipes.iterrows():
+        
+        with safe_transaction(conn):
+            cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO product_recipes (product_id, material_id, quantity)
-                VALUES (?, ?, ?)
-            """, (new_prod_id, rec['material_id'], rec['quantity']))
+                INSERT INTO products (name, description, category, markup, image_paths, stock_quantity, base_price)
+                VALUES (?, ?, ?, ?, '[]', 0, 0)
+            """, (new_name, source_product['description'], source_product['category'], source_product['markup']))
+            new_prod_id = cursor.lastrowid
 
-        # Copy kit components
-        kits = pd.read_sql("""
-            SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id = ?
-        """, conn, params=(source_product_id,))
-        for _, kit in kits.iterrows():
-            cursor.execute("""
-                INSERT INTO product_kits (parent_product_id, child_product_id, quantity)
-                VALUES (?, ?, ?)
-            """, (new_prod_id, kit['child_product_id'], kit['quantity']))
+            # Copy recipes
+            recipes = pd.read_sql("""
+                SELECT material_id, quantity FROM product_recipes WHERE product_id = ?
+            """, conn, params=(source_product_id,))
+            for _, rec in recipes.iterrows():
+                cursor.execute("""
+                    INSERT INTO product_recipes (product_id, material_id, quantity)
+                    VALUES (?, ?, ?)
+                """, (new_prod_id, rec['material_id'], rec['quantity']))
 
-        conn.commit()
+            # Copy kit components
+            kits = pd.read_sql("""
+                SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id = ?
+            """, conn, params=(source_product_id,))
+            for _, kit in kits.iterrows():
+                cursor.execute("""
+                    INSERT INTO product_kits (parent_product_id, child_product_id, quantity)
+                    VALUES (?, ?, ?)
+                """, (new_prod_id, kit['child_product_id'], kit['quantity']))
 
-        audit.log_action(conn, 'CREATE', 'products', new_prod_id, None, {
-            'name': new_name, 'duplicated_from': source_product_id
-        })
+            audit.log_action(conn, 'CREATE', 'products', new_prod_id, None, {
+                'name': new_name, 'duplicated_from': source_product_id
+            }, commit=False)
+            
         return new_prod_id
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error duplicating product {source_product_id}", e)
         raise
 
 
 def delete_product(conn, product_id, product_name):
     """Deletes a product and its associated recipes, kits, and variants."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM product_recipes WHERE product_id=?", (product_id,))
-        cursor.execute("DELETE FROM product_kits WHERE parent_product_id=?", (product_id,))
-        cursor.execute("DELETE FROM product_variants WHERE product_id=?", (product_id,))
-        cursor.execute("DELETE FROM products WHERE id=?", (product_id,))
-        audit.log_action(conn, 'DELETE', 'products', product_id, {'name': product_name}, None, commit=False)
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM product_recipes WHERE product_id=?", (product_id,))
+            cursor.execute("DELETE FROM product_kits WHERE parent_product_id=?", (product_id,))
+            cursor.execute("DELETE FROM product_variants WHERE product_id=?", (product_id,))
+            cursor.execute("DELETE FROM products WHERE id=?", (product_id,))
+            audit.log_action(conn, 'DELETE', 'products', product_id, {'name': product_name}, None, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting product {product_id}", e)
         raise
 
@@ -636,35 +634,33 @@ def delete_product(conn, product_id, product_name):
 def update_product_details(conn, product_id, name, category, description, stock_quantity,
                            old_name=None, old_stock=None):
     """Updates product details (name, category, description, stock)."""
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            "UPDATE products SET name=?, category=?, description=?, stock_quantity=? WHERE id=?",
-            (name, category, description, stock_quantity, product_id)
-        )
-        audit.log_action(conn, 'UPDATE', 'products', product_id,
-                         {'name': old_name, 'stock': old_stock},
-                         {'name': name, 'stock': stock_quantity}, commit=False)
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE products SET name=?, category=?, description=?, stock_quantity=? WHERE id=?",
+                (name, category, description, stock_quantity, product_id)
+            )
+            audit.log_action(conn, 'UPDATE', 'products', product_id,
+                             {'name': old_name, 'stock': old_stock},
+                             {'name': name, 'stock': stock_quantity}, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error updating product {product_id}", e)
         raise
 
 
 def log_stock_adjustment(conn, product_id, product_name, diff, user_id=None, username='system'):
     """Logs a manual stock adjustment in production_history."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (datetime.now().isoformat(), product_id, product_name, diff, user_id, username, "Ajuste Manual"))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (datetime.now().isoformat(), product_id, product_name, diff, user_id, username, "Ajuste Manual"))
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error logging stock adjustment for product {product_id}", e)
         raise
 
@@ -697,16 +693,15 @@ def get_materials_for_variants(conn):
 
 def add_recipe_item(conn, product_id, material_id, quantity):
     """Adds a material to a product's recipe."""
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO product_recipes (product_id, material_id, quantity) VALUES (?, ?, ?)",
-            (product_id, material_id, quantity)
-        )
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO product_recipes (product_id, material_id, quantity) VALUES (?, ?, ?)",
+                (product_id, material_id, quantity)
+            )
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error adding recipe item to product {product_id}", e)
         raise
 
@@ -723,13 +718,12 @@ def get_product_recipe(conn, product_id):
 
 def delete_recipe_item(conn, recipe_id):
     """Removes a recipe item by its ID."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM product_recipes WHERE id=?", (recipe_id,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM product_recipes WHERE id=?", (recipe_id,))
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting recipe item {recipe_id}", e)
         raise
 
@@ -748,16 +742,15 @@ def get_products_for_kit(conn, exclude_product_id):
 
 def add_kit_item(conn, parent_product_id, child_product_id, quantity):
     """Adds a component to a kit."""
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO product_kits (parent_product_id, child_product_id, quantity) VALUES (?, ?, ?)",
-            (parent_product_id, child_product_id, quantity)
-        )
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO product_kits (parent_product_id, child_product_id, quantity) VALUES (?, ?, ?)",
+                (parent_product_id, child_product_id, quantity)
+            )
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error adding kit component to product {parent_product_id}", e)
         raise
 
@@ -774,13 +767,12 @@ def get_kit_items_detail(conn, parent_product_id):
 
 def delete_kit_item(conn, kit_id):
     """Removes a kit component by its ID."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM product_kits WHERE id=?", (kit_id,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM product_kits WHERE id=?", (kit_id,))
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting kit item {kit_id}", e)
         raise
 
@@ -791,13 +783,12 @@ def delete_kit_item(conn, kit_id):
 
 def update_product_images(conn, product_id, image_paths_list):
     """Updates the image_paths for a product."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(image_paths_list), product_id))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("UPDATE products SET image_paths=? WHERE id=?", (str(image_paths_list), product_id))
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error updating product images {product_id}", e)
         raise
 
@@ -824,14 +815,13 @@ def get_kit_component_images(conn, parent_product_id):
 
 def save_product_pricing(conn, product_id, markup, base_price):
     """Saves markup and base_price for a product."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE products SET markup = ?, base_price = ? WHERE id = ?",
-                       (markup, base_price, product_id))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("UPDATE products SET markup = ?, base_price = ? WHERE id = ?",
+                           (markup, base_price, product_id))
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error saving pricing for product {product_id}", e)
         raise
 
@@ -892,60 +882,60 @@ def produce_from_kit(conn, product_id, product_name, quantity, target_variant_id
     Assembles a kit: deducts component stock, adds product/variant stock, logs history.
     Returns True on success.
     """
-    cursor = conn.cursor()
     try:
-        kits = pd.read_sql(
-            "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?",
-            conn, params=(product_id,)
-        )
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            kits = pd.read_sql(
+                "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?",
+                conn, params=(product_id,)
+            )
 
-        # Check availability
-        for _, kit_item in kits.iterrows():
-            needed_total = kit_item['quantity'] * quantity
-            child_stock = pd.read_sql(
-                "SELECT stock_quantity, name FROM products WHERE id=?",
-                conn, params=(kit_item['child_product_id'],)
-            ).iloc[0]
-            if child_stock['stock_quantity'] < needed_total:
-                raise ValueError(
-                    f"Estoque insuficiente: {child_stock['name']} "
-                    f"(Precisa {needed_total}, Tem {child_stock['stock_quantity']})"
+            # Check availability
+            for _, kit_item in kits.iterrows():
+                needed_total = kit_item['quantity'] * quantity
+                child_stock = pd.read_sql(
+                    "SELECT stock_quantity, name FROM products WHERE id=?",
+                    conn, params=(kit_item['child_product_id'],)
+                ).iloc[0]
+                if child_stock['stock_quantity'] < needed_total:
+                    raise ValueError(
+                        f"Estoque insuficiente: {child_stock['name']} "
+                        f"(Precisa {needed_total}, Tem {child_stock['stock_quantity']})"
+                    )
+
+            # Deduct components
+            for _, kit_item in kits.iterrows():
+                needed_total = kit_item['quantity'] * quantity
+                cursor.execute(
+                    "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
+                    (needed_total, kit_item['child_product_id'])
                 )
 
-        # Deduct components
-        for _, kit_item in kits.iterrows():
-            needed_total = kit_item['quantity'] * quantity
-            cursor.execute(
-                "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
-                (needed_total, kit_item['child_product_id'])
-            )
+            # Add stock to target
+            if target_variant_id:
+                cursor.execute(
+                    "UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?",
+                    (quantity, int(target_variant_id))
+                )
+            else:
+                cursor.execute(
+                    "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
+                    (quantity, product_id)
+                )
 
-        # Add stock to target
-        if target_variant_id:
+            # Log history
+            notes = 'Produção de Kit (Variação)' if target_variant_id else 'Produção de Kit'
             cursor.execute(
-                "UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?",
-                (quantity, int(target_variant_id))
+                "INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), product_id, f"{product_name} ({prod_target_label})",
+                 quantity, user_id, username, notes)
             )
-        else:
-            cursor.execute(
-                "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
-                (quantity, product_id)
-            )
-
-        # Log history
-        notes = 'Produção de Kit (Variação)' if target_variant_id else 'Produção de Kit'
-        cursor.execute(
-            "INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now().isoformat(), product_id, f"{product_name} ({prod_target_label})",
-             quantity, user_id, username, notes)
-        )
-        conn.commit()
         return True
     except ValueError:
+        # Rollback handled by safe_transaction
         raise
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error producing kit {product_id}", e)
         raise
 
@@ -959,71 +949,71 @@ def produce_regular(conn, product_id, product_name, quantity, recipe_df, extra_m
     extra_mat_needed: list of dicts with id, needed.
     Returns True on success.
     """
-    cursor = conn.cursor()
     try:
-        # Deduct base recipe (physical materials only)
-        for _, mat in recipe_df.iterrows():
-            is_skip = (
-                (mat['unit'] == 'fornada') or
-                (str(mat['name']).startswith('Queima')) or
-                (mat['type'] == 'Queima') or
-                (mat['type'] == 'Mão de Obra') or
-                (mat['unit'] == 'hora (mão de obra)')
-            )
-            if not is_skip:
-                needed_py = float(mat['needed'])
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            
+            # Deduct base recipe (physical materials only)
+            for _, mat in recipe_df.iterrows():
+                is_skip = (
+                    (mat['unit'] == 'fornada') or
+                    (str(mat['name']).startswith('Queima')) or
+                    (mat['type'] == 'Queima') or
+                    (mat['type'] == 'Mão de Obra') or
+                    (mat['unit'] == 'hora (mão de obra)')
+                )
+                if not is_skip:
+                    needed_py = float(mat['needed'])
+                    cursor.execute(
+                        "UPDATE materials SET stock_level = stock_level - ? WHERE id = ?",
+                        (needed_py, int(mat['id']))
+                    )
+                    cursor.execute(
+                        "INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (int(mat['id']), datetime.now().isoformat(), 'SAIDA', needed_py,
+                         f"Prod: {quantity}x {product_name}", user_id)
+                    )
+
+            # Deduct variant-specific materials
+            for em in extra_mat_needed:
+                needed_py = float(em['needed'])
                 cursor.execute(
                     "UPDATE materials SET stock_level = stock_level - ? WHERE id = ?",
-                    (needed_py, int(mat['id']))
+                    (needed_py, int(em['id']))
                 )
                 cursor.execute(
                     "INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (int(mat['id']), datetime.now().isoformat(), 'SAIDA', needed_py,
-                     f"Prod: {quantity}x {product_name}", user_id)
+                    (int(em['id']), datetime.now().isoformat(), 'SAIDA', needed_py,
+                     f"Prod Var: {quantity}x {product_name}", user_id)
                 )
 
-        # Deduct variant-specific materials
-        for em in extra_mat_needed:
-            needed_py = float(em['needed'])
-            cursor.execute(
-                "UPDATE materials SET stock_level = stock_level - ? WHERE id = ?",
-                (needed_py, int(em['id']))
-            )
-            cursor.execute(
-                "INSERT INTO inventory_transactions (material_id, date, type, quantity, notes, user_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (int(em['id']), datetime.now().isoformat(), 'SAIDA', needed_py,
-                 f"Prod Var: {quantity}x {product_name}", user_id)
-            )
+            # Update stock
+            if target_variant_id:
+                cursor.execute(
+                    "UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?",
+                    (quantity, int(target_variant_id))
+                )
+            else:
+                cursor.execute(
+                    "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
+                    (quantity, product_id)
+                )
 
-        # Update stock
-        if target_variant_id:
+            # Log production history
             cursor.execute(
-                "UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id = ?",
-                (quantity, int(target_variant_id))
+                "INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), product_id, f"{product_name} ({prod_target_label})",
+                 quantity, user_id, username, 'Produção Geral')
             )
-        else:
-            cursor.execute(
-                "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
-                (quantity, product_id)
-            )
-
-        # Log production history
-        cursor.execute(
-            "INSERT INTO production_history (timestamp, product_id, product_name, quantity, user_id, username, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now().isoformat(), product_id, f"{product_name} ({prod_target_label})",
-             quantity, user_id, username, 'Produção Geral')
-        )
-        hist_id = cursor.lastrowid
-        audit.log_action(conn, 'CREATE', 'production_history', hist_id, None,
-                         {'product_id': product_id, 'quantity': quantity, 'variant_id': target_variant_id},
-                         commit=False)
-        conn.commit()
+            hist_id = cursor.lastrowid
+            audit.log_action(conn, 'CREATE', 'production_history', hist_id, None,
+                             {'product_id': product_id, 'quantity': quantity, 'variant_id': target_variant_id},
+                             commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error in regular production for product {product_id}", e)
         raise
 
@@ -1053,32 +1043,30 @@ def get_production_history_filtered(conn, query, params):
 
 def update_production_history_qty(conn, history_id, new_qty, old_qty, product_id):
     """Updates production history quantity and adjusts product stock accordingly."""
-    cursor = conn.cursor()
     try:
-        diff = new_qty - old_qty
-        cursor.execute("UPDATE production_history SET quantity = ? WHERE id = ?", (new_qty, history_id))
-        cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (diff, product_id))
-        conn.commit()
-        audit.log_action(conn, 'UPDATE', 'production_history', history_id,
-                         {'quantity': old_qty}, {'quantity': new_qty})
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            diff = new_qty - old_qty
+            cursor.execute("UPDATE production_history SET quantity = ? WHERE id = ?", (new_qty, history_id))
+            cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (diff, product_id))
+            audit.log_action(conn, 'UPDATE', 'production_history', history_id,
+                             {'quantity': old_qty}, {'quantity': new_qty}, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error updating production history {history_id}", e)
         raise
 
 
 def delete_production_history(conn, history_id, product_id, quantity, product_name):
     """Deletes a production history record and reverts product stock."""
-    cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (quantity, product_id))
-        cursor.execute("DELETE FROM production_history WHERE id = ?", (history_id,))
-        conn.commit()
-        audit.log_action(conn, 'DELETE', 'production_history', history_id,
-                         {'product_name': product_name, 'quantity': quantity}, None)
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (quantity, product_id))
+            cursor.execute("DELETE FROM production_history WHERE id = ?", (history_id,))
+            audit.log_action(conn, 'DELETE', 'production_history', history_id,
+                             {'product_name': product_name, 'quantity': quantity}, None, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting production history {history_id}", e)
         raise

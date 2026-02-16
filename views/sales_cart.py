@@ -7,6 +7,7 @@ import auth
 import services.reporting as reports
 from services import product_service, order_service, sales_service
 from utils.logging_config import get_logger
+from database import safe_transaction
 
 logger = get_logger(__name__)
 
@@ -499,70 +500,72 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                              valid_client = False
                             
                         if valid_client:
-                             cursor = conn.cursor()
-                             final_notes_B = f"Encomenda Total. Obs: {notes_order}"
-                             if deposit_val > 0:
-                                 final_notes_B += f"\n\nSinal: R$ {deposit_val:.2f}"
+                             try:
+                                with safe_transaction(conn):
+                                    cursor = conn.cursor()
+                                    final_notes_B = f"Encomenda Total. Obs: {notes_order}"
+                                    if deposit_val > 0:
+                                        final_notes_B += f"\n\nSinal: R$ {deposit_val:.2f}"
 
-                             new_ord_id = order_service.create_commission_order(cursor, {
-                                 'client_id': final_client_id,
-                                 'date_created': date.today(),
-                                 'date_due': d_comm,
-                                 'status': "Pendente",
-                                 'total_price': 0, 
-                                 'notes': final_notes_B,
-                                 'deposit_amount': deposit_val
-                             })
-                             
-                             order_items = []
-                             for ca in cart_analysis:
-                                item = ca['item']
-                                q_full = item['qty']
-                                q_res = ca['can_sell'] if r_stock_chk else 0
-                                
-                                order_items.append({
-                                    'product_id': int(item['product_id']),
-                                    'qty': q_full,
-                                    'qty_from_stock': q_res,
-                                    'unit_price': item['base_price'],
-                                    'variant_id': item.get('variant_id')
-                                })
-                                
-                                if q_res > 0:
-                                    logs = product_service.deduct_stock(cursor, int(item['product_id']), q_res, variant_id=item.get('variant_id'))
-                                    for log in logs: st.toast(log, icon="📉")
+                                    new_ord_id = order_service.create_commission_order(cursor, {
+                                        'client_id': final_client_id,
+                                        'date_created': date.today(),
+                                        'date_due': d_comm,
+                                        'status': "Pendente",
+                                        'total_price': 0, 
+                                        'notes': final_notes_B,
+                                        'deposit_amount': deposit_val
+                                    })
+                                    
+                                    order_items = []
+                                    for ca in cart_analysis:
+                                        item = ca['item']
+                                        q_full = item['qty']
+                                        q_res = ca['can_sell'] if r_stock_chk else 0
+                                        
+                                        order_items.append({
+                                            'product_id': int(item['product_id']),
+                                            'qty': q_full,
+                                            'qty_from_stock': q_res,
+                                            'unit_price': item['base_price'],
+                                            'variant_id': item.get('variant_id')
+                                        })
+                                        
+                                        if q_res > 0:
+                                            logs = product_service.deduct_stock(cursor, int(item['product_id']), q_res, variant_id=item.get('variant_id'))
+                                            for log in logs: st.toast(log, icon="📉")
 
-                             order_service.add_commission_items(cursor, new_ord_id, order_items)
-                             
-                             if deposit_val > 0:
-                                  order_service.create_sale(cursor, {
-                                      "date": date.today(),
-                                      "product_id": None,
-                                      "quantity": 1,
-                                      "total_price": deposit_val,
-                                      "status": "Finalizada",
-                                      "client_id": final_client_id,
-                                      "discount": 0,
-                                      "payment_method": pay_method_choice,
-                                      "notes": f"Sinal Enc #{new_ord_id}",
-                                      "salesperson": salesperson_choice,
-                                      "order_id": f"ENC-{new_ord_id}"
-                                  })
+                                    order_service.add_commission_items(cursor, new_ord_id, order_items)
+                                    
+                                    if deposit_val > 0:
+                                        order_service.create_sale(cursor, {
+                                            "date": date.today(),
+                                            "product_id": None,
+                                            "quantity": 1,
+                                            "total_price": deposit_val,
+                                            "status": "Finalizada",
+                                            "client_id": final_client_id,
+                                            "discount": 0,
+                                            "payment_method": pay_method_choice,
+                                            "notes": f"Sinal Enc #{new_ord_id}",
+                                            "salesperson": salesperson_choice,
+                                            "order_id": f"ENC-{new_ord_id}"
+                                        })
 
-                             conn.commit()
-                             
-                             st.session_state['last_order'] = {
-                                "id": f"ENC-{new_ord_id}",
-                                "client": final_client_name,
-                                "salesperson": salesperson_choice,
-                                "payment_method": "Encomenda", 
-                                "notes": final_notes_B,
-                                "deposit": deposit_val,
-                                "date_due": d_comm.strftime("%d/%m/%Y"),
-                                "items": st.session_state['cart'], 
-                                "total": cart_total, 
-                             }
-                             st.session_state['cart'] = []
-                             st.rerun()
+                                    st.session_state['last_order'] = {
+                                        "id": f"ENC-{new_ord_id}",
+                                        "client": final_client_name,
+                                        "salesperson": salesperson_choice,
+                                        "payment_method": "Encomenda", 
+                                        "notes": final_notes_B,
+                                        "deposit": deposit_val,
+                                        "date_due": d_comm.strftime("%d/%m/%Y"),
+                                        "items": st.session_state['cart'], 
+                                        "total": cart_total, 
+                                    }
+                                    st.session_state['cart'] = []
+                                    st.rerun()
+                             except Exception as e:
+                                 admin_utils.show_feedback_dialog(f"Erro ao finalizar encomenda: {e}", level="error")
     else:
         st.info("Seu carrinho está vazio.")

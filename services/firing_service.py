@@ -8,6 +8,7 @@ import audit
 import os
 from datetime import datetime
 from utils.logging_config import get_logger, log_exception
+from database import safe_transaction
 
 logger = get_logger(__name__)
 
@@ -60,74 +61,80 @@ def create_firing(conn, firing_data):
     Creates a new firing record.
     firing_data: date, type, power_consumption_kwh, cost, kiln_id, observation, image_path
     """
-    cursor = conn.cursor()
+def create_firing(conn, firing_data):
+    """
+    Creates a new firing record.
+    firing_data: date, type, power_consumption_kwh, cost, kiln_id, observation, image_path
+    """
     try:
-        cursor.execute("""
-            INSERT INTO firings (date, type, power_consumption_kwh, cost, kiln_id, observation, image_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            firing_data['date'], 
-            firing_data['type'], 
-            firing_data['power_consumption_kwh'], 
-            firing_data['cost'], 
-            firing_data['kiln_id'], 
-            firing_data['observation'], 
-            firing_data['image_path']
-        ))
-        new_id = cursor.lastrowid
-        conn.commit()
-        
-        audit.log_action(conn, 'CREATE', 'firings', new_id, None,
-            {'date': str(firing_data['date']), 'type': firing_data['type'], 
-             'cost': firing_data['cost'], 'consumption': firing_data['power_consumption_kwh']})
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO firings (date, type, power_consumption_kwh, cost, kiln_id, observation, image_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                firing_data['date'], 
+                firing_data['type'], 
+                firing_data['power_consumption_kwh'], 
+                firing_data['cost'], 
+                firing_data['kiln_id'], 
+                firing_data['observation'], 
+                firing_data['image_path']
+            ))
+            new_id = cursor.lastrowid
+            
+            audit.log_action(conn, 'CREATE', 'firings', new_id, None,
+                {'date': str(firing_data['date']), 'type': firing_data['type'], 
+                 'cost': firing_data['cost'], 'consumption': firing_data['power_consumption_kwh']}, commit=False)
         return new_id
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error creating firing", e)
         raise
 
 def update_firing(conn, firing_id, firing_data):
     """Updates an existing firing record."""
-    cursor = conn.cursor()
+def update_firing(conn, firing_id, firing_data):
+    """Updates an existing firing record."""
     try:
-        cursor.execute("""
-            UPDATE firings 
-            SET date=?, type=?, power_consumption_kwh=?, cost=?, kiln_id=?, observation=?, image_path=?
-            WHERE id=?
-        """, (
-            firing_data['date'], 
-            firing_data['type'], 
-            firing_data['power_consumption_kwh'], 
-            firing_data['cost'], 
-            firing_data['kiln_id'], 
-            firing_data['observation'], 
-            firing_data['image_path'],
-            firing_id
-        ))
-        conn.commit()
-        
-        audit.log_action(conn, 'UPDATE', 'firings', firing_id, None, firing_data) # Simplified audit
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE firings 
+                SET date=?, type=?, power_consumption_kwh=?, cost=?, kiln_id=?, observation=?, image_path=?
+                WHERE id=?
+            """, (
+                firing_data['date'], 
+                firing_data['type'], 
+                firing_data['power_consumption_kwh'], 
+                firing_data['cost'], 
+                firing_data['kiln_id'], 
+                firing_data['observation'], 
+                firing_data['image_path'],
+                firing_id
+            ))
+            
+            audit.log_action(conn, 'UPDATE', 'firings', firing_id, None, firing_data, commit=False) # Simplified audit
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error updating firing {firing_id}", e)
         raise
 
 def delete_firing(conn, firing_id):
     """Deletes a firing record."""
-    cursor = conn.cursor()
+def delete_firing(conn, firing_id):
+    """Deletes a firing record."""
     try:
         # Get old data for audit
         old = get_firing_by_id(conn, firing_id)
         old_data = old.to_dict() if old is not None else {}
         
-        cursor.execute("DELETE FROM firings WHERE id=?", (firing_id,))
-        conn.commit()
-        
-        audit.log_action(conn, 'DELETE', 'firings', firing_id, old_data, None)
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM firings WHERE id=?", (firing_id,))
+            
+            audit.log_action(conn, 'DELETE', 'firings', firing_id, old_data, None, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting firing {firing_id}", e)
         raise
 
@@ -175,69 +182,75 @@ def create_maintenance(conn, maint_data):
     Creates a new maintenance record.
     maint_data: kiln_id, date, category, description, observation, image_path
     """
-    cursor = conn.cursor()
+def create_maintenance(conn, maint_data):
+    """
+    Creates a new maintenance record.
+    maint_data: kiln_id, date, category, description, observation, image_path
+    """
     try:
-        cursor.execute("""
-            INSERT INTO kiln_maintenance (kiln_id, date, category, description, observation, image_path)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            maint_data['kiln_id'],
-            maint_data['date'],
-            maint_data['category'],
-            maint_data['description'],
-            maint_data['observation'],
-            maint_data['image_path']
-        ))
-        new_id = cursor.lastrowid
-        conn.commit()
-        
-        audit.log_action(conn, 'CREATE', 'kiln_maintenance', new_id, None,
-            {'date': str(maint_data['date']), 'category': maint_data['category'], 'description': maint_data['description']})
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO kiln_maintenance (kiln_id, date, category, description, observation, image_path)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                maint_data['kiln_id'],
+                maint_data['date'],
+                maint_data['category'],
+                maint_data['description'],
+                maint_data['observation'],
+                maint_data['image_path']
+            ))
+            new_id = cursor.lastrowid
+            
+            audit.log_action(conn, 'CREATE', 'kiln_maintenance', new_id, None,
+                {'date': str(maint_data['date']), 'category': maint_data['category'], 'description': maint_data['description']}, commit=False)
         return new_id
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error creating maintenance", e)
         raise
 
 def update_maintenance(conn, maint_id, maint_data):
     """Updates an existing maintenance record."""
-    cursor = conn.cursor()
+def update_maintenance(conn, maint_id, maint_data):
+    """Updates an existing maintenance record."""
     try:
-        cursor.execute("""
-            UPDATE kiln_maintenance 
-            SET kiln_id=?, date=?, category=?, description=?, observation=?, image_path=?
-            WHERE id=?
-        """, (
-            maint_data['kiln_id'],
-            maint_data['date'],
-            maint_data['category'],
-            maint_data['description'],
-            maint_data['observation'],
-            maint_data['image_path'],
-            maint_id
-        ))
-        conn.commit()
-        
-        audit.log_action(conn, 'UPDATE', 'kiln_maintenance', maint_id, None, maint_data)
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE kiln_maintenance 
+                SET kiln_id=?, date=?, category=?, description=?, observation=?, image_path=?
+                WHERE id=?
+            """, (
+                maint_data['kiln_id'],
+                maint_data['date'],
+                maint_data['category'],
+                maint_data['description'],
+                maint_data['observation'],
+                maint_data['image_path'],
+                maint_id
+            ))
+            
+            audit.log_action(conn, 'UPDATE', 'kiln_maintenance', maint_id, None, maint_data, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error updating maintenance {maint_id}", e)
         raise
 
 def delete_maintenance(conn, maint_id):
     """Deletes a maintenance record."""
-    cursor = conn.cursor()
+def delete_maintenance(conn, maint_id):
+    """Deletes a maintenance record."""
     try:
         old = get_maintenance_by_id(conn, maint_id)
         old_data = old.to_dict() if old is not None else {}
         
-        cursor.execute("DELETE FROM kiln_maintenance WHERE id=?", (maint_id,))
-        conn.commit()
-        
-        audit.log_action(conn, 'DELETE', 'kiln_maintenance', maint_id, old_data, None)
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM kiln_maintenance WHERE id=?", (maint_id,))
+            
+            audit.log_action(conn, 'DELETE', 'kiln_maintenance', maint_id, old_data, None, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting maintenance {maint_id}", e)
         raise

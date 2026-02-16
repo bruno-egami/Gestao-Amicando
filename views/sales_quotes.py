@@ -5,6 +5,7 @@ from datetime import date
 import services.reporting as reports
 import admin_utils
 from services import order_service
+from database import safe_transaction
 
 def render_quotes_management(conn):
     # FILTERS
@@ -53,15 +54,19 @@ def render_quotes_management(conn):
             if quote['status'] == 'Pendente':
                 if c2.button("✅ Aprovar", key=f"qa_{quote['id']}"):
                     # Convert
-                    order_service.create_commission_order(conn.cursor(), {
-                        'client_id': quote['client_id'], 'total_price': quote['total_price'],
-                        'status': 'Pendente', 'date_created': date.today(), 'date_due': date.today(),
-                        'notes': f"Via ORC-{quote['id']}", 'deposit_amount': 0
-                    })
-                    # Update status
-                    conn.cursor().execute("UPDATE quotes SET status='Aprovado' WHERE id=?", (quote['id'],))
-                    conn.commit()
-                    st.rerun()
+                    try:
+                        with safe_transaction(conn):
+                            cursor = conn.cursor()
+                            order_service.create_commission_order(cursor, {
+                                'client_id': quote['client_id'], 'total_price': quote['total_price'],
+                                'status': 'Pendente', 'date_created': date.today(), 'date_due': date.today(),
+                                'notes': f"Via ORC-{quote['id']}", 'deposit_amount': 0
+                            })
+                            # Update status
+                            cursor.execute("UPDATE quotes SET status='Aprovado' WHERE id=?", (quote['id'],))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao aprovar orçamento: {e}")
                 
                 if c3.button("🗑️ Excluir", key=f"qd_{quote['id']}"):
                     order_service.delete_quote(conn, quote['id'])

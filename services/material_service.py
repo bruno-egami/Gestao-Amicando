@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 import logging
 from typing import List, Optional, Tuple, Dict, Any
+from database import safe_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +54,14 @@ def create_material(conn: sqlite3.Connection, name: str, category_id: Optional[i
     Creates a new material. Returns the new material ID.
     """
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO materials (name, category_id, supplier_id, price_per_unit, unit, stock_level, min_stock_alert, type, image_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO materials (name, category_id, supplier_id, price_per_unit, unit, stock_level, min_stock_alert, type, image_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path))
         return cursor.lastrowid
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao criar material '{name}': {e}")
         raise
 
@@ -72,16 +72,15 @@ def update_material(conn: sqlite3.Connection, material_id: int, name: str, categ
     Updates an existing material.
     """
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE materials
-            SET name = ?, category_id = ?, supplier_id = ?, price_per_unit = ?, unit = ?, 
-                stock_level = ?, min_stock_alert = ?, type = ?, image_path = ?
-            WHERE id = ?
-        """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path, material_id))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE materials
+                SET name = ?, category_id = ?, supplier_id = ?, price_per_unit = ?, unit = ?, 
+                    stock_level = ?, min_stock_alert = ?, type = ?, image_path = ?
+                WHERE id = ?
+            """, (name, category_id, supplier_id, price, unit, stock_level, min_stock, material_type, image_path, material_id))
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao atualizar material {material_id}: {e}")
         raise
 
@@ -90,11 +89,10 @@ def delete_material(conn: sqlite3.Connection, material_id: int) -> None:
     Deletes a material.
     """
     try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao deletar material {material_id}: {e}")
         raise
 
@@ -104,25 +102,23 @@ def update_stock(conn: sqlite3.Connection, material_id: int, quantity_change: fl
     Positive quantity_change adds to stock, negative removes.
     """
     try:
-        cursor = conn.cursor()
-        
-        # Get current stock
-        current_stock = cursor.execute("SELECT stock_level FROM materials WHERE id = ?", (material_id,)).fetchone()[0]
-        new_stock = round(current_stock + quantity_change, 4)
-        
-        # Update stock
-        cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
-        
-        # Log movement
-        movement_type = "Entrada" if quantity_change > 0 else "Saída"
-        cursor.execute("""
-            INSERT INTO stock_movements (material_id, quantity, movement_type, date, reason)
-            VALUES (?, ?, ?, DATE('now'), ?)
-        """, (material_id, abs(quantity_change), movement_type, reason))
-        
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            
+            # Get current stock
+            current_stock = cursor.execute("SELECT stock_level FROM materials WHERE id = ?", (material_id,)).fetchone()[0]
+            new_stock = round(current_stock + quantity_change, 4)
+            
+            # Update stock
+            cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
+            
+            # Log movement
+            movement_type = "Entrada" if quantity_change > 0 else "Saída"
+            cursor.execute("""
+                INSERT INTO stock_movements (material_id, quantity, movement_type, date, reason)
+                VALUES (?, ?, ?, DATE('now'), ?)
+            """, (material_id, abs(quantity_change), movement_type, reason))
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao atualizar estoque (material_id={material_id}): {e}")
         raise
 
@@ -139,12 +135,11 @@ def create_category(conn: sqlite3.Connection, name: str) -> int:
     Creates a new category.
     """
     try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (name,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (name,))
         return cursor.lastrowid
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao criar categoria '{name}': {e}")
         raise
 
@@ -223,19 +218,25 @@ def get_global_history(conn: sqlite3.Connection, filters: Dict[str, Any]) -> pd.
     return pd.read_sql(query, conn, params=params)
 
 def log_transaction(conn: sqlite3.Connection, material_id: int, date_str: str, trans_type: str, 
-                   quantity: float, cost: float, notes: str, user_id: int) -> None:
+                   quantity: float, cost: float, notes: str, user_id: int, commit: bool = True) -> None:
     """
     Logs a manual inventory transaction.
     """
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (material_id, date_str, trans_type, quantity, cost, notes, user_id))
-        conn.commit()
+        if commit:
+            with safe_transaction(conn):
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (material_id, date_str, trans_type, quantity, cost, notes, user_id))
+        else:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (material_id, date_str, trans_type, quantity, cost, notes, user_id))
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao registrar transação para material {material_id}: {e}")
         raise
 
@@ -246,40 +247,39 @@ def register_entry(conn: sqlite3.Connection, material_id: int, quantity: float, 
     Returns (new_stock, new_avg_price).
     """
     try:
-        cursor = conn.cursor()
-        
-        # Get current state
-        mat = get_material_by_id(conn, material_id)
-        if not mat:
-            raise ValueError("Material not found")
+        with safe_transaction(conn):
+            cursor = conn.cursor()
             
-        current_stock = mat['stock_level']
-        current_price = mat['price_per_unit']
-        
-        # Calculate new weighted average price
-        purchase_price_per_unit = total_cost / quantity if quantity > 0 else 0
-        
-        if current_stock > 0:
-            new_avg_price = ((current_stock * current_price) + total_cost) / (current_stock + quantity)
-        else:
-            new_avg_price = purchase_price_per_unit
+            # Get current state
+            mat = get_material_by_id(conn, material_id)
+            if not mat:
+                raise ValueError("Material not found")
+                
+            current_stock = mat['stock_level']
+            current_price = mat['price_per_unit']
             
-        new_stock = round(current_stock + quantity, 4)
-        
-        # Log Transaction
-        log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'ENTRADA', quantity, total_cost, notes, user_id)
-        
-        # Update Material
-        cursor.execute("""
-            UPDATE materials 
-            SET stock_level = ?, price_per_unit = ? 
-            WHERE id = ?
-        """, (new_stock, new_avg_price, material_id))
-        conn.commit()
-        
+            # Calculate new weighted average price
+            purchase_price_per_unit = total_cost / quantity if quantity > 0 else 0
+            
+            if current_stock > 0:
+                new_avg_price = ((current_stock * current_price) + total_cost) / (current_stock + quantity)
+            else:
+                new_avg_price = purchase_price_per_unit
+                
+            new_stock = round(current_stock + quantity, 4)
+            
+            # Log Transaction (No commit)
+            log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'ENTRADA', quantity, total_cost, notes, user_id, commit=False)
+            
+            # Update Material
+            cursor.execute("""
+                UPDATE materials 
+                SET stock_level = ?, price_per_unit = ? 
+                WHERE id = ?
+            """, (new_stock, new_avg_price, material_id))
+            
         return new_stock, new_avg_price
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao registrar entrada (material_id={material_id}): {e}")
         raise
 
@@ -289,24 +289,23 @@ def register_exit(conn: sqlite3.Connection, material_id: int, quantity: float, n
     Returns new_stock.
     """
     try:
-        cursor = conn.cursor()
-        
-        mat = get_material_by_id(conn, material_id)
-        if not mat:
-            raise ValueError("Material not found")
+        with safe_transaction(conn):
+            cursor = conn.cursor()
             
-        current_stock = mat['stock_level']
-        new_stock = round(current_stock - quantity, 4)
-        
-        # Log Transaction
-        log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'SAIDA', quantity, 0.0, notes, user_id)
-        
-        # Update Material
-        cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
-        conn.commit()
-        
+            mat = get_material_by_id(conn, material_id)
+            if not mat:
+                raise ValueError("Material not found")
+                
+            current_stock = mat['stock_level']
+            new_stock = round(current_stock - quantity, 4)
+            
+            # Log Transaction (No commit)
+            log_transaction(conn, material_id, pd.Timestamp.now().isoformat(), 'SAIDA', quantity, 0.0, notes, user_id, commit=False)
+            
+            # Update Material
+            cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
+            
         return new_stock
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao registrar saída (material_id={material_id}): {e}")
         raise

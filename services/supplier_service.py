@@ -3,6 +3,7 @@ import pandas as pd
 import logging
 from typing import Optional, Dict, Any, List
 import audit
+from database import safe_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -18,21 +19,20 @@ def get_supplier_by_id(conn: sqlite3.Connection, supplier_id: int) -> Optional[D
 def create_supplier(conn: sqlite3.Connection, name: str, contact: str, phone: str, email: str, notes: str) -> int:
     """Creates a new supplier."""
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO suppliers (name, contact, phone, email, notes) 
-            VALUES (?, ?, ?, ?, ?)
-        """, (name, contact, phone, email, notes))
-        conn.commit()
-        supplier_id = cursor.lastrowid
-        
-        # Log action
-        audit.log_action(conn, 'CREATE', 'suppliers', supplier_id, None, 
-                         {'name': name, 'contact': contact, 'phone': phone, 'email': email, 'notes': notes})
-        
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO suppliers (name, contact, phone, email, notes) 
+                VALUES (?, ?, ?, ?, ?)
+            """, (name, contact, phone, email, notes))
+            supplier_id = cursor.lastrowid
+            
+            # Log action
+            audit.log_action(conn, 'CREATE', 'suppliers', supplier_id, None, 
+                            {'name': name, 'contact': contact, 'phone': phone, 'email': email, 'notes': notes}, commit=False)
+            
         return supplier_id
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error creating supplier '{name}': {e}")
         raise
 
@@ -44,20 +44,19 @@ def update_supplier(conn: sqlite3.Connection, supplier_id: int, name: str, conta
         if not old_data:
             raise ValueError(f"Supplier {supplier_id} not found")
             
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE suppliers 
-            SET name=?, contact=?, phone=?, email=?, notes=? 
-            WHERE id=?
-        """, (name, contact, phone, email, notes, supplier_id))
-        conn.commit()
-        
-        # Log action
-        new_data = {'name': name, 'contact': contact, 'phone': phone, 'email': email, 'notes': notes}
-        audit.log_action(conn, 'UPDATE', 'suppliers', supplier_id, old_data, new_data)
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE suppliers 
+                SET name=?, contact=?, phone=?, email=?, notes=? 
+                WHERE id=?
+            """, (name, contact, phone, email, notes, supplier_id))
+            
+            # Log action
+            new_data = {'name': name, 'contact': contact, 'phone': phone, 'email': email, 'notes': notes}
+            audit.log_action(conn, 'UPDATE', 'suppliers', supplier_id, old_data, new_data, commit=False)
         
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error updating supplier {supplier_id}: {e}")
         raise
 
@@ -69,14 +68,13 @@ def delete_supplier(conn: sqlite3.Connection, supplier_id: int) -> None:
         if not old_data:
             raise ValueError(f"Supplier {supplier_id} not found")
             
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM suppliers WHERE id=?", (supplier_id,))
-        conn.commit()
-        
-        # Log action
-        audit.log_action(conn, 'DELETE', 'suppliers', supplier_id, old_data, None)
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM suppliers WHERE id=?", (supplier_id,))
+            
+            # Log action
+            audit.log_action(conn, 'DELETE', 'suppliers', supplier_id, old_data, None, commit=False)
         
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error deleting supplier {supplier_id}: {e}")
         raise

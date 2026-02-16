@@ -10,6 +10,7 @@ import sqlite3
 from datetime import datetime
 import secrets
 from utils.logging_config import get_logger
+from database import safe_transaction
 
 logger = get_logger(__name__)
 
@@ -110,12 +111,12 @@ def login(conn, username: str, password: str) -> dict | None:
         
         if verify_password(password, user['password_hash']):
             # Update last login
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE users SET last_login=? WHERE id=?", 
-                (datetime.now().isoformat(), user['id'])
-            )
-            conn.commit()
+            with safe_transaction(conn):
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE users SET last_login=? WHERE id=?", 
+                    (datetime.now().isoformat(), user['id'])
+                )
             
             return {
                 'id': int(user['id']),
@@ -213,12 +214,12 @@ def require_login(conn):
                                 st.error("A senha deve ter pelo menos 6 caracteres.")
                             else:
                                 try:
-                                    cursor = conn.cursor()
-                                    new_hash = hash_password(new_pass)
-                                    # Ensure ID is native int
-                                    uid = int(user['id'])
-                                    cursor.execute("UPDATE users SET password_hash=?, force_password_change=0 WHERE id=?", (new_hash, uid))
-                                    conn.commit()
+                                    with safe_transaction(conn):
+                                        cursor = conn.cursor()
+                                        new_hash = hash_password(new_pass)
+                                        # Ensure ID is native int
+                                        uid = int(user['id'])
+                                        cursor.execute("UPDATE users SET password_hash=?, force_password_change=0 WHERE id=?", (new_hash, uid))
                                     
                                     # Update session
                                     user['force_password_change'] = 0
@@ -336,11 +337,12 @@ def create_default_admin(conn):
             logger.warning(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{random_password}'. CHANGE IMMEDIATELLY!")
             print(f"⚠️ ADMIN USER CREATED. Username: 'admin', Password: '{random_password}'") # Print to console as well for visibility
 
-            cursor.execute("""
-                INSERT INTO users (username, password_hash, role, name, active, created_at, force_password_change)
-                VALUES (?, ?, ?, ?, 1, ?, 1)
-            """, ('admin', hash_password(random_password), 'admin', 'Administrador', datetime.now().isoformat()))
-            conn.commit()
+            with safe_transaction(conn):
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO users (username, password_hash, role, name, active, created_at, force_password_change)
+                    VALUES (?, ?, ?, ?, 1, ?, 1)
+                """, ('admin', hash_password(random_password), 'admin', 'Administrador', datetime.now().isoformat()))
             return True
         except sqlite3.IntegrityError:
             # Race condition or user already exists despite count=0 check

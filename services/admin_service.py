@@ -8,6 +8,7 @@ import auth
 import audit
 from datetime import datetime
 from utils.logging_config import get_logger, log_exception
+from database import safe_transaction
 
 logger = get_logger(__name__)
 
@@ -26,60 +27,62 @@ def get_user_by_id(conn, user_id):
 
 def create_user(conn, username, password, name, role, active):
     """Creates a new user."""
-    cursor = conn.cursor()
+def create_user(conn, username, password, name, role, active):
+    """Creates a new user."""
     try:
         # Check if username exists
         existing = pd.read_sql("SELECT id FROM users WHERE username=?", conn, params=(username,))
         if not existing.empty:
             raise ValueError("Este usuário já existe.")
 
-        cursor.execute("""
-            INSERT INTO users (username, password_hash, role, name, active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (username, auth.hash_password(password), role, name, int(active), datetime.now().isoformat()))
-        new_id = cursor.lastrowid
-        conn.commit()
-        
-        audit.log_action(conn, 'CREATE', 'users', new_id, None,
-            {'username': username, 'name': name, 'role': role})
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO users (username, password_hash, role, name, active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (username, auth.hash_password(password), role, name, int(active), datetime.now().isoformat()))
+            new_id = cursor.lastrowid
+            
+            audit.log_action(conn, 'CREATE', 'users', new_id, None,
+                {'username': username, 'name': name, 'role': role}, commit=False)
         return new_id
     except ValueError:
         raise
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error creating user {username}", e)
         raise
 
 def update_user(conn, user_id, name, role, active, password=None):
     """Updates an existing user."""
-    cursor = conn.cursor()
+def update_user(conn, user_id, name, role, active, password=None):
+    """Updates an existing user."""
     try:
         # Get old data for audit
         old_user = get_user_by_id(conn, user_id)
         old_data = old_user.to_dict() if old_user is not None else {}
         
-        if password:
-            cursor.execute("""
-                UPDATE users SET name=?, role=?, active=?, password_hash=? WHERE id=?
-            """, (name, role, int(active), auth.hash_password(password), user_id))
-        else:
-            cursor.execute("""
-                UPDATE users SET name=?, role=?, active=? WHERE id=?
-            """, (name, role, int(active), user_id))
-            
-        conn.commit()
-        
-        audit.log_action(conn, 'UPDATE', 'users', user_id, old_data,
-            {'name': name, 'role': role, 'active': active})
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            if password:
+                cursor.execute("""
+                    UPDATE users SET name=?, role=?, active=?, password_hash=? WHERE id=?
+                """, (name, role, int(active), auth.hash_password(password), user_id))
+            else:
+                cursor.execute("""
+                    UPDATE users SET name=?, role=?, active=? WHERE id=?
+                """, (name, role, int(active), user_id))
+                
+            audit.log_action(conn, 'UPDATE', 'users', user_id, old_data,
+                {'name': name, 'role': role, 'active': active}, commit=False)
         return True
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error updating user {user_id}", e)
         raise
 
 def delete_user(conn, user_id):
     """Deletes a user."""
-    cursor = conn.cursor()
+def delete_user(conn, user_id):
+    """Deletes a user."""
     try:
         # Check if it's the last admin
         user = get_user_by_id(conn, user_id)
@@ -89,15 +92,16 @@ def delete_user(conn, user_id):
                 raise ValueError("Não é possível excluir o último administrador.")
         
         old_data = user.to_dict() if user is not None else {}
-        cursor.execute("DELETE FROM users WHERE id=?", (user_id,))
-        conn.commit()
         
-        audit.log_action(conn, 'DELETE', 'users', user_id, old_data, None)
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM users WHERE id=?", (user_id,))
+            
+            audit.log_action(conn, 'DELETE', 'users', user_id, old_data, None, commit=False)
         return True
     except ValueError:
         raise
     except Exception as e:
-        conn.rollback()
         log_exception(logger, f"Error deleting user {user_id}", e)
         raise
 

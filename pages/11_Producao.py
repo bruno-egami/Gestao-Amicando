@@ -124,8 +124,7 @@ with database.db_session() as conn:
                         if p_cols[0].button("Subir 🔼", key=f"pri_up_{item['id']}", use_container_width=True):
                             try:
                                 with database.db_session() as conn_write:
-                                    cursor_write = conn_write.cursor()
-                                    production_service.update_priority(cursor_write, item['id'], 1)
+                                    production_service.update_priority(conn_write, item['id'], 1)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Erro: {e}")
@@ -133,8 +132,7 @@ with database.db_session() as conn:
                         if p_cols[1].button("Baixar 🔽", key=f"pri_dn_{item['id']}", use_container_width=True):
                             try:
                                 with database.db_session() as conn_write:
-                                    cursor_write = conn_write.cursor()
-                                    production_service.update_priority(cursor_write, item['id'], -1)
+                                    production_service.update_priority(conn_write, item['id'], -1)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Erro: {e}")
@@ -187,13 +185,12 @@ with database.db_session() as conn:
                                 if st.button("Confirmar", key=f"go_{item['id']}", type="primary"):
                                     try:
                                         with database.db_session() as conn_write:
-                                            cursor_write = conn_write.cursor()
                                             # Get current user
                                             user = auth.get_current_user()
                                             u_id = user['id'] if user else None
                                             u_name = user['username'] if user else 'Unknown'
                                         
-                                            production_service.move_stage(cursor_write, conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze, user_id=u_id, username=u_name)
+                                            production_service.move_stage(conn_write, item['id'], stage, next_s, qty, int(item['quantity']), selected_variant_id, deduct_glaze, user_id=u_id, username=u_name)
                                         st.toast(f"Movido para {next_s}!", icon="✅")
                                         st.rerun()
                                     except Exception as e:
@@ -210,13 +207,12 @@ with database.db_session() as conn:
                                 if st.button("Finalizar", key=f"end_{item['id']}", type="primary"):
                                     try:
                                         with database.db_session() as conn_write:
-                                            cursor_write = conn_write.cursor()
                                             # Get current user
                                             user = auth.get_current_user()
                                             u_id = user['id'] if user else None
                                             u_name = user['username'] if user else 'Unknown'
 
-                                            production_service.finalize_production(cursor_write, item, qty, inc_stock, user_id=u_id, username=u_name)
+                                            production_service.finalize_production(conn_write, item, qty, inc_stock, user_id=u_id, username=u_name)
                                         admin_utils.show_feedback_dialog(f"Produção de {item['product_name']} finalizada!", level="success")
                                     except Exception as e:
                                         st.error(f"Erro: {e}")
@@ -231,8 +227,7 @@ with database.db_session() as conn:
                                 if st.button("Confirmar Quebra", key=f"loss_btn_{item['id']}", type="secondary"):
                                     try:
                                         with database.db_session() as conn_write:
-                                            cursor_write = conn_write.cursor()
-                                            replenished = production_service.register_loss(cursor_write, item, stage, qty_loss, reason_loss)
+                                            replenished = production_service.register_loss(conn_write, item, stage, qty_loss, reason_loss)
                                         if replenished:
                                             st.info(f"🔄 Um novo card de {qty_loss} peças foi criado em **Fila de Espera** para repor a quebra.")
                                         admin_utils.show_feedback_dialog(f"Registrado: {qty_loss} peças perdidas em {stage}.", level="warning")
@@ -279,8 +274,7 @@ with database.db_session() as conn:
                         if st.form_submit_button("Confirmar Produção", type="primary"):
                             try:
                                 with database.db_session() as conn_write:
-                                    cursor_write = conn_write.cursor()
-                                    production_service.start_production(cursor_write, pid, qty_new, start_dt.isoformat(), obs, vid)
+                                    production_service.start_production(conn_write, pid, qty_new, start_dt.isoformat(), obs, vid)
                                 st.toast(f"Produção iniciada: {qty_new} un de {product_row['name']}", icon="✅")
                                 st.rerun()
                             except Exception as e:

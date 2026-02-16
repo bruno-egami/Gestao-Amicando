@@ -48,3 +48,6 @@ logs/
 # Temporary
 tmp/
 temp/
+
+# Analysis
+analise/

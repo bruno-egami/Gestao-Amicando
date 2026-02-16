@@ -1,6 +1,7 @@
 import pandas as pd
 import sqlite3
 import logging
+from database import safe_transaction
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional, Tuple, Union
 import calendar
@@ -18,22 +19,20 @@ def get_expense_categories(conn: sqlite3.Connection) -> List[str]:
 def create_expense_category(conn: sqlite3.Connection, name: str) -> None:
     """Creates a new expense category."""
     try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (name,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO expense_categories (name) VALUES (?)", (name,))
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao criar categoria de despesa '{name}': {e}")
         raise
 
 def delete_expense_category(conn: sqlite3.Connection, name: str) -> None:
     """Deletes an expense category by name."""
     try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM expense_categories WHERE name=?", (name,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM expense_categories WHERE name=?", (name,))
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao deletar categoria de despesa '{name}': {e}")
         raise
 
@@ -94,23 +93,22 @@ def create_expense(conn: sqlite3.Connection, date_obj: date, description: str, a
                   qty_bought: float = 0.0) -> int:
     """Creates a new expense and optionally updates material stock."""
     try:
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO expenses (date, description, amount, category, supplier_id, linked_material_id) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (date_obj, description, amount, category, supplier_id, linked_material_id))
-        
-        new_id = cursor.lastrowid
-        
-        # Simple Stock Update Logic (mirrors original UI logic)
-        if linked_material_id and qty_bought > 0:
-            cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id = ?", (qty_bought, linked_material_id))
+        with safe_transaction(conn):
+            cursor = conn.cursor()
             
-        conn.commit()
+            cursor.execute("""
+                INSERT INTO expenses (date, description, amount, category, supplier_id, linked_material_id) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (date_obj, description, amount, category, supplier_id, linked_material_id))
+            
+            new_id = cursor.lastrowid
+            
+            # Simple Stock Update Logic (mirrors original UI logic)
+            if linked_material_id and qty_bought > 0:
+                cursor.execute("UPDATE materials SET stock_level = stock_level + ? WHERE id = ?", (qty_bought, linked_material_id))
+                
         return new_id
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao criar despesa '{description}': {e}")
         raise
 
@@ -121,16 +119,15 @@ def update_expense(conn: sqlite3.Connection, expense_id: int, date_obj: date, de
     old_data = get_expense_by_id(conn, expense_id)
     
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE expenses 
-            SET date=?, description=?, amount=?, category=?, supplier_id=? 
-            WHERE id=?
-        """, (date_obj, description, amount, category, supplier_id, expense_id))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE expenses 
+                SET date=?, description=?, amount=?, category=?, supplier_id=? 
+                WHERE id=?
+            """, (date_obj, description, amount, category, supplier_id, expense_id))
         return old_data
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao atualizar despesa {expense_id}: {e}")
         raise
 
@@ -139,12 +136,11 @@ def delete_expense(conn: sqlite3.Connection, expense_id: int) -> Dict[str, Any]:
     old_data = get_expense_by_id(conn, expense_id)
     
     try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
         return old_data
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao deletar despesa {expense_id}: {e}")
         raise
 
@@ -173,15 +169,14 @@ def get_fixed_cost_by_id(conn: sqlite3.Connection, fc_id: int) -> Dict[str, Any]
 def create_fixed_cost(conn: sqlite3.Connection, description: str, value: float, due_day: int, 
                      periodicity: str, category: str) -> int:
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO fixed_costs (description, value, due_day, periodicity, category) 
-            VALUES (?, ?, ?, ?, ?)
-        """, (description, value, due_day, periodicity, category))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO fixed_costs (description, value, due_day, periodicity, category) 
+                VALUES (?, ?, ?, ?, ?)
+            """, (description, value, due_day, periodicity, category))
         return cursor.lastrowid
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao criar custo fixo '{description}': {e}")
         raise
 
@@ -190,16 +185,15 @@ def update_fixed_cost(conn: sqlite3.Connection, fc_id: int, description: str, va
     old_data = get_fixed_cost_by_id(conn, fc_id)
     
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE fixed_costs 
-            SET description=?, value=?, due_day=?, periodicity=?, category=? 
-            WHERE id=?
-        """, (description, value, due_day, periodicity, category, fc_id))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE fixed_costs 
+                SET description=?, value=?, due_day=?, periodicity=?, category=? 
+                WHERE id=?
+            """, (description, value, due_day, periodicity, category, fc_id))
         return old_data
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao atualizar custo fixo {fc_id}: {e}")
         raise
 
@@ -207,12 +201,11 @@ def delete_fixed_cost(conn: sqlite3.Connection, fc_id: int) -> Dict[str, Any]:
     old_data = get_fixed_cost_by_id(conn, fc_id)
     
     try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM fixed_costs WHERE id=?", (fc_id,))
-        conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM fixed_costs WHERE id=?", (fc_id,))
         return old_data
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao deletar custo fixo {fc_id}: {e}")
         raise
 
@@ -242,33 +235,30 @@ def auto_process_monthly_fixed_costs(conn: sqlite3.Connection) -> int:
     existing_set = set(ex_month['description'].tolist())
     
     added_count = 0
-    cursor = conn.cursor()
-    
+    added_count = 0
     try:
-        for _, fc in fcs.iterrows():
-            if fc['description'] in existing_set:
-                continue
-                
-            try:
-                d_day = int(fc['due_day']) if fc['due_day'] else 1
-                last_day = calendar.monthrange(curr_y, curr_m)[1]
-                eff_day = min(d_day, last_day) 
-                due_date_obj = date(curr_y, curr_m, eff_day)
-                
-                # Auto-insert if due date has passed or is today
-                if today >= due_date_obj:
-                    cursor.execute("""
-                        INSERT INTO expenses (date, description, amount, category)
-                        VALUES (?, ?, ?, ?)
-                    """, (due_date_obj, fc['description'], fc['value'], fc['category']))
-                    added_count += 1
-            except Exception as e:
-                logger.error(f"Error processing fixed cost {fc['description']}: {e}")
-                
-        if added_count > 0:
-            conn.commit()
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            for _, fc in fcs.iterrows():
+                if fc['description'] in existing_set:
+                    continue
+                    
+                try:
+                    d_day = int(fc['due_day']) if fc['due_day'] else 1
+                    last_day = calendar.monthrange(curr_y, curr_m)[1]
+                    eff_day = min(d_day, last_day) 
+                    due_date_obj = date(curr_y, curr_m, eff_day)
+                    
+                    # Auto-insert if due date has passed or is today
+                    if today >= due_date_obj:
+                        cursor.execute("""
+                            INSERT INTO expenses (date, description, amount, category)
+                            VALUES (?, ?, ?, ?)
+                        """, (due_date_obj, fc['description'], fc['value'], fc['category']))
+                        added_count += 1
+                except Exception as e:
+                    logger.error(f"Error processing fixed cost {fc['description']}: {e}")
     except Exception as e:
-        conn.rollback()
         logger.error(f"Erro ao processar custos fixos: {e}")
         raise
         
