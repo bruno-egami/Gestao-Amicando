@@ -55,12 +55,45 @@ def edit_tuition_dialog(conn, tid, sname, month, current_val, current_count=None
         st.rerun()
 
 @st.dialog("📝 Editar Consumo")
-def edit_consumption_dialog(conn, cid, sname, current_desc, current_val):
+def edit_consumption_dialog(conn, cid, sname, current_desc, current_val, current_qty=1.0, current_markup=1.0):
     st.markdown(f"**Aluno:** {sname}")
-    new_desc = st.text_input("Descrição", value=current_desc)
-    new_val = st.number_input("Valor Total (R$)", value=float(current_val), min_value=0.0)
+    
+    st.caption("Ajuste a quantidade e markup. O valor total será recalculado.")
+    
+    col_d1, col_d2 = st.columns([3, 1])
+    new_desc = col_d1.text_input("Descrição", value=current_desc)
+    
+    # We infer unit price from current values if possible, otherwise use total/qty
+    # unit_price = current_val / (current_qty * current_markup) if current_qty and current_markup else current_val
+    # But for simplicity in UI, we can just let user edit Qty and Markup, and either:
+    # 1. Ask for Unit Price
+    # 2. Back-calculate Unit Price
+    # Let's try to back-calculate to show it, but allow editing Total directly too.
+    
+    try:
+        inferred_unit_price = float(current_val) / (float(current_qty) * float(current_markup)) if float(current_qty) > 0 and float(current_markup) > 0 else 0.0
+    except:
+        inferred_unit_price = 0.0
+        
+    c1, c2, c3 = st.columns(3)
+    new_qty = c1.number_input("Quantidade", value=float(current_qty), min_value=0.01, step=1.0)
+    new_markup = c2.number_input("Markup", value=float(current_markup), min_value=1.0, step=0.1)
+    
+    # Show inferred unit price (read-only or editable?) 
+    # If we want to recalculate Total, we need a base Unit Price. 
+    # Since we don't pass unit_price explicitly yet, let's allow user to adjust Total manually if calculation is off.
+    
+    calc_total = inferred_unit_price * new_qty * new_markup
+    
+    c3.metric("Valor Unit. (Est.)", f"R$ {inferred_unit_price:.2f}")
+    
+    st.divider()
+    
+    # Allow manual override of total because back-calculation might be slightly off due to rounding
+    new_val = st.number_input("Valor Total (R$)", value=float(calc_total), min_value=0.0, step=0.5, help="Calculado: Qtd * Markup * Unitário. Ajuste se necessário.")
+    
     if st.button("Salvar Alterações", type="primary", use_container_width=True):
-        student_service.update_consumption(conn, cid, new_desc, new_val)
+        student_service.update_consumption(conn, cid, new_desc, new_qty, new_markup, new_val)
         admin_utils.show_feedback_dialog("Consumo atualizado!", level="success")
         st.rerun()
 
@@ -309,6 +342,9 @@ def render_financial_management(conn):
                     st.markdown("#### 📊 Extrato e Pendências")
                     tuit, cons, total = student_service.get_student_financial_summary(conn, sid)
                     
+                    # Fetch detailed items for ALL states (Paid or Pending) to ensure PDF generation works
+                    items, cancellations_list, _, st_class_name = student_service.get_student_statement_items(conn, sid)
+                    
                     if not tuit.empty or not cons.empty:
                         for _, t in tuit.iterrows():
                             paid = t.get('amount_paid', 0) or 0
@@ -319,7 +355,15 @@ def render_financial_management(conn):
                             with st.expander(label, expanded=False):
                                 ec1, ec2 = st.columns(2)
                                 if ec1.button("📝 Editar", key=f"edit_t_{t['id']}"):
-                                    edit_tuition_dialog(conn, t['id'], sname, t['month_year'], t['amount'])
+                                    edit_tuition_dialog(
+                                        conn, 
+                                        t['id'], 
+                                        sname, 
+                                        t['month_year'], 
+                                        t['amount'],
+                                        current_count=t['class_count'],
+                                        current_unit_price=t['unit_price']
+                                    )
                                 if ec2.button("🗑️ Cancelar", key=f"cancel_t_{t['id']}"):
                                     def do_cancel_tuition(tid=t['id']):
                                         with database.db_session() as ctx_conn:
@@ -339,7 +383,15 @@ def render_financial_management(conn):
                             with st.expander(label, expanded=False):
                                 ec1, ec2 = st.columns(2)
                                 if ec1.button("📝 Editar", key=f"edit_c_{c['id']}"):
-                                    edit_consumption_dialog(conn, c['id'], sname, c['description'], c['total_value'])
+                                    edit_consumption_dialog(
+                                        conn, 
+                                        c['id'], 
+                                        sname, 
+                                        c['description'], 
+                                        c['total_value'],
+                                        current_qty=c['quantity'] if pd.notnull(c['quantity']) else 1.0,
+                                        current_markup=c['markup'] if pd.notnull(c.get('markup')) and c['markup'] > 0 else 1.0
+                                    )
                                 if ec2.button("🗑️ Cancelar", key=f"cancel_c_{c['id']}"):
                                     def do_cancel_consumption(cid=c['id']):
                                         with database.db_session() as ctx_conn:
@@ -348,10 +400,49 @@ def render_financial_management(conn):
                                     
                         st.divider()
                         st.metric("Total em Aberto", f"R$ {total:.2f}")
-
-                        items, cancellations_list, _, st_class_name = student_service.get_student_statement_items(conn, sid)
                     else:
                         st.success("Tudo pago! Nenhuma pendência encontrada. 🎉")
+
+                    # Always show Statement details (History)
+                    # Always show Statement details (History)
+                    if items:
+                        st.markdown("##### 📜 Extrato Detalhado")
+                        
+                        # Headers
+                        c1, c2, c3, c4, c5 = st.columns([1.5, 3, 1.5, 1.5, 1])
+                        c1.markdown("**Data**")
+                        c2.markdown("**Descrição**")
+                        c3.markdown("**Valor**")
+                        c4.markdown("**Status**")
+                        c5.markdown("**Ações**")
+                        
+                        for item in items:
+                            with st.container():
+                                c1, c2, c3, c4, c5 = st.columns([1.5, 3, 1.5, 1.5, 1])
+                                c1.write(pd.to_datetime(item['date']).strftime('%d/%m/%Y') if pd.notnull(item.get('date')) else '-')
+                                c2.write(item['description'])
+                                c3.write(f"R$ {item['value']:.2f}")
+                                
+                                status = item['status']
+                                if status == 'Pago':
+                                    c4.success(status)
+                                    # Undo Button
+                                    # Only if ID and Type are present (added in service)
+                                    if item.get('id') and item.get('type'):
+                                        if c5.button("↩️", key=f"undo_{item['type']}_{item['id']}", help="Desfazer Pagamento (Estornar)"):
+                                            def undo_payment():
+                                                student_service.revert_payment(conn, item['id'], item['type'])
+                                                st.toast("Pagamento estornado com sucesso!", icon='🔄')
+                                                
+                                            admin_utils.show_confirmation_dialog(
+                                                "Deseja realmente desfazer este pagamento? O item voltará para 'Pendente'.",
+                                                action_label="Sim, Desfazer",
+                                                on_confirm=undo_payment
+                                            )
+                                else:
+                                    c4.warning(status)
+                                
+                                st.divider()
 
                     if total > 0:
                         st.markdown("**Ações Rápidas**")
@@ -373,9 +464,10 @@ def render_financial_management(conn):
                                     student_service.process_partial_payment(ctx_conn, s, v)
                             admin_utils.show_confirmation_dialog(f"Confirmar pagamento de R$ {pay_val:.2f} para {sname}?", on_confirm=do_process_payment)
                         
-                        st_data = {'name': sname, 'month': datetime.now().strftime('%m/%Y'), 'class_name': st_class_name}
-                        pdf_bytes = reports.generate_student_statement(st_data, items, total, cancellations=cancellations_list)
-                        st.download_button("📄 Baixar Extrato PDF", data=pdf_bytes, file_name=f"extrato_{sname.replace(' ', '_')}.pdf", mime="application/pdf", key=f"pdf_{sid}", use_container_width=True)
+                    # PDF Download - ALWAYS Available
+                    st_data = {'name': sname, 'month': datetime.now().strftime('%m/%Y'), 'class_name': st_class_name}
+                    pdf_bytes = reports.generate_student_statement(st_data, items, total, cancellations=cancellations_list)
+                    st.download_button("📄 Baixar Extrato PDF", data=pdf_bytes, file_name=f"extrato_{sname.replace(' ', '_')}.pdf", mime="application/pdf", key=f"pdf_{sid}", use_container_width=True)
 
                 with col_fin_right:
                     st.markdown("#### ✨ Lançar Novo Consumo")

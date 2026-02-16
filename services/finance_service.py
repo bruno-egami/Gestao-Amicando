@@ -273,10 +273,10 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
     """
     
     # 1. Sales Revenue (From Sales Table)
-    # Note: Includes Payment Method and Client info
     sales_query = """
-        SELECT s.id, s.date, s.total_price, s.discount, s.payment_method, s.salesperson,
-               p.name as product_name, p.category as product_category, c.name as client_name, 'Venda' as source
+        SELECT s.id, s.date, s.total_price as amount, s.discount, s.payment_method, s.salesperson,
+               p.name as product_name, p.category as product_category, c.name as client_name, 'Venda' as source,
+               'Venda de Produto' as description, 'Receita' as type
         FROM sales s
         LEFT JOIN products p ON s.product_id = p.id
         LEFT JOIN clients c ON s.client_id = c.id
@@ -284,6 +284,35 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
     """
     sales_df = pd.read_sql(sales_query, conn, params=(start_date, end_date))
     
+    # 1.1 Tuitions (Mensalidades) - Paid
+    tuition_query = """
+        SELECT t.id, t.payment_date as date, t.amount, 0.0 as discount, 'Dinheiro/Pix' as payment_method, 
+               'Sistema' as salesperson, NULL as product_name, 'Mensalidade' as product_category, 
+               s.name as client_name, 'Mensalidade' as source,
+               ('Mensalidade ' || t.month_year) as description, 'Receita' as type
+        FROM tuitions t
+        JOIN students s ON t.student_id = s.id
+        WHERE t.status = 'Pago' AND DATE(t.payment_date) BETWEEN ? AND ?
+    """
+    tuition_df = pd.read_sql(tuition_query, conn, params=(start_date, end_date))
+    
+    # 1.2 Student Consumptions - Paid
+    # Note: Using COALESCE logic similar to history to ensure valid date
+    consumption_query = """
+        SELECT sc.id, DATE(COALESCE(NULLIF(sc.payment_date, ''), NULLIF(sc.date, ''), DATE('now'))) as date, 
+               sc.total_value as amount, 0.0 as discount, 'Dinheiro/Pix' as payment_method,
+               'Sistema' as salesperson, NULL as product_name, 'Consumo Aluno' as product_category,
+               s.name as client_name, 'Consumo' as source,
+               sc.description, 'Receita' as type
+        FROM student_consumptions sc
+        JOIN students s ON sc.student_id = s.id
+        WHERE sc.status = 'Pago' AND DATE(COALESCE(NULLIF(sc.payment_date, ''), NULLIF(sc.date, ''), DATE('now'))) BETWEEN ? AND ?
+    """
+    consumption_df = pd.read_sql(consumption_query, conn, params=(start_date, end_date))
+
+    # Combine Revenues
+    all_revenues = pd.concat([sales_df, tuition_df, consumption_df], ignore_index=True)
+
     # 2. Expenses (From Expenses Table)
     expenses_query = """
         SELECT e.id, e.date, e.description, e.amount, e.category, s.name as supplier_name, 'Despesa' as source
@@ -293,18 +322,17 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
     """
     expenses_df = pd.read_sql(expenses_query, conn, params=(start_date, end_date))
     
-    # 3. Create 'amount' column for sales unified view (total_price)
-    if not sales_df.empty:
-        sales_df['amount'] = sales_df['total_price']
-        sales_df['date'] = pd.to_datetime(sales_df['date'])
+    # Process Dates
+    if not all_revenues.empty:
+        all_revenues['date'] = pd.to_datetime(all_revenues['date'], errors='coerce')
         
     if not expenses_df.empty:
-        expenses_df['date'] = pd.to_datetime(expenses_df['date'])
+        expenses_df['date'] = pd.to_datetime(expenses_df['date'], errors='coerce')
 
     # Calculations
-    gross_revenue = sales_df['total_price'].sum() if not sales_df.empty else 0.0
+    gross_revenue = all_revenues['amount'].sum() if not all_revenues.empty else 0.0
     total_expenses = expenses_df['amount'].sum() if not expenses_df.empty else 0.0
-    total_discounts = sales_df['discount'].sum() if not sales_df.empty else 0.0
+    total_discounts = all_revenues['discount'].sum() if not all_revenues.empty else 0.0
     
     net_profit = gross_revenue - total_expenses
     
@@ -313,6 +341,6 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
         'total_expenses': total_expenses,
         'net_profit': net_profit,
         'total_discounts': total_discounts,
-        'revenue_details': sales_df, # Detailed DF for charts/tables
-        'expense_details': expenses_df # Detailed DF for charts/tables
+        'revenue_details': all_revenues, # Combined Revenue
+        'expense_details': expenses_df
     }

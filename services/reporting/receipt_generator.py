@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 class PDFReceipt(FPDF):
     def header(self):
         try:
-            self.image('Logo amicando.png', x=10, y=8, w=33)
+            self.image('logo-amicando-RGB.jpg', x=10, y=8, w=33)
         except:
             pass
         self.set_font('Helvetica', 'B', 14)

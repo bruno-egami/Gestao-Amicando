@@ -20,17 +20,25 @@ def generate_student_statement(student_data, items, total_due=None, cancellation
         def header(self):
             try:
                 # Center the logo
-                self.image('Logo amicando.png', x=85, y=10, w=40)
+                self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
             except:
                 pass
-            self.set_y(45) # Move down
+            
+            # Atelier Data (Full)
+            self.set_y(60) # Below logo (Adjusted for overlap)
+            self.set_font('Helvetica', 'B', 14)
+            self.cell(0, 6, 'Amicando Atelier de Cerâmicas', 0, 1, 'C')
+            self.set_font('Helvetica', '', 10)
+            self.cell(0, 5, 'Instagram: @amicandoatelier | WhatsApp: (54) 99912-1757', 0, 1, 'C')
+            self.cell(0, 5, 'Rua Alagoas, 45, sala 103, Bairro Humaitá', 0, 1, 'C')
+            self.cell(0, 5, 'Bento Gonçalves, Rio Grande do Sul', 0, 1, 'C')
+            
+            self.set_y(90) # Move down for title
             self.set_font('Helvetica', 'B', 14)
             self.cell(0, 10, 'Extrato de Conta - Aluno', 0, 1, 'C')
             self.ln(5)
             
     pdf = StatementPDF(f"Extrato - {student_data['name']}")
-    # PDFReport __init__ calls add_page(), which calls header().
-    # So we are good.
     
     # Student Info
     pdf.set_font('Helvetica', '', 11)
@@ -41,9 +49,9 @@ def generate_student_statement(student_data, items, total_due=None, cancellation
     pdf.ln(5)
     
     # Table Headers
-    # Date (25), Description (90), Qty (15), Value (30), Status (30)
-    w_date = 25
-    w_desc = 90
+    # Date (30), Description (85), Qty (15), Value (30), Status (30) - Adjusted width
+    w_date = 30
+    w_desc = 85
     w_qty = 15
     w_val = 30
     w_status = 30
@@ -64,19 +72,30 @@ def generate_student_statement(student_data, items, total_due=None, cancellation
     # Items
     for item in items:
         date_str = item.get('date', '')
-        # Format date if needed
-        # item['date'] might be YYYY-MM-DD
+        # Robust Date Formatting
         try:
-             dobj = datetime.strptime(date_str, '%Y-%m-%d')
-             date_str = dobj.strftime('%d/%m/%y')
-        except:
-             pass
+            # Handle pandas Timestamp or string
+            import pandas as pd
+            if isinstance(date_str, (pd.Timestamp, datetime)):
+                 dobj = date_str
+            else:
+                 # Try to parse string with potential time component
+                 # Split by space to get date part if ISO-like
+                 clean_str = str(date_str).split(' ')[0]
+                 dobj = datetime.strptime(clean_str, '%Y-%m-%d')
+            
+            date_str = dobj.strftime('%d/%m/%Y')
+        except Exception:
+             # Fallback: just take first 10 chars if it looks like a date
+             if len(str(date_str)) >= 10:
+                 date_str = str(date_str)[:10]
              
         desc = item.get('description', '')
         qty = item.get('class_count', 1) 
         if qty is None: qty = 1
         
-        val = item.get('amount', 0.0)
+        # FIX: Use 'value' key as defined in student_service
+        val = item.get('value', 0.0)
         status = item.get('status', 'Pendente')
         
         # Color for status

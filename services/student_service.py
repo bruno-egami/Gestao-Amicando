@@ -399,10 +399,11 @@ def get_payment_history(conn, start_date=None, end_date=None, student_id=None, p
         where = []
         params = []
         if start_date:
-            where.append(f"{date_col} >= ?")
+            # Cast to DATE to handle timestamp fields like payment_date
+            where.append(f"DATE({date_col}) >= ?")
             params.append(start_date)
         if end_date:
-            where.append(f"{date_col} <= ?")
+            where.append(f"DATE({date_col}) <= ?")
             params.append(end_date)
         if student_id and student_id != "Todos":
             where.append("s.id = ?")
@@ -423,10 +424,10 @@ def get_payment_history(conn, start_date=None, end_date=None, student_id=None, p
     w, p = get_common_filters(t_date_sql, student_id, class_id); t_where_pend += w; params_t_pend = p
     w, p = get_common_filters("sc.date", student_id, class_id); c_where_pend += w; params_c_pend = p
     
-    t_query_pago = f"SELECT t.payment_date as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Recebimento' as movement_type, 'Pago' as status, t.class_count, t.class_dates, c.name as class_name FROM tuitions t JOIN students s ON t.student_id = s.id LEFT JOIN classes c ON s.class_id = c.id WHERE {' AND '.join(t_where_pago)}"
-    c_query_pago = f"SELECT sc.payment_date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Recebimento' as movement_type, 'Pago' as status, NULL as class_count, NULL as class_dates, NULL as class_name FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pago)}"
-    t_query_pend = f"SELECT {t_date_sql} as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status, t.class_count, t.class_dates, c.name as class_name FROM tuitions t JOIN students s ON t.student_id = s.id LEFT JOIN classes c ON s.class_id = c.id WHERE {' AND '.join(t_where_pend)}"
-    c_query_pend = f"SELECT sc.date as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status, NULL as class_dates, NULL as class_name FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pend)}"
+    t_query_pago = f"SELECT DATE(t.payment_date) as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Recebimento' as movement_type, 'Pago' as status, t.class_count, t.class_dates, c.name as class_name FROM tuitions t JOIN students s ON t.student_id = s.id LEFT JOIN classes c ON s.class_id = c.id WHERE {' AND '.join(t_where_pago)}"
+    c_query_pago = f"SELECT DATE(COALESCE(NULLIF(sc.payment_date, ''), NULLIF(sc.date, ''), DATE('now'))) as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Recebimento' as movement_type, 'Pago' as status, NULL as class_count, NULL as class_dates, NULL as class_name FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pago)}"
+    t_query_pend = f"SELECT DATE({t_date_sql}) as date, t.amount, s.name as student_name, t.student_id, 'Mensalidade ' || t.month_year as description, 'Mensalidade' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status, t.class_count, t.class_dates, c.name as class_name FROM tuitions t JOIN students s ON t.student_id = s.id LEFT JOIN classes c ON s.class_id = c.id WHERE {' AND '.join(t_where_pend)}"
+    c_query_pend = f"SELECT DATE(COALESCE(NULLIF(sc.date, ''), DATE('now'))) as date, sc.total_value as amount, s.name as student_name, sc.student_id, sc.description, 'Consumo' as cat, 'Lançamento de Débito' as movement_type, 'Pendente' as status, NULL as class_dates, NULL as class_name FROM student_consumptions sc JOIN students s ON sc.student_id = s.id WHERE {' AND '.join(c_where_pend)}"
     
     dfs = []
     if status_filter in ['Todos', 'Pago']:
@@ -528,6 +529,37 @@ def process_partial_payment(conn, student_id, payment_amount):
         logger.error(f"Erro ao processar pagamento parcial para aluno {student_id}: {e}")
         raise
 
+def revert_payment(conn, item_id, item_type):
+    """
+    Reverts a payment, resetting the item to 'Pendente' and amount_paid to 0.
+    item_type: 'tuition' or 'consumption'
+    """
+    try:
+        # Determine table and fetch old data for audit
+        table = 'tuitions' if item_type == 'tuition' else 'student_consumptions'
+        
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM {table} WHERE id=?", (item_id,))
+            old_row = cursor.fetchone()
+            if not old_row:
+                raise ValueError(f"Item {item_id} of type {item_type} not found.")
+                
+            old_data = dict(zip([c[0] for c in cursor.description], old_row))
+            
+            # Reset to Pending
+            cursor.execute(f"""
+                UPDATE {table} 
+                SET amount_paid = 0, status = 'Pendente', payment_date = NULL 
+                WHERE id=?
+            """, (item_id,))
+            
+            audit.log_action(conn, 'REVERT_PAYMENT', table, item_id, old_data, {'status': 'Pendente', 'amount_paid': 0}, commit=False)
+            
+    except Exception as e:
+        logger.error(f"Erro ao reverter pagamento {item_id} ({item_type}): {e}")
+        raise
+
 def cancel_consumption(conn, consumption_id):
     """Cancels a consumption and restores stock if it was a material."""
     consumption_id = int(consumption_id)
@@ -592,17 +624,26 @@ def update_tuition(conn, tuition_id, amount):
         raise
     return True
 
-def update_consumption(conn, consumption_id, description, total_value):
-    """Updates consumption description or value."""
-    # Note: Quantity/Unit Price changes are complex for materials due to stock. 
-    # For now, we allow description and total value adjustments.
+def update_consumption(conn, consumption_id, description, quantity, markup, total_value):
+    """Updates consumption details."""
     consumption_id = int(consumption_id)
     cursor = conn.cursor()
-    old = pd.read_sql("SELECT description, total_value FROM student_consumptions WHERE id=?", conn, params=(consumption_id,)).iloc[0].to_dict()
+    old = pd.read_sql("SELECT description, quantity, markup, total_value FROM student_consumptions WHERE id=?", conn, params=(consumption_id,)).iloc[0].to_dict()
     try:
         with safe_transaction(conn):
-            cursor.execute("UPDATE student_consumptions SET description=?, total_value=? WHERE id=?", (description, total_value, consumption_id))
-            audit.log_action(conn, 'UPDATE', 'student_consumptions', consumption_id, old, {'description': description, 'total_value': total_value}, commit=False)
+            cursor.execute("""
+                UPDATE student_consumptions 
+                SET description=?, quantity=?, markup=?, total_value=? 
+                WHERE id=?
+            """, (description, quantity, markup, total_value, consumption_id))
+            
+            changes = {
+                'description': description,
+                'quantity': quantity,
+                'markup': markup,
+                'total_value': total_value
+            }
+            audit.log_action(conn, 'UPDATE', 'student_consumptions', consumption_id, old, changes, commit=False)
     except Exception as e:
         logger.error(f"Erro ao atualizar consumo {consumption_id}: {e}")
         raise
@@ -790,24 +831,57 @@ def get_student_statement_items(conn, student_id):
             "status": t['status'],
             "class_dates": t.get('class_dates')
         })
+        involved_months.add(t['month_year'])    # 4. Process Paid History (Tuitions + Consumptions)
+    # We want a full statement, not just pending
+    t_paid, c_paid = get_student_payment_history(conn, student_id)
+    
+    for _, t in t_paid.iterrows():
+        if t.get('class_name'): st_class_name = t['class_name']
+        desc = f"Mensalidade {t['month_year']}"
+        if 'class_count' in t and pd.notnull(t['class_count']):
+            try: desc += f" ({int(t['class_count'])} aulas)"
+            except: pass
+            
+        items.append({
+            "id": t['id'],
+            "type": "tuition",
+            "date": t['payment_date'] if t['payment_date'] else t['created_at'], # Use payment date for paid items
+            "description": desc,
+            "quantity": 1,
+            "value": float(t['amount']),
+            "paid": float(t['amount']), # Fully paid
+            "status": "Pago",
+            "class_dates": t.get('class_dates')
+        })
         involved_months.add(t['month_year'])
-        
-    # 3. Process Consumptions
-    for _, c in cons.iterrows():
+
+    for _, c in c_paid.iterrows():
         desc = c['description']
         if c.get('notes'): desc += f" ({c['notes']})"
-        paid = c.get('amount_paid', 0) or 0
         items.append({
-            "date": c['date'], 
-            "description": desc, 
-            "quantity": c['quantity'], 
-            "value": float(c['total_value']), 
-            "paid": float(paid), 
-            "status": c['status']
+            "id": c['id'],
+            "type": "consumption",
+            "date": c['payment_date'] if c['payment_date'] else c['date'],
+            "description": desc,
+            "quantity": c['quantity'],
+            "value": float(c['total_value']),
+            "paid": float(c['total_value']),
+            "status": "Pago",
+            "class_dates": None
         })
 
-    # 4. Process Cancellations
-    cancellations = []
+    # Sort by date descending
+    def get_sort_date(x):
+        d = x['date']
+        if not d: return ""
+        if isinstance(d, str): return d
+        try: return d.strftime('%Y-%m-%d')
+        except: return str(d)
+
+    items.sort(key=get_sort_date, reverse=True)
+
+    # 5. Cancellations Logic (remains same, but covers more months now)
+    cancellations_list = []
     if involved_months:
         try:
             s_row = pd.read_sql("SELECT class_id FROM students WHERE id=?", conn, params=(int(student_id),))
@@ -819,13 +893,13 @@ def get_student_statement_items(conn, student_id):
                     filtered = all_cancs[all_cancs['mm_yyyy'].isin(involved_months)]
                     
                     for _, cr in filtered.iterrows():
-                        cancellations.append({
+                        cancellations_list.append({
                             'date': cr['date'],
                             'reason': cr['reason']
                         })
         except Exception as e:
             logger.error(f"Error fetching cancellations for statement: {e}")
             
-    return items, cancellations, total, st_class_name
+    return items, cancellations_list, total, st_class_name
 
 

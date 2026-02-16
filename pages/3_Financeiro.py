@@ -578,59 +578,74 @@ with database.db_session() as conn:
         subtab_sales, subtab_expenses, subtab_charts = st.tabs(["📈 Detalhe Vendas", "📉 Detalhe Despesas", "📊 Gráficos Avançados"])
 
         # ======================
-        # SUBTAB: VENDAS (Details from Sales Table)
+        # SUBTAB: RECEITAS (Details from Unified Sales/Payments)
         # ======================
         with subtab_sales:
+            st.markdown("##### 💰 Detalhe de Receitas (Vendas + Mensalidades + Consumos)")
             if not sales_df.empty:
                 # Filters
                 f1, f2, f3 = st.columns(3)
                 
-                payment_opts = ["Todos"] + sales_df['payment_method'].dropna().unique().tolist()
+                # Payment Method (Treat None as -)
+                p_opts = sorted(sales_df['payment_method'].fillna("-").unique().tolist())
+                payment_opts = ["Todos"] + p_opts
                 sel_payment = f1.selectbox("Forma de Pagamento", payment_opts)
                 
-                seller_opts = ["Todos"] + sales_df['salesperson'].dropna().unique().tolist()
-                sel_seller = f2.selectbox("Vendedora", seller_opts)
+                # Source/Type Filter (New)
+                t_opts = sorted(sales_df['source'].fillna("-").unique().tolist())
+                type_opts = ["Todos"] + t_opts
+                sel_type = f2.selectbox("Tipo de Receita", type_opts)
                 
-                cat_opts = ["Todos"] + sales_df['product_category'].dropna().unique().tolist()
-                sel_cat = f3.selectbox("Categoria do Produto", cat_opts)
+                # Category Filter
+                c_opts = sorted(sales_df['product_category'].fillna("-").unique().tolist())
+                cat_opts = ["Todos"] + c_opts
+                sel_cat = f3.selectbox("Categoria", cat_opts)
                 
                 # Apply Filters
                 filtered_sales = sales_df.copy()
+                filtered_sales['payment_method'] = filtered_sales['payment_method'].fillna("-")
+                filtered_sales['source'] = filtered_sales['source'].fillna("-")
+                filtered_sales['product_category'] = filtered_sales['product_category'].fillna("-")
+                
                 if sel_payment != "Todos":
                     filtered_sales = filtered_sales[filtered_sales['payment_method'] == sel_payment]
-                if sel_seller != "Todos":
-                    filtered_sales = filtered_sales[filtered_sales['salesperson'] == sel_seller]
+                if sel_type != "Todos":
+                    filtered_sales = filtered_sales[filtered_sales['source'] == sel_type]
                 if sel_cat != "Todos":
                     filtered_sales = filtered_sales[filtered_sales['product_category'] == sel_cat]
                 
                 # Summary
-                st.metric("Total Filtrado", f"R$ {filtered_sales['total_price'].sum():,.2f}")
+                st.metric("Total Filtrado", f"R$ {filtered_sales['amount'].sum():,.2f}")
                 
                 # Table
+                # Use 'amount' instead of 'total_price'
                 st.dataframe(
-                    filtered_sales[['date', 'product_name', 'client_name', 'total_price', 'discount', 'payment_method', 'salesperson']],
+                    filtered_sales[['date', 'description', 'client_name', 'amount', 'discount', 'payment_method', 'source']],
                     hide_index=True,
                     use_container_width=True,
                     column_config={
                         "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-                        "product_name": "Produto",
-                        "client_name": "Cliente",
-                        "total_price": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                        "description": "Descrição / Produto",
+                        "client_name": "Cliente / Aluno",
+                        "amount": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
                         "discount": st.column_config.NumberColumn("Desconto", format="R$ %.2f"),
                         "payment_method": "Pagamento",
-                        "salesperson": "Vendedora"
+                        "source": "Origem"
                     }
                 )
                 
                 # Breakdown by Payment Method
                 st.subheader("Por Forma de Pagamento")
-                pay_breakdown = filtered_sales.groupby('payment_method')['total_price'].sum().reset_index()
-                st.bar_chart(pay_breakdown, x='payment_method', y='total_price', color='payment_method')
+                pay_breakdown = filtered_sales.groupby('payment_method')['amount'].sum().reset_index()
+                st.bar_chart(pay_breakdown, x='payment_method', y='amount', color='payment_method')
                 
-                # Breakdown by Salesperson
+                # Breakdown by Source
+                st.caption("Por Origem (Venda vs Mensalidade vs Consumo)")
+                source_breakdown = filtered_sales.groupby('source')['amount'].sum().reset_index()
+                st.bar_chart(source_breakdown, x='source', y='amount')
                 st.subheader("Por Vendedora")
-                seller_breakdown = filtered_sales.groupby('salesperson')['total_price'].sum().reset_index()
-                st.bar_chart(seller_breakdown, x='salesperson', y='total_price', color='salesperson')
+                seller_breakdown = filtered_sales.groupby('salesperson')['amount'].sum().reset_index()
+                st.bar_chart(seller_breakdown, x='salesperson', y='amount', color='salesperson')
                 
             else:
                 st.info("Nenhuma venda registrada no período.")
@@ -767,7 +782,7 @@ with database.db_session() as conn:
                 st.plotly_chart(fig_bar, use_container_width=True)
                 
                 # Additional Breakdown: Revenue by Source
-                if 'source' in sales_df.columns:
+                if not sales_df.empty and 'source' in sales_df.columns:
                         st.markdown("### Composição do Faturamento")
                         source_breakdown = sales_df.groupby('source')['amount'].sum().reset_index()
                         fig_source = px.bar(source_breakdown, x='source', y='amount', color='source',
