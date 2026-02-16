@@ -46,5 +46,23 @@ def db_session():
     finally:
         conn.close()
 
+@contextlib.contextmanager
+def safe_transaction(conn):
+    """
+    Context manager for atomic database transactions using BEGIN IMMEDIATE.
+    Ensures that only one writer can be active at a time, preventing race conditions.
+    Usage:
+        with database.db_session() as conn:
+            with database.safe_transaction(conn):
+                # Critical updates
+    """
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield conn
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+
 if __name__ == "__main__":
     initialize()

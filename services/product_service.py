@@ -209,50 +209,74 @@ def get_images_for_products(conn, product_ids):
 
 def deduct_stock(cursor, product_id, quantity, check_kits=True, variant_id=None):
     """
-    Deducts stock from a product. If variant_id is provided, deducts from variant.
-    If it's a kit (and no variant_id), deducts from components.
-    Returns a list of log messages.
+    Deducts stock from a product/variant using atomic updates to prevent race conditions.
+    Raises ValueError if stock is insufficient.
     """
     logs = []
     
     if variant_id:
-        # Variant Deduction (Direct)
-        cursor.execute("UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id = ?", (quantity, int(variant_id)))
-        if cursor.rowcount > 0:
-             # logs.append(f" - Deducted {quantity} from Variant ID {variant_id}")
-             pass
-        else:
-             logs.append(f"⚠️ FAILED to update stock for Variant ID {variant_id}")
+        # Variant Deduction (Atomic)
+        cursor.execute("""
+            UPDATE product_variants 
+            SET stock_quantity = stock_quantity - ? 
+            WHERE id = ? AND stock_quantity >= ?
+        """, (quantity, int(variant_id), quantity))
+        
+        if cursor.rowcount == 0:
+             # Check if it was ID not found or stock insufficient
+             cursor.execute("SELECT stock_quantity, variant_name FROM product_variants WHERE id=?", (int(variant_id),))
+             row = cursor.fetchone()
+             if row:
+                 raise ValueError(f"Estoque insuficiente para Variação '{row[1]}' (ID {variant_id}). Disponível: {row[0]}")
+             else:
+                 raise ValueError(f"Variação ID {variant_id} não encontrada.")
+        
+        # logs.append(f" - Deducted {quantity} from Variant ID {variant_id}")
         return logs
 
+    # Check if Kit
+    kit_comps = []
     if check_kits:
-        # Check if Kit
-        # Note: We need a connection for read_sql usually, or we use cursor.execute
-        # Cursor is for transaction, so we should stick to cursor if possible, 
-        # but read_sql needs connection. 
-        # Workaround: Use simple execute for kit check to avoid passing whole conn object if transaction is active?
-        # Or pass conn explicitly? Standard practice: pass conn or cursor. 
-        # READ operations can use conn, WRITE on cursor.
-        pass
-        # I'll use cursor.execute for fetching kit data to be safe inside transaction
-    
-    # Helper to fetch kit components using cursor
-    cursor.execute("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", (product_id,))
-    kit_comps = cursor.fetchall() # List of tuples (child_id, qty)
+        cursor.execute("SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", (product_id,))
+        kit_comps = cursor.fetchall()
     
     if kit_comps:
         logs.append(f"ℹ️ Item ID {product_id} is a KIT. Deducting components...")
         for child_id, needed_qty in kit_comps:
             total_deduct = quantity * needed_qty
-            cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (int(total_deduct), int(child_id)))
+            
+            cursor.execute("""
+                UPDATE products 
+                SET stock_quantity = stock_quantity - ? 
+                WHERE id = ? AND stock_quantity >= ?
+            """, (int(total_deduct), int(child_id), int(total_deduct)))
+            
+            if cursor.rowcount == 0:
+                 cursor.execute("SELECT stock_quantity, name FROM products WHERE id=?", (int(child_id),))
+                 row = cursor.fetchone()
+                 if row:
+                     raise ValueError(f"Estoque insuficiente para componente '{row[1]}' (ID {child_id}) do Kit. Necessário: {total_deduct}, Disponível: {row[0]}")
+                 else:
+                     raise ValueError(f"Componente ID {child_id} não encontrado.")
+            
             logs.append(f" - Deducted {total_deduct} from Component ID {child_id}")
     else:
-        cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (quantity, int(product_id)))
+        # Simple Product (Atomic)
+        cursor.execute("""
+            UPDATE products 
+            SET stock_quantity = stock_quantity - ? 
+            WHERE id = ? AND stock_quantity >= ?
+        """, (quantity, int(product_id), quantity))
+        
         if cursor.rowcount == 0:
-            logs.append(f"⚠️ FAILED to update stock for Product ID {product_id} (Not found?)")
-        else:
-            # logs.append(f" - Deducted {quantity} from Product ID {product_id}")
-            pass
+             cursor.execute("SELECT stock_quantity, name FROM products WHERE id=?", (int(product_id),))
+             row = cursor.fetchone()
+             if row:
+                 raise ValueError(f"Estoque insuficiente para Produto '{row[1]}' (ID {product_id}). Necessário: {quantity}, Disponível: {row[0]}")
+             else:
+                 raise ValueError(f"Produto ID {product_id} não encontrado.")
+            
+        # logs.append(f" - Deducted {quantity} from Product ID {product_id}")
             
     # Clear cache since stock changed
     get_all_products.clear()
@@ -367,7 +391,18 @@ def deduct_production_materials_central(cursor, product_id, quantity, filter_typ
             
             # Update Stock (Skip for Services)
             if not is_service:
-                cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", (d_qty, r['id']))
+                cursor.execute("""
+                    UPDATE materials 
+                    SET stock_level = stock_level - ? 
+                    WHERE id = ? AND stock_level >= ?
+                """, (d_qty, r['id'], d_qty))
+                
+                if cursor.rowcount == 0:
+                     # Fetch current stock for error message
+                     cursor.execute("SELECT stock_level FROM materials WHERE id=?", (r['id'],))
+                     row = cursor.fetchone()
+                     curr_stock = row[0] if row else 0
+                     raise ValueError(f"Estoque insuficiente para material '{r['name']}' (ID {r['id']}). Disponível: {curr_stock:.3f}, Necessário: {d_qty:.3f}")
             
             # Insert Transaction (Always record cost/usage)
             cursor.execute("""

@@ -442,7 +442,7 @@ def add_commission_item_with_stock(conn, order_id, product_id, quantity, qty_fro
                                      unit_price, variant_id=None):
     """
     Adds an item to a commission order with stock reservation (handles kits).
-    Updates the order total.
+    Updates the order total. Atomic updates to prevent race conditions.
     """
     try:
         cursor = conn.cursor()
@@ -457,10 +457,15 @@ def add_commission_item_with_stock(conn, order_id, product_id, quantity, qty_fro
         # Reserve stock
         if qty_from_stock > 0:
             if variant_id:
-                cursor.execute(
-                    "UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id=?", 
-                    (int(qty_from_stock), int(variant_id))
-                )
+                cursor.execute("""
+                    UPDATE product_variants 
+                    SET stock_quantity = stock_quantity - ? 
+                    WHERE id = ? AND stock_quantity >= ?
+                """, (int(qty_from_stock), int(variant_id), int(qty_from_stock)))
+                
+                if cursor.rowcount == 0:
+                     raise ValueError(f"Estoque insuficiente (Variação ID {variant_id}) para reserva de {qty_from_stock}.")
+                     
             else:
                 kit_comps = pd.read_sql(
                     "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
@@ -469,15 +474,23 @@ def add_commission_item_with_stock(conn, order_id, product_id, quantity, qty_fro
                 if not kit_comps.empty:
                     for _, kc in kit_comps.iterrows():
                         deduct_res = qty_from_stock * kc['quantity']
-                        cursor.execute(
-                            "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", 
-                            (int(deduct_res), int(kc['child_product_id']))
-                        )
+                        cursor.execute("""
+                            UPDATE products 
+                            SET stock_quantity = stock_quantity - ? 
+                            WHERE id = ? AND stock_quantity >= ?
+                        """, (int(deduct_res), int(kc['child_product_id']), int(deduct_res)))
+                        
+                        if cursor.rowcount == 0:
+                             raise ValueError(f"Estoque insuficiente (Componente ID {kc['child_product_id']}) para reserva de kit.")
                 else:
-                    cursor.execute(
-                        "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", 
-                        (int(qty_from_stock), int(product_id))
-                    )
+                    cursor.execute("""
+                        UPDATE products 
+                        SET stock_quantity = stock_quantity - ? 
+                        WHERE id = ? AND stock_quantity >= ?
+                    """, (int(qty_from_stock), int(product_id), int(qty_from_stock)))
+                    
+                    if cursor.rowcount == 0:
+                         raise ValueError(f"Estoque insuficiente (Produto ID {product_id}) para reserva.")
         
         # Update order total
         cursor.execute(
