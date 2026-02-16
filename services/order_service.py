@@ -84,6 +84,7 @@ def get_sales(conn, filters=None):
     
     df = pd.read_sql(query, conn, params=params)
     if not df.empty:
+        df['produto'] = df['produto'].fillna('Sinal / Outros')
         df['variant_name'] = df['variant_name'].fillna('')
         df['produto_display'] = df.apply(lambda x: f"{x['produto']} ({x['variant_name']})" if x['variant_name'] else x['produto'], axis=1)
         # Fix dates
@@ -304,10 +305,10 @@ def get_orders_for_management(conn, filters=None):
     Supports SQL filtering for performance.
     """
     query = """
-        SELECT o.id, c.name as client, o.date_due, o.status, o.total_price, o.notes, o.client_id,
+        SELECT o.id, COALESCE(c.name, 'Cliente Desconhecido') as client, o.date_due, o.status, o.total_price, o.notes, o.client_id,
                o.manual_discount, o.deposit_amount, o.date_created, o.image_paths
         FROM commission_orders o
-        JOIN clients c ON o.client_id = c.id
+        LEFT JOIN clients c ON o.client_id = c.id
         WHERE 1=1
     """
     params = []
@@ -324,16 +325,16 @@ def get_orders_for_management(conn, filters=None):
              query += " AND c.name = ?"
              params.append(filters['client'])
              
-        # Date Range (Due Date)
-        if filters.get('start_date'):
+        # Date Range (Due Date) - Ensure we don't apply if None
+        if filters.get('start_date') is not None:
             query += " AND o.date_due >= ?"
             params.append(filters['start_date'])
             
-        if filters.get('end_date'):
+        if filters.get('end_date') is not None:
             query += " AND o.date_due <= ?"
             params.append(filters['end_date'])
 
-    query += " ORDER BY o.date_due ASC"
+    query += " ORDER BY o.id DESC"
     
     return pd.read_sql(query, conn, params=params)
 
@@ -932,7 +933,7 @@ def get_quote_items(conn, quote_id):
 def get_quote_details_for_pdf(conn, quote_id):
     """Fetches detailed item info for quote PDF."""
     return pd.read_sql("""
-        SELECT qi.product_id, p.name, qi.quantity, qi.unit_price, qi.item_notes 
+        SELECT qi.product_id, p.name, qi.quantity, qi.unit_price, qi.item_notes, qi.variant_id 
         FROM quote_items qi
         LEFT JOIN products p ON qi.product_id = p.id
         WHERE qi.quote_id=?

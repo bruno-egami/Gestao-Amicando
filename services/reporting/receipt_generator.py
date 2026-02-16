@@ -6,27 +6,10 @@ from services.reporting.pdf_core import PDFReport
 
 logger = get_logger(__name__)
 
-class PDFReceipt(FPDF):
-    def header(self):
-        try:
-            # Center the logo (A4 width is 210mm, logo w=40, x=85 centers it)
-            self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
-        except:
-            pass
-            
-        # Atelier Data (Full)
-        self.set_y(60) # Below logo
-        self.set_font('Helvetica', 'B', 14)
-        self.cell(0, 6, 'Amicando Atelier de Cerâmicas', 0, 1, 'C')
-        self.set_font('Helvetica', '', 10)
-        self.cell(0, 5, 'Instagram: @amicandoatelier | WhatsApp: (54) 99912-1757', 0, 1, 'C')
-        self.cell(0, 5, 'Rua Alagoas, 45, sala 103, Bairro Humaitá', 0, 1, 'C')
-        self.cell(0, 5, 'Bento Gonçalves, Rio Grande do Sul', 0, 1, 'C')
-        
-        self.set_y(90) # Move down for title
-        self.set_font('Helvetica', 'B', 14)
-        self.cell(0, 10, 'Comprovante de Venda', 0, 1, 'C')
-        self.ln(5)
+class PDFReceipt(PDFReport):
+    def __init__(self):
+        super().__init__("Comprovante de Venda")
+
 
     def footer(self):
         self.set_y(-15)

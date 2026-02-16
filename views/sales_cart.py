@@ -32,6 +32,7 @@ def show_receipt_dialog(order_data):
     if st.button("Fechar e Nova Venda", key="btn_close_receipt", type="primary", use_container_width=True):
         if 'last_order' in st.session_state:
             del st.session_state['last_order']
+        st.session_state['receipt_dismissed'] = True
         st.rerun()
 
     # PDF Download
@@ -472,32 +473,40 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                 # Construct Receipt Data
                                 final_notes = notes_order
                                 if new_ord_id:
-                                     final_notes = f"Gerado via Venda #{trans_uuid}. Obs: {notes_order}"
-                                     if deposit_val > 0:
-                                         final_notes += f"\n\nSinal: R$ {deposit_val:.2f}"
+                                    final_notes = f"Gerado via Venda #{trans_uuid}. Obs: {notes_order}"
+                                    if deposit_val > 0:
+                                        final_notes += f"\n\nSinal: R$ {deposit_val:.2f}"
                                 
                                 has_order = new_ord_id is not None
                                 
+                                current_date_str = date.today().strftime('%y%m%d')
                                 st.session_state['last_order'] = {
-                                    "id": f"ENC-{new_ord_id}" if has_order else trans_uuid,
-                                   "client": final_client_name,
-                                   "salesperson": salesperson_choice,
-                                   "payment_method": pay_method_choice,
-                                   "notes": final_notes,
-                                   "total": cart_total,
-                                   "deposit": deposit_val if has_order else 0,
-                                   "date_due": d_comm.strftime("%d/%m/%Y") if has_order else None,
-                                   "items": st.session_state['cart'] 
+                                    "id": f"ENC-{current_date_str}-{new_ord_id}" if has_order else trans_uuid,
+                                    "client": final_client_name,
+                                    "salesperson": salesperson_choice,
+                                    "payment_method": pay_method_choice,
+                                    "notes": final_notes,
+                                    "total": cart_total,
+                                    "deposit": deposit_val if has_order else 0,
+                                    "date_due": d_comm.strftime("%d/%m/%Y") if has_order else None,
+                                    "items": st.session_state['cart'] 
                                 }
                                 st.session_state['cart'] = []
-                                st.rerun()
+                                st.session_state['receipt_dismissed'] = False
+                                # Moved rerun outside the big try-except block later
+                                do_rerun = True
 
                             except Exception as e:
+                                if type(e).__name__ in ["RerunException", "StopException"]:
+                                    raise e
                                 admin_utils.show_feedback_dialog(f"ERRO DE TRANSAÇÃO: {e}", level="error")
+                     
+                        if do_rerun:
+                            st.rerun()
                     
                     # --- QUOTE BUTTON ---
                     if col_act3.button("📄 Salvar como Orçamento", type="secondary", use_container_width=True):
-                         quote_creation_dialog(new_cli_name if cli_choice == '++ Cadastrar Novo ++' else cli_choice, notes_order, st.session_state['cart'], cli_choice, new_cli_name, new_cli_phone, client_dict)
+                        quote_creation_dialog(new_cli_name if cli_choice == '++ Cadastrar Novo ++' else cli_choice, notes_order, st.session_state['cart'], cli_choice, new_cli_name, new_cli_phone, client_dict)
 
                     lbl_b = "Finalizar Encomenda" 
                     force_order = col_act2.button(lbl_b, use_container_width=True, type="primary")
@@ -527,7 +536,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                              valid_client = False
                             
                         if valid_client:
-                             try:
+                            try:
                                 with safe_transaction(conn):
                                     cursor = conn.cursor()
                                     final_notes_B = f"Encomenda Total. Obs: {notes_order}"
@@ -579,8 +588,9 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                             "order_id": f"ENC-{new_ord_id}"
                                         })
 
+                                    current_date_str = date.today().strftime('%y%m%d')
                                     st.session_state['last_order'] = {
-                                        "id": f"ENC-{new_ord_id}",
+                                        "id": f"ENC-{current_date_str}-{new_ord_id}",
                                         "client": final_client_name,
                                         "salesperson": salesperson_choice,
                                         "payment_method": "Encomenda", 
@@ -591,8 +601,15 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                         "total": cart_total, 
                                     }
                                     st.session_state['cart'] = []
-                                    st.rerun()
-                             except Exception as e:
-                                 admin_utils.show_feedback_dialog(f"Erro ao finalizar encomenda: {e}", level="error")
+                                    st.session_state['receipt_dismissed'] = False
+                                    do_rerun_enc = True
+                                    
+                            except Exception as e:
+                                if type(e).__name__ in ["RerunException", "StopException"]:
+                                    raise e
+                                admin_utils.show_feedback_dialog(f"Erro ao finalizar encomenda: {e}", level="error")
+                             
+                            if do_rerun_enc:
+                                st.rerun()
     else:
         st.info("Seu carrinho está vazio.")

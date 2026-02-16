@@ -41,7 +41,7 @@ def render_sales_history(conn, client_opts):
                         grouped = sales_view.groupby('order_id').agg({
                             'date': 'first',
                             'cliente': 'first',
-                            'produto_display': lambda x: ", ".join(x),
+                            'produto_display': lambda x: ", ".join(filter(None, x)),
                             'quantity': 'sum',
                             'total_price': 'sum',
                             'salesperson': 'first',
@@ -146,7 +146,7 @@ def render_sales_history(conn, client_opts):
                     # Fetch items to verify
                     items_df = order_service.get_commission_items(conn, enc_view['id'].tolist())
                     items_df['desc'] = items_df['name'] + " (" + items_df['quantity'].astype(str) + ")"
-                    grouped = items_df.groupby('order_id')['desc'].apply(lambda x: ", ".join(x)).reset_index()
+                    grouped = items_df.groupby('order_id')['desc'].apply(lambda x: ", ".join(filter(None, x))).reset_index()
                     grouped.columns = ['id', 'produtos']
                     enc_view = enc_view.merge(grouped, on='id', how='left').fillna("-")
                     

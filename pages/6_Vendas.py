@@ -33,9 +33,18 @@ with database.db_session() as conn:
     if 'selected_product_id' not in st.session_state:
         st.session_state['selected_product_id'] = None
 
+    # Navigation-aware state clearing
+    if st.session_state.get('last_page') != 'Vendas':
+        st.session_state['last_page'] = 'Vendas'
+        # If we arrived from another page, we don't want to see old popups
+        if 'last_order' in st.session_state:
+            del st.session_state['last_order']
+            st.session_state['receipt_dismissed'] = True
+
     # --- Receipt Dialog ---
-    if 'last_order' in st.session_state:
+    if 'last_order' in st.session_state and not st.session_state.get('receipt_dismissed', False):
         sales_cart.show_receipt_dialog(st.session_state['last_order'])
+        st.session_state['receipt_dismissed'] = True
 
     # --- Prepare Data ---
     # 1. Select Client (Global fetch for Form and History)
