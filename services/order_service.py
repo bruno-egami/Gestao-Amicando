@@ -913,9 +913,9 @@ def create_quote(conn, quote_data, items):
             
             for item in items:
                 cursor.execute("""
-                    INSERT INTO quote_items (quote_id, product_id, quantity, unit_price, item_notes)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (quote_id, item['product_id'], item['qty'], item['price'], item.get('notes', '')))
+                    INSERT INTO quote_items (quote_id, product_id, quantity, unit_price, item_notes, variant_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (quote_id, item['product_id'], item['qty'], item['price'], item.get('notes', ''), item.get('variant_id')))
             
         return quote_id
     except Exception as e:
@@ -927,8 +927,14 @@ def get_all_quotes(conn):
     return pd.read_sql("SELECT * FROM quotes ORDER BY date_created DESC", conn)
 
 def get_quote_items(conn, quote_id):
-    """Fetches items for a specific quote."""
-    return pd.read_sql("SELECT * FROM quote_items WHERE quote_id=?", conn, params=(quote_id,))
+    """Fetches items for a specific quote, including product names."""
+    query = """
+        SELECT qi.*, p.name as product_name
+        FROM quote_items qi
+        LEFT JOIN products p ON qi.product_id = p.id
+        WHERE qi.quote_id=?
+    """
+    return pd.read_sql(query, conn, params=(quote_id,))
 
 def get_quote_details_for_pdf(conn, quote_id):
     """Fetches detailed item info for quote PDF."""

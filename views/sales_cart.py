@@ -115,57 +115,72 @@ def show_receipt_dialog(order_data):
 
 @st.dialog("Criar Orçamento")
 def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_choice_val, n_name, n_phone, c_dict):
-     st.write(f"Cliente: {client_display_name}")
-     
-     qd_valid = st.number_input("Validade (dias)", value=30, min_value=1)
-     qd_deliv = st.text_input("Prazo Entrega", value="45 dias após confirmação")
-     qd_pay = st.text_input("Condições Pagamento", value="50% entrada + saldo na entrega")
-     qd_note = st.text_area("Observações", value=initial_notes)
-     
-     if st.button("Confirmar Criação", type="primary"):
-         try:
-             with database.db_session() as conn:
-                 # Create Client if needed
-                 final_cid = None
-                 if cli_choice_val == "++ Cadastrar Novo ++":
-                      final_cid = order_service.create_client(conn, n_name, n_phone)
-                 else:
-                      final_cid = c_dict[cli_choice_val]
-                 
-                 if isinstance(final_cid, bytes): final_cid = int.from_bytes(final_cid, "little")
+    if 'quote_created_id' not in st.session_state:
+        st.session_state.quote_created_id = None
 
-                 # Prepare Items for Service
-                 service_items = []
-                 for item in cart_items:
-                     note_txt = ""
-                     if item.get('variant_name'):
-                         note_txt = f"Variação: {item['variant_name']}"
-                         
-                     service_items.append({
-                         'product_id': int(item['product_id']),
-                         'qty': int(item['qty']),
-                         'price': float(item['base_price']),
-                         'notes': note_txt
-                     })
+    if st.session_state.quote_created_id:
+        # Standard ID for success message
+        success_id = f"ORC-{date.today().strftime('%y%m%d')}-{st.session_state.quote_created_id}"
+        st.success(f"Orçamento #{success_id} criado com sucesso!")
+        if st.button("Concluir", type="primary", use_container_width=True):
+            st.session_state.quote_created_id = None
+            st.rerun()
+        return
 
-                 # Create Quote via Service
-                 quote_id = order_service.create_quote(conn, {
-                     'client_id': final_cid,
-                     'notes': qd_note,
-                     'delivery_terms': qd_deliv,
-                     'payment_terms': qd_pay,
-                     'valid_days': qd_valid
-                 }, service_items)
-                 
-                 if isinstance(quote_id, bytes): quote_id = int.from_bytes(quote_id, "little")
-                 
-                 st.session_state['cart'] = []
-                 st.success(f"Orçamento #{quote_id} criado com sucesso!")
-                 if st.button("Concluir", type="primary", use_container_width=True):
-                     st.rerun()
+    st.write(f"Cliente: {client_display_name}")
+    
+    qd_valid = st.number_input("Validade (dias)", value=30, min_value=1)
+    qd_deliv = st.text_input("Prazo Entrega", value="45 dias após confirmação")
+    qd_pay = st.text_input("Condições Pagamento", value="50% entrada + saldo na entrega")
+    qd_note = st.text_area("Observações", value=initial_notes)
+    
+    if st.button("Confirmar Criação", type="primary"):
+        try:
+            with database.db_session() as conn:
+                # Create Client if needed
+                final_cid = None
+                if cli_choice_val == "++ Cadastrar Novo ++":
+                    final_cid = order_service.create_client(conn, n_name, n_phone)
+                else:
+                    final_cid = c_dict[cli_choice_val]
+                
+                if isinstance(final_cid, bytes): final_cid = int.from_bytes(final_cid, "little")
 
-         except Exception as e:
-             st.error(f"Erro ao salvar orçamento: {e}")
+                # Prepare Items for Service
+                service_items = []
+                for item in cart_items:
+                    note_txt = ""
+                    if item.get('variant_name'):
+                        note_txt = f"Variação: {item['variant_name']}"
+                        
+                    service_items.append({
+                        'product_id': int(item['product_id']),
+                        'qty': int(item['qty']),
+                        'price': float(item['base_price']),
+                        'notes': note_txt,
+                        'variant_id': item.get('variant_id') # Added variant_id
+                    })
+
+                # Create Quote via Service
+                quote_id = order_service.create_quote(conn, {
+                    'client_id': final_cid,
+                    'notes': qd_note,
+                    'delivery_terms': qd_deliv,
+                    'payment_terms': qd_pay,
+                    'valid_days': qd_valid
+                }, service_items)
+                
+                if isinstance(quote_id, bytes): quote_id = int.from_bytes(quote_id, "little")
+                
+                # Success state
+                st.session_state.quote_created_id = quote_id
+                st.session_state['cart'] = []
+                st.rerun()
+
+        except Exception as e:
+            if type(e).__name__ in ["RerunException", "StopException"]:
+                raise e
+            st.error(f"Erro ao salvar orçamento: {e}")
 
 # ==============================================================================
 # RENDER CART & CHECKOUT

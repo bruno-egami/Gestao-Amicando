@@ -1,13 +1,15 @@
-
 import streamlit as st
 import pandas as pd
 from datetime import date
-import services.reporting as reports
 import admin_utils
-from services import order_service
+import auth
+from services import order_service, reporting as reports, admin_service
 from database import safe_transaction
 
 def render_quotes_management(conn):
+    curr_user = auth.get_current_user()
+    current_salesperson = curr_user['name'] if curr_user else "Ira"
+
     # FILTERS
     q_f1, q_f2 = st.columns(2)
     sel_q_status = q_f1.multiselect("Status", ["Pendente", "Aprovado", "Recusado", "Expirado"], default=["Pendente"])
@@ -22,13 +24,20 @@ def render_quotes_management(conn):
     if sel_q_client: quotes_df = quotes_df[quotes_df['name'].str.contains(sel_q_client, case=False)]
     
     for _, quote in quotes_df.iterrows():
+        # Nomenclature Pattern: ORC-YYMMDD-ID
+        q_date = pd.to_datetime(quote['date_created'])
+        formatted_id = f"ORC-{q_date.strftime('%y%m%d')}-{quote['id']}"
+        
         status_icon = {"Pendente": "🟡", "Aprovado": "🟢"}.get(quote['status'], "⚪")
-        with st.expander(f"{status_icon} ORC-{quote['id']} | {quote['name']} | R$ {quote['total_price']:.2f}"):
+        with st.expander(f"{status_icon} {formatted_id} | {quote['name']} | R$ {quote['total_price']:.2f}"):
             st.write(f"Notas: {quote['notes']}")
             
             # Fetch items
             items = order_service.get_quote_items(conn, quote['id'])
-            st.dataframe(items)
+            # Reformat items for better display
+            items_display = items[['product_name', 'quantity', 'unit_price', 'item_notes']].copy()
+            items_display.columns = ['Produto', 'Qtd', 'Preço Unit.', 'Obs']
+            st.table(items_display)
             
             c1, c2, c3 = st.columns(3)
             # PDF GEN
@@ -36,9 +45,9 @@ def render_quotes_management(conn):
             pdf_items = order_service.get_quote_details_for_pdf(conn, quote['id'])
             
             pdf_data = reports.generate_quote_pdf({
-                "id": f"ORC-{quote['id']}", 
+                "id": formatted_id, 
                 "client_name": quote.get('name', 'Cliente'),
-                "date_created": pd.to_datetime(quote['date_created']).strftime('%d/%m/%Y'),
+                "date_created": q_date.strftime('%d/%m/%Y'),
                 "date_valid_until": pd.to_datetime(quote['date_valid_until']).strftime('%d/%m/%Y'),
                 "items": [{
                     "id": r['product_id'], "name": r['name'], "qty": r['quantity'], "price": r['unit_price'], "notes": r['item_notes'] or ""
@@ -55,8 +64,21 @@ def render_quotes_management(conn):
                 st.divider()
                 st.caption("Aprovação e Sinal")
                 col_dep1, col_dep2, col_dep3 = st.columns(3)
-                dep_val = col_dep1.number_input("Sinal Recebido (R$)", value=0.0, step=10.0, key=f"dep_{quote['id']}")
-                salesp_app = col_dep2.selectbox("Vendedora", ["Ira", "Neli"], key=f"sp_app_{quote['id']}")
+                
+                # Pre-fill deposit with 50%
+                default_dep = float(round(quote['total_price'] * 0.5, 2))
+                
+                dep_val = col_dep1.number_input("Sinal Recebido (R$)", value=default_dep, step=10.0, key=f"dep_{quote['id']}")
+                
+                # Default salesperson to logged user
+                all_users = admin_service.get_all_users(conn)
+                salesp_df = all_users[all_users['role'].isin(['admin', 'vendedor']) & (all_users['active'] == 1)]
+                salesp_opts = sorted(salesp_df['name'].tolist())
+                
+                if current_salesperson not in salesp_opts:
+                    salesp_opts.append(current_salesperson)
+                
+                salesp_app = col_dep2.selectbox("Vendedora", salesp_opts, index=salesp_opts.index(current_salesperson), key=f"sp_app_{quote['id']}")
                 pay_method_app = col_dep3.selectbox("Forma Pagto", ["Pix", "Dinheiro", "Cartão", "Outro"], key=f"pay_app_{quote['id']}")
                 
                 if c2.button("✅ Aprovar e Encomendar", key=f"qa_{quote['id']}", use_container_width=True):
@@ -72,7 +94,7 @@ def render_quotes_management(conn):
                                 'status': 'Pendente', 
                                 'date_created': date.today(), 
                                 'date_due': date.today(), # Set to today by default, user can edit in management
-                                'notes': f"Via ORC-{quote['id']}. {quote['notes']}", 
+                                'notes': f"Via {formatted_id}. {quote['notes']}", 
                                 'deposit_amount': dep_val
                             })
                             
@@ -100,7 +122,7 @@ def render_quotes_management(conn):
                                     "client_id": quote['client_id'],
                                     "discount": 0,
                                     "payment_method": pay_method_app, 
-                                    "notes": f"Sinal via ORC-{quote['id']} (Enc #{new_ord_id})",
+                                    "notes": f"Sinal via {formatted_id} (Enc #{new_ord_id})",
                                     "salesperson": salesp_app,
                                     "order_id": f"ENC-{new_ord_id}"
                                 })
