@@ -259,7 +259,7 @@ with database.db_session() as conn:
                                 if has_variants:
                                     v_opts = {f"{v['variant_name']} (Est: {v['stock_quantity']})": v['id'] for _, v in vars_df.iterrows()}
                                     v_keys = ["Produto Base (Padrão)"] + list(v_opts.keys())
-                                    sel_v_label = st.selectbox("Variação", v_keys)
+                                    sel_v_label = st.selectbox("Variação", v_keys, key=f"sel_var_loop_{row['id']}")
                                     if sel_v_label != "Produto Base (Padrão)":
                                         prod_target = sel_v_label
                                         target_variant_id = v_opts[sel_v_label]
