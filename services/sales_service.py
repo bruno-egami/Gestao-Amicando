@@ -9,7 +9,7 @@ from database import safe_transaction
 
 logger = get_logger(__name__)
 
-def process_sale_transaction(conn, cart_analysis, client_id, salesperson, payment_method, notes, delivery_days, deposit_val):
+def process_sale_transaction(conn, cart_analysis, client_id, salesperson, payment_method, notes, delivery_days, deposit_val, date_obj=None):
     """
     Process a complete sales transaction, including:
     - Immediate sales (stock deduction)
@@ -24,8 +24,15 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
     order_items = []
     logs = []
     
-    # Calculate delivery date based on today + delivery_days
-    delivery_date = date.today() + pd.Timedelta(days=int(delivery_days))
+    # Use provided date/time or defaults to NOW
+    if date_obj is None:
+        date_obj = datetime.now()
+    
+    # Calculate delivery date based on today + delivery_days (delivery logic remains based on days)
+    # If backdating, the due date might still be relative to 'today' or the backdated date?
+    # Usually lead time is from the moment of order. Let's base it on date_obj if it's a date/datetime.
+    base_date = date_obj.date() if isinstance(date_obj, datetime) else date_obj
+    delivery_date = base_date + pd.Timedelta(days=int(delivery_days))
     
     try:
         with safe_transaction(conn):
@@ -44,7 +51,7 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
                     disc_sell = unit_disc * q_sell
                     
                     sale_data = {
-                        "date": date.today(),
+                        "date": date_obj, # Pass full datetime/date
                         "product_id": int(it['product_id']),
                         "quantity": q_sell,
                         "total_price": total_sell,
@@ -97,9 +104,9 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
                 order_service.add_commission_items(cursor, new_ord_id, order_items)
                 
                 # 3. Deposit as Sale
-                if deposit_val > 0:
-                    order_service.create_sale(cursor, {
-                            "date": date.today(),
+                    if deposit_val > 0:
+                        order_service.create_sale(cursor, {
+                            "date": date_obj,
                             "product_id": None,
                             "quantity": 1,
                             "total_price": deposit_val,

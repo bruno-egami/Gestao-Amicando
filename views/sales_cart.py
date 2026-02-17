@@ -471,19 +471,26 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                              admin_utils.show_feedback_dialog("Selecione a Vendedora.", level="error")
                              valid_client = False
                              
-                        if valid_client:
-                            try:
-                                # Call Sales Service
-                                result = sales_service.process_sale_transaction(
-                                    conn, 
-                                    cart_analysis, 
-                                    final_client_id, 
-                                    salesperson_choice, 
-                                    pay_method_choice, 
-                                    notes_order, 
-                                    d_lead_days, 
-                                    deposit_val
-                                )
+                            if valid_client:
+                                try:
+                                    # Calculate Timestamp
+                                    if date_order == date.today():
+                                        final_dt = datetime.now()
+                                    else:
+                                        final_dt = datetime.combine(date_order, datetime.min.time())
+
+                                    # Call Sales Service
+                                    result = sales_service.process_sale_transaction(
+                                        conn, 
+                                        cart_analysis, 
+                                        final_client_id, 
+                                        salesperson_choice, 
+                                        pay_method_choice, 
+                                        notes_order, 
+                                        d_lead_days, 
+                                        deposit_val,
+                                        date_obj=final_dt
+                                    )
                                 
                                 trans_uuid = result['trans_id']
                                 new_ord_id = result['order_id']
@@ -565,6 +572,13 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                             try:
                                 with safe_transaction(conn):
                                     cursor = conn.cursor()
+                                    
+                                    # Calculate Timestamp
+                                    if date_order == date.today():
+                                        final_dt = datetime.now()
+                                    else:
+                                        final_dt = datetime.combine(date_order, datetime.min.time())
+
                                     final_notes_B = f"Encomenda Total. Obs: {notes_order}"
                                     if deposit_val > 0:
                                         final_notes_B += f"\n\nSinal: R$ {deposit_val:.2f}"
@@ -574,7 +588,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
 
                                     new_ord_id = order_service.create_commission_order(cursor, {
                                         'client_id': final_client_id,
-                                        'date_created': date.today(),
+                                        'date_created': final_dt, # Use datetime
                                         'date_due': final_date_due,
                                         'status': "Pendente",
                                         'total_price': 0, 
@@ -604,7 +618,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                     
                                     if deposit_val > 0:
                                         order_service.create_sale(cursor, {
-                                            "date": date.today(),
+                                            "date": final_dt, # Use datetime
                                             "product_id": None,
                                             "quantity": 1,
                                             "total_price": deposit_val,
