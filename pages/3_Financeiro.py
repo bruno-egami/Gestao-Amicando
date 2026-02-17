@@ -620,10 +620,11 @@ with database.db_session() as conn:
                 # Table
                 # Use 'amount' instead of 'total_price'
                 st.dataframe(
-                    filtered_sales[['date', 'description', 'client_name', 'amount', 'discount', 'payment_method', 'source']],
+                    filtered_sales[['id', 'date', 'description', 'client_name', 'amount', 'discount', 'payment_method', 'source']],
                     hide_index=True,
                     use_container_width=True,
                     column_config={
+                        "id": st.column_config.NumberColumn("ID", format="%d"),
                         "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                         "description": "Descrição / Produto",
                         "client_name": "Cliente / Aluno",
@@ -677,10 +678,11 @@ with database.db_session() as conn:
                 
                 # Table
                 st.dataframe(
-                    filtered_expenses[['date', 'description', 'amount', 'category', 'supplier_name']],
+                    filtered_expenses[['id', 'date', 'description', 'amount', 'category', 'supplier_name']],
                     hide_index=True,
                     use_container_width=True,
                     column_config={
+                        "id": st.column_config.NumberColumn("ID", format="%d"),
                         "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                         "description": "Descrição",
                         "amount": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
