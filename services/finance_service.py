@@ -273,14 +273,15 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
     """
     
     # 1. Sales Revenue (From Sales Table)
+    # 1. Sales Revenue (From Sales Table)
     sales_query = """
         SELECT s.id, s.date, s.total_price as amount, s.discount, s.payment_method, s.salesperson,
                p.name as product_name, p.category as product_category, c.name as client_name, 'Venda' as source,
-               'Venda de Produto' as description, 'Receita' as type
+               'Venda de Produto' as description, 'Receita' as type, s.order_id as origin_id
         FROM sales s
         LEFT JOIN products p ON s.product_id = p.id
         LEFT JOIN clients c ON s.client_id = c.id
-        WHERE s.date BETWEEN ? AND ?
+        WHERE DATE(s.date) BETWEEN ? AND ?
     """
     sales_df = pd.read_sql(sales_query, conn, params=(start_date, end_date))
     
@@ -289,7 +290,7 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
         SELECT t.id, t.payment_date as date, t.amount, 0.0 as discount, 'Dinheiro/Pix' as payment_method, 
                'Sistema' as salesperson, NULL as product_name, 'Mensalidade' as product_category, 
                s.name as client_name, 'Mensalidade' as source,
-               ('Mensalidade ' || t.month_year) as description, 'Receita' as type
+               ('Mensalidade ' || t.month_year) as description, 'Receita' as type, CAST(t.id as TEXT) as origin_id
         FROM tuitions t
         JOIN students s ON t.student_id = s.id
         WHERE t.status = 'Pago' AND DATE(t.payment_date) BETWEEN ? AND ?
@@ -297,13 +298,12 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
     tuition_df = pd.read_sql(tuition_query, conn, params=(start_date, end_date))
     
     # 1.2 Student Consumptions - Paid
-    # Note: Using COALESCE logic similar to history to ensure valid date
     consumption_query = """
-        SELECT sc.id, DATE(COALESCE(NULLIF(sc.payment_date, ''), NULLIF(sc.date, ''), DATE('now'))) as date, 
+        SELECT sc.id, COALESCE(NULLIF(sc.payment_date, ''), NULLIF(sc.date, ''), DATE('now')) as date, 
                sc.total_value as amount, 0.0 as discount, 'Dinheiro/Pix' as payment_method,
                'Sistema' as salesperson, NULL as product_name, 'Consumo Aluno' as product_category,
                s.name as client_name, 'Consumo' as source,
-               sc.description, 'Receita' as type
+               sc.description, 'Receita' as type, CAST(sc.id as TEXT) as origin_id
         FROM student_consumptions sc
         JOIN students s ON sc.student_id = s.id
         WHERE sc.status = 'Pago' AND DATE(COALESCE(NULLIF(sc.payment_date, ''), NULLIF(sc.date, ''), DATE('now'))) BETWEEN ? AND ?
@@ -315,19 +315,27 @@ def get_financial_summary(conn: sqlite3.Connection, start_date: date, end_date: 
 
     # 2. Expenses (From Expenses Table)
     expenses_query = """
-        SELECT e.id, e.date, e.description, e.amount, e.category, s.name as supplier_name, 'Despesa' as source
+        SELECT e.id, e.date, e.description, e.amount, e.category, s.name as supplier_name, 'Despesa' as source,
+               CAST(e.id as TEXT) as origin_id
         FROM expenses e
         LEFT JOIN suppliers s ON e.supplier_id = s.id
-        WHERE e.date BETWEEN ? AND ?
+        WHERE DATE(e.date) BETWEEN ? AND ?
     """
     expenses_df = pd.read_sql(expenses_query, conn, params=(start_date, end_date))
     
     # Process Dates
     if not all_revenues.empty:
         all_revenues['date'] = pd.to_datetime(all_revenues['date'], errors='coerce')
+        # Extract time (HH:MM) if present (not 00:00:00)
+        all_revenues['time'] = all_revenues['date'].apply(
+            lambda x: x.strftime('%H:%M') if pd.notna(x) and x.time() != datetime.min.time() else '-'
+        )
         
     if not expenses_df.empty:
         expenses_df['date'] = pd.to_datetime(expenses_df['date'], errors='coerce')
+        expenses_df['time'] = expenses_df['date'].apply(
+            lambda x: x.strftime('%H:%M') if pd.notna(x) and x.time() != datetime.min.time() else '-'
+        )
 
     # Calculations
     gross_revenue = all_revenues['amount'].sum() if not all_revenues.empty else 0.0

@@ -620,12 +620,14 @@ with database.db_session() as conn:
                 # Table
                 # Use 'amount' instead of 'total_price'
                 st.dataframe(
-                    filtered_sales[['id', 'date', 'description', 'client_name', 'amount', 'discount', 'payment_method', 'source']],
+                    filtered_sales[['id', 'origin_id', 'date', 'time', 'description', 'client_name', 'amount', 'discount', 'payment_method', 'source']],
                     hide_index=True,
                     use_container_width=True,
                     column_config={
                         "id": st.column_config.NumberColumn("ID", format="%d"),
+                        "origin_id": "ID Origem",
                         "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                        "time": "Hora",
                         "description": "Descrição / Produto",
                         "client_name": "Cliente / Aluno",
                         "amount": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
@@ -678,12 +680,14 @@ with database.db_session() as conn:
                 
                 # Table
                 st.dataframe(
-                    filtered_expenses[['id', 'date', 'description', 'amount', 'category', 'supplier_name']],
+                    filtered_expenses[['id', 'origin_id', 'date', 'time', 'description', 'amount', 'category', 'supplier_name']],
                     hide_index=True,
                     use_container_width=True,
                     column_config={
                         "id": st.column_config.NumberColumn("ID", format="%d"),
+                        "origin_id": "ID Origem",
                         "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                        "time": "Hora",
                         "description": "Descrição",
                         "amount": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
                         "category": "Categoria",
