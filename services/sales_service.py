@@ -1,4 +1,5 @@
 import uuid
+import pandas as pd
 from datetime import datetime, date
 import services.product_service as product_service
 import services.order_service as order_service
@@ -8,7 +9,7 @@ from database import safe_transaction
 
 logger = get_logger(__name__)
 
-def process_sale_transaction(conn, cart_analysis, client_id, salesperson, payment_method, notes, delivery_date, deposit_val):
+def process_sale_transaction(conn, cart_analysis, client_id, salesperson, payment_method, notes, delivery_days, deposit_val):
     """
     Process a complete sales transaction, including:
     - Immediate sales (stock deduction)
@@ -22,6 +23,9 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
     trans_uuid = f"TRX-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}"
     order_items = []
     logs = []
+    
+    # Calculate delivery date based on today + delivery_days
+    delivery_date = date.today() + pd.Timedelta(days=int(delivery_days))
     
     try:
         with safe_transaction(conn):
@@ -61,8 +65,8 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
                     # Deduct Stock
                     deduct_logs = product_service.deduct_stock(cursor, int(it['product_id']), q_sell, variant_id=it.get('variant_id'))
                     logs.extend(deduct_logs)
-
-                # 1.2 Commission Order Portion
+ 
+                 # 1.2 Commission Order Portion
                 if q_order > 0:
                     order_items.append({
                         'product_id': it['product_id'],
@@ -79,7 +83,7 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
                 final_notes = f"Gerado via Venda #{trans_uuid}. Obs: {notes}"
                 if deposit_val > 0:
                     final_notes += f"\n\nSinal: R$ {deposit_val:.2f}"
-
+ 
                 order_data = {
                     'client_id': client_id,
                     'date_created': date.today(),

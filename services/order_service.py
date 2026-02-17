@@ -753,7 +753,7 @@ def start_wip_production(conn, order_id, item_id, product_id, variant_id,
         raise
 
 
-def deliver_order(conn, order_id, order_data, items_df):
+def deliver_order(conn, order_id, order_data, items_df, salesperson='Sistema', payment_method='Misto'):
     """
     Delivers a commission order:
     1. Re-injects items to stock (net zero from reservation)
@@ -816,9 +816,9 @@ def deliver_order(conn, order_id, order_data, items_df):
                 cursor.execute("""
                     INSERT INTO sales (date, product_id, quantity, total_price, status, client_id, 
                                      discount, payment_method, notes, salesperson, order_id)
-                    VALUES (?, ?, ?, ?, 'Finalizada', ?, ?, 'Misto', ?, 'Sistema', ?)
+                    VALUES (?, ?, ?, ?, 'Finalizada', ?, ?, ?, ?, ?, ?)
                 """, (date.today(), it['product_id'], it['quantity'], final_item_price, 
-                      order_data['client_id'], discount_share, notes_item, ord_uuid))
+                      order_data['client_id'], discount_share, payment_method, notes_item, salesperson, ord_uuid))
                 
                 # 3. Deduct Stock (Sales Logic)
                 p_row_chk = pd.read_sql(
@@ -890,8 +890,8 @@ def create_client(conn, name, phone, email=None):
 def create_quote(conn, quote_data, items):
     """
     Creates a new quote.
-    quote_data: client_id, notes, delivery_terms, payment_terms, valid_days
-    items: list of {product_id, qty, price, notes}
+    quote_data: client_id, notes, valid_days, delivery_days
+    items: list of {product_id, qty, price, notes, variant_id}
     """
     try:
         with safe_transaction(conn):
@@ -904,10 +904,10 @@ def create_quote(conn, quote_data, items):
             total_val = sum(i['qty'] * i['price'] for i in items)
             
             cursor.execute("""
-                INSERT INTO quotes (client_id, date_created, date_valid_until, status, total_price, notes, delivery_terms, payment_terms)
+                INSERT INTO quotes (client_id, date_created, date_valid_until, status, total_price, notes, payment_terms, delivery_days)
                 VALUES (?, ?, ?, 'Pendente', ?, ?, ?, ?)
             """, (quote_data['client_id'], date.today(), valid_until, total_val, quote_data['notes'], 
-                  quote_data.get('delivery_terms'), quote_data.get('payment_terms')))
+                  quote_data.get('payment_terms'), int(quote_data.get('delivery_days', 0))))
             
             quote_id = cursor.lastrowid
             

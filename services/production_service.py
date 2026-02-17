@@ -103,27 +103,31 @@ def move_stage(conn, item_id, current_stage, next_stage, qty_move, total_qty, se
             history_json = json.dumps(history)
 
             # 1. Automatic Material Deduction
-            m_deducted = curr['materials_deducted']
+            m_deducted = _safe_int(curr['materials_deducted']) or 0
             if next_stage == 'Modelagem' and m_deducted == 0:
-                product_service.deduct_production_materials_central(cursor, int(curr['product_id']), qty_move, filter_type='clay', user_id=user_id)
+                product_service.deduct_production_materials_central(cursor, _safe_int(curr['product_id']), qty_move, filter_type='clay', user_id=user_id)
                 m_deducted = 1
                 
             # Glaze (if moving to Esmaltação)
-            if current_stage == 'Biscoito' and next_stage == 'Esmaltação' and deduct_glaze and selected_variant_id:
-                var_data = pd.read_sql("SELECT m.name as mat_name, pv.material_id, pv.material_quantity, m.stock_level FROM product_variants pv LEFT JOIN materials m ON pv.material_id = m.id WHERE pv.id=?", conn, params=(int(selected_variant_id),))
+            if current_stage == 'Biscoito' and next_stage == 'Esmaltação' and deduct_glaze and pd.notna(selected_variant_id):
+                v_id_int = int(selected_variant_id)
+                var_data = pd.read_sql("SELECT m.name as mat_name, pv.material_id, pv.material_quantity, m.stock_level FROM product_variants pv LEFT JOIN materials m ON pv.material_id = m.id WHERE pv.id=?", conn, params=(v_id_int,))
                 if not var_data.empty:
                     vd = var_data.iloc[0]
-                    if vd['material_id'] and vd['material_quantity'] > 0:
+                    if pd.notna(vd['material_id']) and vd['material_quantity'] > 0:
                         d_qty = vd['material_quantity'] * qty_move
                         if d_qty > vd['stock_level']:
                             raise ValueError(f"Estoque insuficiente de esmalte: {vd['mat_name']} (Necessário: {d_qty:.3f}, Disponível: {vd['stock_level']:.3f})")
                         
-                        cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", (d_qty, int(vd['material_id'])))
+                        m_id_int = int(vd['material_id'])
+                        cursor.execute("UPDATE materials SET stock_level = stock_level - ? WHERE id=?", (d_qty, m_id_int))
                         cursor.execute("INSERT INTO inventory_transactions (date, material_id, quantity, type, notes) VALUES (?, ?, ?, 'SAIDA', ?)", 
-                                      (date.today().isoformat(), int(vd['material_id']), d_qty, f"Esmaltação Produto ID {curr['product_id']}"))
+                                      (date.today().isoformat(), m_id_int, d_qty, f"Esmaltação Produto ID {curr['product_id']}"))
 
             # Use provided variant or keep existing
-            final_variant_id = selected_variant_id if selected_variant_id else curr['variant_id']
+            final_variant_id = selected_variant_id if pd.notna(selected_variant_id) else curr['variant_id']
+            # Ensure final_variant_id is a clean int or None
+            final_variant_id = _safe_int(final_variant_id)
 
             # 2. Perform Move
             if qty_move == total_qty:
@@ -139,9 +143,9 @@ def move_stage(conn, item_id, current_stage, next_stage, qty_move, total_qty, se
                 cursor.execute("""
                     INSERT INTO production_wip (product_id, variant_id, order_id, order_item_id, stage, quantity, start_date, materials_deducted, stage_history, notes)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (int(curr['product_id']), final_variant_id, 
-                      int(curr['order_id']) if pd.notna(curr['order_id']) else None, 
-                      int(curr['order_item_id']) if pd.notna(curr['order_item_id']) else None, 
+                """, (_safe_int(curr['product_id']), final_variant_id, 
+                      _safe_int(curr['order_id']), 
+                      _safe_int(curr['order_item_id']), 
                       next_stage, qty_move, curr['start_date'], int(m_deducted), history_json, curr['notes']))
         return True
     except Exception as e:
@@ -149,19 +153,26 @@ def move_stage(conn, item_id, current_stage, next_stage, qty_move, total_qty, se
         raise
 
 def _safe_int(val):
-    if pd.isna(val): return None
-    if isinstance(val, int): return val
-    if isinstance(val, float): return int(val)
+    """Safely converts various types (including NaN, bytes, floats) to int or None."""
+    if pd.isna(val) or val is None: 
+        return None
+    
+    if isinstance(val, (int, float)):
+        try:
+            return int(val)
+        except (ValueError, OverflowError):
+            return None
+            
     if isinstance(val, bytes):
-        # Handle bytes (e.g. b'\x01' -> 1)
-        # Try converting from bytes to int
         try:
             return int.from_bytes(val, "little")
-        except:
+        except Exception:
             pass
+            
     try:
-        return int(val)
-    except:
+        # Final fallback for strings or other types
+        return int(float(val)) if "." in str(val) else int(val)
+    except (ValueError, TypeError):
         return None
 
 def finalize_production(conn, item, qty, inc_stock, user_id=None, username='WIP'):

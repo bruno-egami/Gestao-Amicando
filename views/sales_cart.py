@@ -130,18 +130,28 @@ def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_ch
     st.write(f"Cliente: {client_display_name}")
     
     qd_valid = st.number_input("Validade (dias)", value=30, min_value=1)
-    qd_deliv = st.text_input("Prazo Entrega", value="45 dias após confirmação")
+    qd_days = st.number_input("Prazo Execução (dias após aprovação)", value=45, min_value=0)
     qd_pay = st.text_input("Condições Pagamento", value="50% entrada + saldo na entrega")
     qd_note = st.text_area("Observações", value=initial_notes)
     
     if st.button("Confirmar Criação", type="primary"):
+        if not cli_choice_val:
+            st.error("Erro: Nenhum cliente selecionado.")
+            return
+            
         try:
             with database.db_session() as conn:
                 # Create Client if needed
                 final_cid = None
                 if cli_choice_val == "++ Cadastrar Novo ++":
+                    if not n_name:
+                        st.error("Erro: Nome do novo cliente é obrigatório.")
+                        return
                     final_cid = order_service.create_client(conn, n_name, n_phone)
                 else:
+                    if cli_choice_val not in c_dict:
+                        st.error(f"Erro: Cliente '{cli_choice_val}' não encontrado.")
+                        return
                     final_cid = c_dict[cli_choice_val]
                 
                 if isinstance(final_cid, bytes): final_cid = int.from_bytes(final_cid, "little")
@@ -165,7 +175,7 @@ def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_ch
                 quote_id = order_service.create_quote(conn, {
                     'client_id': final_cid,
                     'notes': qd_note,
-                    'delivery_terms': qd_deliv,
+                    'delivery_days': qd_days,
                     'payment_terms': qd_pay,
                     'valid_days': qd_valid
                 }, service_items)
@@ -180,7 +190,8 @@ def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_ch
         except Exception as e:
             if type(e).__name__ in ["RerunException", "StopException"]:
                 raise e
-            st.error(f"Erro ao salvar orçamento: {e}")
+            logger.exception("In-dialog quote creation error")
+            st.error(f"Erro ao salvar orçamento: {type(e).__name__} - {e}")
 
 # ==============================================================================
 # RENDER CART & CHECKOUT
@@ -428,7 +439,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                     default_dep = calc_shortage_val * 0.5 if calc_shortage_val > 0 else calc_total_val * 0.5
                         
                     c_dates1, c_dates2 = st.columns(2)
-                    d_comm = c_dates1.date_input("Prazo para Encomenda (se houver)", value=datetime.now() + pd.Timedelta(days=30), format="DD/MM/YYYY")
+                    d_lead_days = c_dates1.number_input("Prazo para Produção (dias)", value=30, min_value=0)
                     deposit_val = c_dates2.number_input("Valor Sinal/Adiantamento (R$)", min_value=0.0, step=10.0, value=float(round(default_dep, 2)))
                     
                     col_act1, col_act2, col_act3 = st.columns(3)
@@ -470,7 +481,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                     salesperson_choice, 
                                     pay_method_choice, 
                                     notes_order, 
-                                    d_comm, 
+                                    d_lead_days, 
                                     deposit_val
                                 )
                                 
@@ -503,7 +514,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                     "notes": final_notes,
                                     "total": cart_total,
                                     "deposit": deposit_val if has_order else 0,
-                                    "date_due": d_comm.strftime("%d/%m/%Y") if has_order else None,
+                                    "date_due": (date.today() + pd.Timedelta(days=d_lead_days)).strftime("%d/%m/%Y") if has_order else None,
                                     "items": st.session_state['cart'] 
                                 }
                                 st.session_state['cart'] = []
@@ -558,10 +569,13 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                     if deposit_val > 0:
                                         final_notes_B += f"\n\nSinal: R$ {deposit_val:.2f}"
 
+                                    # Calculate date_due
+                                    final_date_due = date.today() + pd.Timedelta(days=int(d_lead_days))
+
                                     new_ord_id = order_service.create_commission_order(cursor, {
                                         'client_id': final_client_id,
                                         'date_created': date.today(),
-                                        'date_due': d_comm,
+                                        'date_due': final_date_due,
                                         'status': "Pendente",
                                         'total_price': 0, 
                                         'notes': final_notes_B,
@@ -611,7 +625,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                                         "payment_method": "Encomenda", 
                                         "notes": final_notes_B,
                                         "deposit": deposit_val,
-                                        "date_due": d_comm.strftime("%d/%m/%Y"),
+                                        "date_due": (date.today() + pd.Timedelta(days=int(d_lead_days))).strftime("%d/%m/%Y"),
                                         "items": st.session_state['cart'], 
                                         "total": cart_total, 
                                     }

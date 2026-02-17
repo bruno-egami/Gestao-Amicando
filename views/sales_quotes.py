@@ -31,6 +31,7 @@ def render_quotes_management(conn):
         status_icon = {"Pendente": "🟡", "Aprovado": "🟢"}.get(quote['status'], "⚪")
         with st.expander(f"{status_icon} {formatted_id} | {quote['name']} | R$ {quote['total_price']:.2f}"):
             st.write(f"Notas: {quote['notes']}")
+            st.caption(f"📅 Prazo de Execução: {quote.get('delivery_days', 0)} dias (após aprovação)")
             
             # Fetch items
             items = order_service.get_quote_items(conn, quote['id'])
@@ -55,7 +56,7 @@ def render_quotes_management(conn):
                 "total": quote['total_price'],
                 "discount": 0,
                 "notes": quote['notes'], 
-                "delivery": quote['delivery_terms'], 
+                "delivery": f"{quote.get('delivery_days', 0)} dias após confirmação", 
                 "payment": quote['payment_terms']
             })
             c1.download_button("📄 PDF", data=pdf_data, file_name=f"orcamento_{quote['id']}.pdf", mime="application/pdf", key=f"qp_{quote['id']}")
@@ -87,13 +88,17 @@ def render_quotes_management(conn):
                         with safe_transaction(conn):
                             cursor = conn.cursor()
                             
+                            # Calculate date_due based on lead time
+                            lead_days = int(quote.get('delivery_days', 0))
+                            final_date_due = date.today() + pd.Timedelta(days=lead_days)
+
                             # 1. Create Commission Order head
                             new_ord_id = order_service.create_commission_order(cursor, {
                                 'client_id': quote['client_id'], 
                                 'total_price': quote['total_price'],
                                 'status': 'Pendente', 
                                 'date_created': date.today(), 
-                                'date_due': date.today(), # Set to today by default, user can edit in management
+                                'date_due': final_date_due, 
                                 'notes': f"Via {formatted_id}. {quote['notes']}", 
                                 'deposit_amount': dep_val
                             })

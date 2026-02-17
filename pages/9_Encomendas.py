@@ -528,50 +528,84 @@ with database.db_session() as conn:
                                 log_exception(logger, f"Error marking ready order {order['id']}", e)
                                 admin_utils.show_feedback_dialog(f"Erro ao atualizar status: {e}", level="error")
 
-                    if st.button("📦 Realizar Entrega", key=f"dlv_{order['id']}"):
-                        try:
-                            order_data_dict = {
-                                'client_id': order['client_id'],
-                                'total_price': order['total_price'],
-                                'deposit_amount': order['deposit_amount'],
-                                'status': order['status']
-                            }
-                            order_service.deliver_order(conn, order['id'], order_data_dict, items)
-                    
-                            # Prepare data for Receipt
-                            rec_data = {
-                                "id": formatted_id,
-                                "type": "Encomenda (Entrega)",
-                                "date": created_dt.strftime('%d/%m/%Y'),
-                                "date_due": pd.to_datetime(order['date_due']).strftime('%d/%m/%Y'),
-                                "client_name": order['client'],
-                                "items": [
-                                    {
-                                        "name": r['name'], 
-                                        "qty": r['quantity'], 
-                                        "price": r['unit_price'],
-                                        "notes": r['notes'],
-                                        "images": r['image_paths']
-                                    } 
-                                    for _, r in items.iterrows()
-                                ],
-                                "total": order['total_price'],
-                                "discount": order['manual_discount'] or 0,
-                                "deposit": order['deposit_amount'] or 0,
-                                "status": "Entregue",
-                                "notes": order['notes']
-                            }
+                    with st.popover("📦 Realizar Entrega", use_container_width=True):
+                        st.write("### Detalhes do Recebimento Final")
                         
-                            # Generate PDF
-                            pdf_bytes = reports.generate_commission_receipt_pdf(rec_data)
-                        
-                            # Set Session State to show Download Button after rerun
-                            st.session_state['delivered_pdf'] = pdf_bytes
-                            st.session_state['delivered_name'] = f"Recibo_Final_{formatted_id}.pdf"
-                            st.session_state['expanded_order_id'] = order['id']
-                        
-                            st.rerun()
-                        except Exception as e:
-                            log_exception(logger, f"Error delivering order {order['id']}", e)
-                            admin_utils.show_feedback_dialog(f"Erro na entrega: {e}", level="error")
+                        # Calculate remaining value
+                        remaining_val = order['total_price'] - order['deposit_amount']
 
+                        # 1. Salesperson Selection
+                        try:
+                            # Use active users for salesperson list
+                            u_df = pd.read_sql("SELECT username FROM users WHERE is_active=1", conn)
+                            user_list = u_df['username'].tolist()
+                        except Exception:
+                            user_list = ['admin', 'vendedor']
+                        
+                        # Set default to current user if possible
+                        curr_u_name = st.session_state.get('current_user', {}).get('username', 'Sistema')
+                        def_idx = user_list.index(curr_u_name) if curr_u_name in user_list else 0
+                        
+                        sel_salesperson = st.selectbox("Vendedora (Recebimento Final)", user_list, index=def_idx, key=f"sp_dlv_{order['id']}")
+                        
+                        # 2. Payment Method
+                        pay_opts = ["Dinheiro", "Pix", "Cartão de Crédito", "Cartão de Débito", "Misto", "Transferência", "Outros"]
+                        sel_pay_method = st.selectbox("Método de Pagamento (Saldo)", pay_opts, index=1, key=f"pm_dlv_{order['id']}")
+                        
+                        st.info(f"Saldo a receber: R$ {remaining_val:.2f}")
+
+                        if st.button("Confirmar Entrega e Baixar Saldo", key=f"dlv_cfm_{order['id']}", type="primary", use_container_width=True):
+                            try:
+                                order_data_dict = {
+                                    'client_id': order['client_id'],
+                                    'total_price': order['total_price'],
+                                    'deposit_amount': order['deposit_amount'],
+                                    'status': order['status']
+                                }
+                                order_service.deliver_order(
+                                    conn, 
+                                    order['id'], 
+                                    order_data_dict, 
+                                    items, 
+                                    salesperson=sel_salesperson, 
+                                    payment_method=sel_pay_method
+                                )
+                        
+                                # Prepare data for Receipt
+                                rec_data = {
+                                    "id": formatted_id,
+                                    "type": "Encomenda (Entrega)",
+                                    "date": created_dt.strftime('%d/%m/%Y'),
+                                    "date_due": pd.to_datetime(order['date_due']).strftime('%d/%m/%Y'),
+                                    "client_name": order['client'],
+                                    "salesperson": sel_salesperson,
+                                    "payment_method": sel_pay_method,
+                                    "items": [
+                                        {
+                                            "name": r['name'], 
+                                            "qty": r['quantity'], 
+                                            "price": r['unit_price'],
+                                            "notes": r['notes'],
+                                            "images": r['image_paths']
+                                        } 
+                                        for _, r in items.iterrows()
+                                    ],
+                                    "total": order['total_price'],
+                                    "discount": order['manual_discount'] or 0,
+                                    "deposit": order['deposit_amount'] or 0,
+                                    "status": "Entregue",
+                                    "notes": order['notes']
+                                }
+                            
+                                # Generate PDF
+                                pdf_bytes = reports.generate_commission_receipt_pdf(rec_data)
+                            
+                                # Set Session State to show Download Button after rerun
+                                st.session_state['delivered_pdf'] = pdf_bytes
+                                st.session_state['delivered_name'] = f"Recibo_Final_{formatted_id}.pdf"
+                                st.session_state['expanded_order_id'] = order['id']
+                            
+                                st.rerun()
+                            except Exception as e:
+                                log_exception(logger, f"Error delivering order {order['id']}", e)
+                                admin_utils.show_feedback_dialog(f"Erro na entrega: {e}", level="error")

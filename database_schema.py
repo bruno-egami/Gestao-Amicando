@@ -78,9 +78,17 @@ def _migrate_v2(cursor):
             cursor.execute("UPDATE users SET force_password_change = 1 WHERE username = 'admin'")
         except Exception: pass
 
+def _migrate_v3(cursor):
+    """Migration v3: Add 'delivery_days' to quotes."""
+    try:
+        cursor.execute("ALTER TABLE quotes ADD COLUMN delivery_days INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
 MIGRATIONS = {
     1: _migrate_v1,
-    2: _migrate_v2
+    2: _migrate_v2,
+    3: _migrate_v3
 }
 
 def run_migrations(conn):
@@ -358,8 +366,8 @@ def init_db_from_conn(conn):
             discount REAL DEFAULT 0,
             notes TEXT,
             converted_order_id INTEGER,
-            delivery_terms TEXT,
             payment_terms TEXT,
+            delivery_days INTEGER DEFAULT 0,
             FOREIGN KEY (client_id) REFERENCES clients (id),
             FOREIGN KEY (converted_order_id) REFERENCES commission_orders (id)
         )
