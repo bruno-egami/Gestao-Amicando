@@ -1,6 +1,6 @@
 # 🏺 Amicando - Sistema de Gestão para Atelier de Cerâmica
 
-Sistema completo de gestão para ateliês de cerâmica artesanal, desenvolvido em **Streamlit** com banco de dados **SQLite**.
+Sistema de gestão para ateliês de cerâmica, desenvolvido em **Streamlit** com banco de dados **SQLite**.
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-red.svg)
@@ -213,4 +213,4 @@ Os testes utilizam um banco de dados SQLite **em memória**, garantindo que as e
 
 ---
 
-*Desenvolvido com ❤️ e ☕ por Bruno Egami*
+*Desenvolvido por Bruno Egami*
