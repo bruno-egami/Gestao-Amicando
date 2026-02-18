@@ -103,7 +103,7 @@ with database.db_session() as conn:
                      if calc_cons > 0: d_cons = calc_cons
                 
                 consumption = st.number_input("Consumo (kWh)", min_value=0.0, step=0.1, value=d_cons, format="%.1f")
-                kwh_price = st.number_input("Preço kWh (R$)", min_value=0.0, step=0.01, value=0.80)
+                kwh_price = st.number_input("Preço kWh (R$)", min_value=0.0, step=0.01, value=1.12)
                 
                 cost_calc = consumption * kwh_price
                 cost = st.number_input("Custo Total (R$)", min_value=0.0, step=0.01, value=cost_calc if not is_edit else d_cost)
