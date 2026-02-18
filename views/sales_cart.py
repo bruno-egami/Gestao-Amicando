@@ -471,27 +471,27 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                              admin_utils.show_feedback_dialog("Selecione a Vendedora.", level="error")
                              valid_client = False
                              
-                            if valid_client:
-                                try:
-                                    # Calculate Timestamp
-                                    if date_order == date.today():
-                                        final_dt = datetime.now()
-                                    else:
-                                        final_dt = datetime.combine(date_order, datetime.min.time())
+                        if valid_client:
+                            try:
+                                # Calculate Timestamp
+                                if date_order == date.today():
+                                    final_dt = datetime.now()
+                                else:
+                                    final_dt = datetime.combine(date_order, datetime.min.time())
 
-                                    # Call Sales Service
-                                    result = sales_service.process_sale_transaction(
-                                        conn, 
-                                        cart_analysis, 
-                                        final_client_id, 
-                                        salesperson_choice, 
-                                        pay_method_choice, 
-                                        notes_order, 
-                                        d_lead_days, 
-                                        deposit_val,
-                                        date_obj=final_dt
-                                    )
-                                
+                                # Call Sales Service
+                                result = sales_service.process_sale_transaction(
+                                    conn, 
+                                    cart_analysis, 
+                                    final_client_id, 
+                                    salesperson_choice, 
+                                    pay_method_choice, 
+                                    notes_order, 
+                                    d_lead_days, 
+                                    deposit_val,
+                                    date_obj=final_dt
+                                )
+                            
                                 trans_uuid = result['trans_id']
                                 new_ord_id = result['order_id']
                                 logs = result['logs']

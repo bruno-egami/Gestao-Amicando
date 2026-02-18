@@ -104,20 +104,20 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
                 order_service.add_commission_items(cursor, new_ord_id, order_items)
                 
                 # 3. Deposit as Sale
-                    if deposit_val > 0:
-                        order_service.create_sale(cursor, {
-                            "date": date_obj,
-                            "product_id": None,
-                            "quantity": 1,
-                            "total_price": deposit_val,
-                            "status": "Finalizada",
-                            "client_id": client_id,
-                            "discount": 0,
-                            "payment_method": payment_method,
-                            "notes": f"Sinal Enc #{new_ord_id}",
-                            "salesperson": salesperson,
-                            "order_id": f"ENC-{new_ord_id}"
-                        })
+                if deposit_val > 0:
+                    order_service.create_sale(cursor, {
+                        "date": date_obj,
+                        "product_id": None,
+                        "quantity": 1,
+                        "total_price": deposit_val,
+                        "status": "Finalizada",
+                        "client_id": client_id,
+                        "discount": 0,
+                        "payment_method": payment_method,
+                        "notes": f"Sinal Enc #{new_ord_id}",
+                        "salesperson": salesperson,
+                        "order_id": f"ENC-{new_ord_id}"
+                    })
         
         return {
             "success": True,
