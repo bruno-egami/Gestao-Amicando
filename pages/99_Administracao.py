@@ -326,7 +326,7 @@ with database.db_session() as conn:
     # ==============================================================================
     with tab_import:
         st.header("📥 Importação em Massa")
-        import_type = st.selectbox("Tipo de Importação", ["Selecione...", "Insumos (Matérias-Primas)", "Produtos", "Vendas", "Despesas", "Fornecedores", "Clientes"])
+        import_type = st.selectbox("Tipo de Importação", ["Selecione...", "Insumos (Matérias-Primas)", "Produtos", "Vendas", "Despesas", "Fornecedores", "Clientes", "Turmas", "Alunos"])
     
         if import_type != "Selecione...":
             # Simplified schemas for template generation
@@ -336,7 +336,9 @@ with database.db_session() as conn:
                 "Vendas": {"cols": ["ID", "Data", "Produto", "Qtd", "Total", "Cliente", "Status"], "table": "sales"},
                 "Despesas": {"cols": ["ID", "Data (AAAA-MM-DD)", "Descrição", "Valor", "Categoria"], "table": "expenses"},
                 "Fornecedores": {"cols": ["Nome", "Email", "Telefone"], "table": "suppliers"},
-                "Clientes": {"cols": ["Nome", "Telefone", "Email", "Data Nascimento"], "table": "clients"}
+                "Clientes": {"cols": ["Nome", "Telefone", "Email", "Data Nascimento"], "table": "clients"},
+                "Turmas": {"cols": ["Nome", "Descrição Horário", "Início", "Fim", "Dia da Semana (0-6)", "Notas"], "table": "classes"},
+                "Alunos": {"cols": ["Nome", "Telefone", "Email", "RG", "CPF", "Endereço", "Data Entrada", "Mensalidade Base", "Turma", "Ativo"], "table": "students"}
             }
             curr = schemas[import_type]
         
@@ -382,6 +384,10 @@ with database.db_session() as conn:
                                         admin_service.upsert_supplier(cursor, row)
                                     elif import_type == "Clientes":
                                         admin_service.upsert_client(cursor, row)
+                                    elif import_type == "Turmas":
+                                        admin_service.upsert_class(cursor, row)
+                                    elif import_type == "Alunos":
+                                        admin_service.upsert_student(cursor, row)
                                 
                                     ok += 1
                                 except Exception as e:
@@ -402,7 +408,7 @@ with database.db_session() as conn:
     # ==============================================================================
     with tab_export:
         st.header("📤 Exportação")
-        export_type = st.selectbox("Tipo de Exportação", ["Selecione...", "Insumos (Para Balanço/Contagem)", "Produtos", "Vendas", "Despesas", "Fornecedores", "Clientes"])
+        export_type = st.selectbox("Tipo de Exportação", ["Selecione...", "Insumos (Para Balanço/Contagem)", "Produtos", "Vendas", "Despesas", "Fornecedores", "Clientes", "Turmas", "Alunos"])
     
         if export_type != "Selecione...":
             df_exp = pd.DataFrame()
@@ -426,6 +432,12 @@ with database.db_session() as conn:
             elif export_type == "Clientes":
                 df_exp = admin_service.export_clients(conn)
                 fname = "clientes"
+            elif export_type == "Turmas":
+                df_exp = admin_service.export_classes(conn)
+                fname = "turmas"
+            elif export_type == "Alunos":
+                df_exp = admin_service.export_students(conn)
+                fname = "alunos"
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:

@@ -217,6 +217,41 @@ def export_clients(conn):
     """Exports clients."""
     return pd.read_sql("SELECT name as Nome, phone as Telefone, email as Email, date_of_birth as 'Data Nascimento' FROM clients ORDER BY name", conn)
 
+def export_classes(conn):
+    """Exports classes."""
+    query = """
+        SELECT 
+            name as Nome, 
+            schedule as "Descrição Horário", 
+            start_time as "Início", 
+            end_time as "Fim", 
+            weekday as "Dia da Semana (0-6)", 
+            notes as Notas
+        FROM classes
+        ORDER BY name
+    """
+    return pd.read_sql(query, conn)
+
+def export_students(conn):
+    """Exports students."""
+    query = """
+        SELECT 
+            s.name as Nome, 
+            s.phone as Telefone, 
+            s.email as Email, 
+            s.rg as RG, 
+            s.cpf as CPF, 
+            s.endereco as "Endereço", 
+            s.join_date as "Data Entrada", 
+            s.price_per_class as "Mensalidade Base", 
+            c.name as "Turma", 
+            s.active as Ativo
+        FROM students s
+        LEFT JOIN classes c ON s.class_id = c.id
+        ORDER BY s.name
+    """
+    return pd.read_sql(query, conn)
+
 # ==============================================================================
 # DATA IMPORT HELPERS
 # ==============================================================================
@@ -446,3 +481,71 @@ def upsert_client(cursor, row):
             INSERT INTO clients (name, contact_info, email, phone, date_of_birth)
             VALUES (?, ?, ?, ?, ?)
         """, (name, f"{row['Telefone']} / {row['Email']}", row['Email'], row['Telefone'], dob))
+
+def upsert_class(cursor, row):
+    """Upserts a class."""
+    name = str(row['Nome']).strip()
+    cursor.execute("SELECT id FROM classes WHERE name=?", (name,))
+    res = cursor.fetchone()
+    
+    start_time = str(row['Início']).strip() if pd.notna(row['Início']) else None
+    end_time = str(row['Fim']).strip() if pd.notna(row['Fim']) else None
+    sched = str(row['Descrição Horário']).strip() if pd.notna(row['Descrição Horário']) else f"{start_time} - {end_time}"
+    notes = str(row['Notas']).strip() if pd.notna(row['Notas']) else ""
+    
+    try: weekday = int(row['Dia da Semana (0-6)'])
+    except: weekday = None
+    
+    if res:
+        cursor.execute("""
+            UPDATE classes SET schedule=?, notes=?, weekday=?, start_time=?, end_time=?
+            WHERE id=?
+        """, (sched, notes, weekday, start_time, end_time, res[0]))
+    else:
+        cursor.execute("""
+            INSERT INTO classes (name, schedule, notes, weekday, start_time, end_time)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (name, sched, notes, weekday, start_time, end_time))
+
+def upsert_student(cursor, row):
+    """Upserts a student."""
+    name = str(row['Nome']).strip()
+    cursor.execute("SELECT id FROM students WHERE name=?", (name,))
+    res = cursor.fetchone()
+    
+    # Resolve Class
+    class_name = str(row['Turma']).strip() if pd.notna(row['Turma']) else ""
+    class_id = None
+    if class_name:
+        cursor.execute("SELECT id FROM classes WHERE name=?", (class_name,))
+        cres = cursor.fetchone()
+        if cres: class_id = cres[0]
+
+    rg = str(row['RG']).strip() if pd.notna(row['RG']) else None
+    cpf = str(row['CPF']).strip() if pd.notna(row['CPF']) else None
+    endereco = str(row['Endereço']).strip() if pd.notna(row['Endereço']) else None
+    email = str(row['Email']).strip() if pd.notna(row['Email']) else None
+    phone = str(row['Telefone']).strip() if pd.notna(row['Telefone']) else None
+    
+    join_date = None
+    if pd.notna(row['Data Entrada']) and str(row['Data Entrada']).strip():
+        try: join_date = pd.to_datetime(row['Data Entrada'], dayfirst=True).strftime('%Y-%m-%d')
+        except Exception as e: 
+            logger.debug(f"Error parsing join_date in upsert_student: {e}")
+    
+    try: price = float(row['Mensalidade Base'])
+    except: price = None
+    
+    try: active = int(row['Ativo'])
+    except: active = 1
+    
+    if res:
+        cursor.execute("""
+            UPDATE students SET phone=?, active=?, class_id=?, join_date=?, price_per_class=?, rg=?, cpf=?, endereco=?, email=?
+            WHERE id=?
+        """, (phone, active, class_id, join_date, price, rg, cpf, endereco, email, res[0]))
+    else:
+        cursor.execute("""
+            INSERT INTO students (name, phone, active, class_id, join_date, price_per_class, rg, cpf, endereco, email)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, phone, active, class_id, join_date, price, rg, cpf, endereco, email))
