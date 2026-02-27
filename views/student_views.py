@@ -137,11 +137,20 @@ def render_student_management(conn):
                         col_d1, col_d2 = st.columns(2)
                         erg = col_d1.text_input("RG", value=row.get('rg', ''))
                         ecpf = col_d2.text_input("CPF", value=row.get('cpf', ''))
+                        
+                        # Handle parsing of existing join_date for the widget
+                        jd_str = row.get('join_date', '')
+                        parsed_jd = datetime.today()
+                        if jd_str:
+                            try: parsed_jd = datetime.strptime(jd_str, '%Y-%m-%d')
+                            except: pass
+                        ejd = st.date_input("Data de Início", value=parsed_jd)
+                        
                         ea = st.checkbox("Ativo", value=bool(row['active']))
                         
                         if st.form_submit_button("Salvar Alterações"):
                             try:
-                                student_service.update_student(conn, row['id'], en, ep, ea, rg=erg, cpf=ecpf, endereco=end, email=ee)
+                                student_service.update_student(conn, row['id'], en, ep, ea, rg=erg, cpf=ecpf, endereco=end, email=ee, join_date=ejd.strftime('%Y-%m-%d'))
                                 admin_utils.show_feedback_dialog("Dados atualizados!", level="success")
                                 st.cache_data.clear()
                                 st.rerun()
