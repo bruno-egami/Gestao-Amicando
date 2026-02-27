@@ -47,6 +47,9 @@ def show_receipt_dialog(order_data):
                   raw_id = formatted_id.split("-")[1]
                   formatted_id = f"ENC-{current_dt.strftime('%y%m%d')}-{raw_id}"
 
+             subtotal_all = sum(float(item.get('base_price', 0)) * float(item.get('qty', 1)) for item in order_data['items'])
+             total_disc = sum(float(item.get('discount_value', 0)) for item in order_data['items'])
+             
              rep_data = {
                  "id": formatted_id,
                  "type": type_lbl,
@@ -56,7 +59,8 @@ def show_receipt_dialog(order_data):
                  "salesperson": order_data.get('salesperson', '-'),
                  "notes": order_data.get('notes', ''),
                  "items": [],
-                 "total": order_data.get('total', 0),
+                 "total": subtotal_all,
+                 "discount": total_disc,
                  "deposit": order_data.get('deposit', 0)
              }
              for item in order_data['items']:
@@ -82,6 +86,9 @@ def show_receipt_dialog(order_data):
              formatted_id = f"VEN-{current_dt.strftime('%y%m%d')}-{order_data.get('id')}"
              type_lbl = "Venda"
 
+             subtotal_all = sum(float(item.get('base_price', 0)) * float(item.get('qty', 1)) for item in order_data['items'])
+             total_disc = sum(float(item.get('discount_value', 0)) for item in order_data['items'])
+
              rep_data = {
                  "id": formatted_id,
                  "type": type_lbl,
@@ -91,8 +98,8 @@ def show_receipt_dialog(order_data):
                  "payment_method": order_data.get('payment_method', '-'), 
                  "notes": order_data.get('notes', ''), 
                  "items": [],
-                 "total": order_data.get('total', 0),
-                 "discount": 0, 
+                 "total": subtotal_all,
+                 "discount": total_disc, 
                  "deposit": order_data.get('deposit', 0)
              }
              for item in order_data['items']:
@@ -166,7 +173,7 @@ def quote_creation_dialog(client_display_name, initial_notes, cart_items, cli_ch
                     service_items.append({
                         'product_id': int(item['product_id']),
                         'qty': int(item['qty']),
-                        'price': float(item['base_price']),
+                        'price': float(item['base_price']) * (1 - float(item.get('discount_pct', 0)) / 100.0),
                         'notes': note_txt,
                         'variant_id': item.get('variant_id') # Added variant_id
                     })
@@ -231,18 +238,21 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
             c_qty, c_disc = st.columns(2)
             item_qty = c_qty.number_input("Qtd", min_value=1, step=1, value=1, key="item_qty")
             
-            # Checkbox for Discount (Discreet)
-            item_disc = 0.0
+            # Checkbox for Discount (Percentage)
+            item_disc_pct = 0.0
             with c_disc:
-                if st.checkbox("Desconto", key=f"chk_disc_{sel_row['id']}"):
-                    item_disc = st.number_input("Valor (R$)", min_value=0.0, step=0.1, value=0.0, key="item_disc")
+                if st.checkbox("Desconto %", key=f"chk_disc_{sel_row['id']}"):
+                    item_disc_pct = st.number_input("Valor (%)", min_value=0.0, max_value=100.0, step=1.0, value=0.0, key="item_disc")
             
             # Calc Preview
             base_price_effective = sel_row['base_price'] + price_adder
-            base_total = base_price_effective * item_qty
-            item_final = max(0.0, base_total - item_disc)
+            subtotal = base_price_effective * item_qty
+            disc_value = subtotal * (item_disc_pct / 100.0)
+            item_final = max(0.0, subtotal - disc_value)
             
             st.write(f"Preço Unit.: **R$ {base_price_effective:.2f}**")
+            if item_disc_pct > 0:
+                st.write(f"Desconto ({item_disc_pct}%): **R$ {disc_value:.2f}**")
             st.write(f"Total Item: **R$ {item_final:.2f}**")
             
             # Check cart for this product/variant
@@ -285,10 +295,13 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                 if existing_item:
                     # Merge
                     existing_item['qty'] += item_qty
-                    existing_item['discount'] += item_disc
+                    # Keep the latest percentage discount if they were different
+                    existing_item['discount_pct'] = item_disc_pct 
                     # Recalculate total
-                    base_val = existing_item['qty'] * existing_item['base_price']
-                    existing_item['total'] = max(0.0, base_val - existing_item['discount'])
+                    subtotal = existing_item['qty'] * existing_item['base_price']
+                    disc_val = subtotal * (existing_item['discount_pct'] / 100.0)
+                    existing_item['discount_value'] = disc_val
+                    existing_item['total'] = max(0.0, subtotal - disc_val)
                     st.toast(f"Item atualizado no carrinho! Qtd: {existing_item['qty']}", icon="🔄")
                 else:
                     # Add New
@@ -298,7 +311,8 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                         "thumb": sel_row['thumb_path'],
                         "qty": item_qty,
                         "base_price": base_price_effective, 
-                        "discount": item_disc,
+                        "discount_pct": item_disc_pct,
+                        "discount_value": subtotal * (item_disc_pct / 100.0),
                         "total": item_final,
                         "variant_id": selected_variant['id'] if selected_variant else None,
                         "variant_name": selected_variant['name'] if selected_variant else None
@@ -319,7 +333,7 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
             cart_df['exclude'] = False
         
         # Reorder columns
-        cols_order = ['exclude', 'product_name', 'qty', 'base_price', 'discount', 'total']
+        cols_order = ['exclude', 'product_name', 'qty', 'base_price', 'discount_pct', 'discount_value', 'total']
         existing_cols = cart_df.columns.tolist()
         final_order = [c for c in cols_order if c in existing_cols] + [c for c in existing_cols if c not in cols_order]
         cart_df = cart_df[final_order]
@@ -332,7 +346,8 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                     "product_name": st.column_config.TextColumn("Produto", width="medium", disabled=True),
                     "qty": st.column_config.NumberColumn("Qtd", width="small", min_value=1),
                     "base_price": st.column_config.NumberColumn("Preço Unit.", format="R$ %.2f", disabled=True),
-                    "discount": st.column_config.NumberColumn("Desc.", format="R$ %.2f", min_value=0.0, step=0.1),
+                    "discount_pct": st.column_config.NumberColumn("Desc. %", format="%.1f%%", min_value=0.0, max_value=100.0, step=1.0),
+                    "discount_value": st.column_config.NumberColumn("Desc. R$", format="R$ %.2f", disabled=True, help="Valor do desconto calculado"),
                     "total": st.column_config.NumberColumn("Total", format="R$ %.2f", disabled=True),
                     "product_id": None, "thumb": None, "variant_id": None, "variant_name": None
                 },
@@ -355,8 +370,11 @@ def render_cart_section(conn, products_df, client_opts, client_dict):
                 # Protect against NaN
                 qty = float(item.get('qty', 1))
                 price = float(item.get('base_price', 0))
-                disc = float(item.get('discount', 0))
-                item['total'] = max(0.0, (qty * price) - disc)
+                disc_pct = float(item.get('discount_pct', 0))
+                subtotal_item = qty * price
+                disc_val = subtotal_item * (disc_pct / 100.0)
+                item['discount_value'] = disc_val
+                item['total'] = max(0.0, subtotal_item - disc_val)
                 item['qty'] = int(qty)
                 
             st.session_state['cart'] = final_cart

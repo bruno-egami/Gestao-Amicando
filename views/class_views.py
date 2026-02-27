@@ -19,7 +19,11 @@ def render_class_management(conn):
         with st.form("new_class"):
             st.markdown("**Nova Turma**")
             c_name = st.text_input("Nome da Turma (Ex: Terça Manhã)")
-            c_sched = st.text_input("Horário (Ex: Terça 09:00 - 12:00)")
+            col_t1, col_t2 = st.columns(2)
+            c_start = col_t1.text_input("Horário Início (HH:MM)", value="09:00")
+            c_end = col_t2.text_input("Horário Fim (HH:MM)", value="12:00")
+            
+            c_sched = f"{c_start} - {c_end}"
             
             # Weekday Selector
             c_wday_label = st.selectbox("Dia da Semana (Recorrente)", list(WEEKDAYS.keys()))
@@ -30,7 +34,7 @@ def render_class_management(conn):
             if st.form_submit_button("Criar Turma", type="primary"):
                 if c_name:
                     try:
-                        student_service.create_class(conn, c_name, c_sched, c_notes, c_wday)
+                        student_service.create_class(conn, c_name, c_sched, c_notes, c_wday, start_time=c_start, end_time=c_end)
                         admin_utils.show_feedback_dialog("Turma criada!", level="success")
                     except Exception as e:
                         admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
@@ -65,8 +69,12 @@ def render_class_management(conn):
                     row = classes[classes['name'] == sel_c].iloc[0]
                     with st.form("edit_class_form"):
                         ec_name = st.text_input("Nome", value=row['name'])
-                        ec_sched = st.text_input("Horário", value=row['schedule'])
                         
+                        col_et1, col_et2 = st.columns(2)
+                        ec_start = col_et1.text_input("Início", value=row.get('start_time', '09:00'))
+                        ec_end = col_et2.text_input("Fim", value=row.get('end_time', '12:00'))
+                        
+                        ec_sched = f"{ec_start} - {ec_end}"                        
                         # Weekday Edit
                         curr_wd = int(row['weekday']) if pd.notnull(row['weekday']) else 0
                         curr_wd_label = WEEKDAYS_REV.get(curr_wd, "Segunda-feira")
@@ -80,7 +88,7 @@ def render_class_management(conn):
                         
                         ec_notes = st.text_area("Notas", value=row['notes'])
                         if st.form_submit_button("Salvar"):
-                            student_service.update_class(conn, row['id'], ec_name, ec_sched, ec_notes, ec_wday)
+                            student_service.update_class(conn, row['id'], ec_name, ec_sched, ec_notes, ec_wday, start_time=ec_start, end_time=ec_end)
                             admin_utils.show_feedback_dialog("Atualizado!", level="success")
             
             st.divider()

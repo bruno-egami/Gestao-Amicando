@@ -46,9 +46,10 @@ def process_sale_transaction(conn, cart_analysis, client_id, salesperson, paymen
                 
                 # 1.1 Immediate Sale Portion
                 if q_sell > 0:
-                    unit_disc = it['discount'] / it['qty']
-                    total_sell = (it['base_price'] * q_sell) - (unit_disc * q_sell)
-                    disc_sell = unit_disc * q_sell
+                    disc_pct = it.get('discount_pct', 0)
+                    subtotal = it['base_price'] * q_sell
+                    disc_sell = subtotal * (disc_pct / 100.0)
+                    total_sell = subtotal - disc_sell
                     
                     sale_data = {
                         "date": date_obj, # Pass full datetime/date

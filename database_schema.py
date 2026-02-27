@@ -85,10 +85,23 @@ def _migrate_v3(cursor):
     except sqlite3.OperationalError:
         pass
 
+def _migrate_v4(cursor):
+    """Migration v4: Add student personal fields and structured class times."""
+    # 1. Students
+    for col in ['rg', 'cpf', 'endereco', 'email']:
+        try: cursor.execute(f"ALTER TABLE students ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError: pass
+        
+    # 2. Classes
+    for col in ['start_time', 'end_time']:
+        try: cursor.execute(f"ALTER TABLE classes ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError: pass
+
 MIGRATIONS = {
     1: _migrate_v1,
     2: _migrate_v2,
-    3: _migrate_v3
+    3: _migrate_v3,
+    4: _migrate_v4
 }
 
 def run_migrations(conn):
@@ -526,7 +539,9 @@ def init_db_from_conn(conn):
             name TEXT NOT NULL UNIQUE,
             schedule TEXT,
             notes TEXT,
-            weekday INTEGER
+            weekday INTEGER,
+            start_time TEXT,
+            end_time TEXT
         )
     ''')
 
@@ -538,7 +553,11 @@ def init_db_from_conn(conn):
             active INTEGER DEFAULT 1,
             class_id INTEGER,
             join_date TEXT,
-            price_per_class REAL
+            price_per_class REAL,
+            rg TEXT,
+            cpf TEXT,
+            endereco TEXT,
+            email TEXT
         )
     ''')
 

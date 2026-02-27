@@ -36,12 +36,13 @@ def get_all_classes(conn):
     """
     return pd.read_sql(query, conn)
 
-def create_class(conn, name, schedule, notes, weekday=None):
+def create_class(conn, name, schedule, notes, weekday=None, start_time=None, end_time=None):
     """Creates a new class."""
     try:
         with safe_transaction(conn):
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO classes (name, schedule, notes, weekday) VALUES (?, ?, ?, ?)", (name, schedule, notes, weekday))
+            cursor.execute("INSERT INTO classes (name, schedule, notes, weekday, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?)", 
+                         (name, schedule, notes, weekday, start_time, end_time))
             rid = cursor.lastrowid
             audit.log_action(conn, 'CREATE', 'classes', rid, None, {'name': name}, commit=False)
         return rid
@@ -50,19 +51,23 @@ def create_class(conn, name, schedule, notes, weekday=None):
         logger.error(f"Erro ao criar turma '{name}': {e}")
         raise
 
-def update_class(conn, class_id, name, schedule, notes, weekday=None):
+def update_class(conn, class_id, name, schedule, notes, weekday=None, start_time=None, end_time=None):
     """Updates a class."""
+    if isinstance(class_id, bytes): class_id = int.from_bytes(class_id, "little")
+    else: class_id = int(class_id)
+    
     old = pd.read_sql("SELECT * FROM classes WHERE id=?", conn, params=(class_id,)).iloc[0].to_dict()
     try:
         with safe_transaction(conn):
             cursor = conn.cursor()
-            cursor.execute("UPDATE classes SET name=?, schedule=?, notes=?, weekday=? WHERE id=?", (name, schedule, notes, weekday, class_id))
+            cursor.execute("UPDATE classes SET name=?, schedule=?, notes=?, weekday=?, start_time=?, end_time=? WHERE id=?", 
+                         (name, schedule, notes, weekday, start_time, end_time, class_id))
             audit.log_action(conn, 'UPDATE', 'classes', class_id, old, {'name': name}, commit=False)
     except Exception as e:
         logger.error(f"Erro ao atualizar turma {class_id}: {e}")
         raise
 
-def create_student(conn, name, phone, class_id=None, join_date=None):
+def create_student(conn, name, phone, class_id=None, join_date=None, rg=None, cpf=None, endereco=None, email=None):
     """Creates a new student."""
     if not join_date:
         join_date = datetime.now().strftime('%Y-%m-%d')
@@ -70,7 +75,10 @@ def create_student(conn, name, phone, class_id=None, join_date=None):
     try:
         with safe_transaction(conn):
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO students (name, phone, class_id, join_date, active) VALUES (?, ?, ?, ?, 1)", (name, phone, class_id, join_date))
+            cursor.execute("""
+                INSERT INTO students (name, phone, class_id, join_date, active, rg, cpf, endereco, email) 
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+            """, (name, phone, class_id, join_date, rg, cpf, endereco, email))
             new_id = cursor.lastrowid
             audit.log_action(conn, 'CREATE', 'students', new_id, None, {'name': name, 'class_id': class_id}, commit=False)
         return new_id
@@ -78,8 +86,8 @@ def create_student(conn, name, phone, class_id=None, join_date=None):
         logger.error(f"Erro ao criar aluno '{name}': {e}")
         raise
 
-def update_student(conn, student_id, name, phone, active):
-    """Updates student info (Name, Phone, Active). Class is handled separately."""
+def update_student(conn, student_id, name, phone, active, rg=None, cpf=None, endereco=None, email=None):
+    """Updates student info (Name, Phone, Active, etc). Class is handled separately."""
     student_id = int(student_id)
     # Get old data
     old = pd.read_sql("SELECT * FROM students WHERE id=?", conn, params=(student_id,)).iloc[0].to_dict()
@@ -87,8 +95,10 @@ def update_student(conn, student_id, name, phone, active):
     try:
         with safe_transaction(conn):
             cursor = conn.cursor()
-            cursor.execute("UPDATE students SET name=?, phone=?, active=? WHERE id=?", 
-                        (name, phone, int(active), student_id))
+            cursor.execute("""
+                UPDATE students SET name=?, phone=?, active=?, rg=?, cpf=?, endereco=?, email=? 
+                WHERE id=?
+            """, (name, phone, int(active), rg, cpf, endereco, email, student_id))
             
             audit.log_action(conn, 'UPDATE', 'students', student_id, old, {'name': name, 'phone': phone, 'active': active}, commit=False)
     except Exception as e:

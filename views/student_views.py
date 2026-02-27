@@ -38,20 +38,29 @@ def render_student_management(conn):
     with c1:
         with st.form("new_student"):
             st.markdown("**Novo Aluno**")
-            name = st.text_input("Nome Completo")
-            phone = st.text_input("Telefone (WhatsApp)")
+            n_nome = st.text_input("Nome completo")
+            n_tel = st.text_input("Telefone/Zap")
+            n_email = st.text_input("E-mail")
+            n_end = st.text_input("Endereço")
+            col_doc1, col_doc2 = st.columns(2)
+            n_rg = col_doc1.text_input("RG")
+            n_cpf = col_doc2.text_input("CPF")
             
-            # Class Selection
-            sel_class_name = st.selectbox("Turma", [""] + list(class_opts.keys()))
-            
-            join_date = st.date_input("Data de Início", value=datetime.today())
+            # Select class
+            c_opts = ["++ Sem Turma ++"] + sorted(list(class_opts.keys()))
+            n_turma = st.selectbox("Turma", c_opts)
+            n_join_date = st.date_input("Data de Início", value=datetime.today())
             
             if st.form_submit_button("Cadastrar Aluno", type="primary"):
-                if name:
+                if n_nome:
                     try:
-                        cid = class_opts.get(sel_class_name)
-                        nid = student_service.create_student(conn, name, phone, cid, join_date.strftime('%Y-%m-%d'))
-                        admin_utils.show_feedback_dialog(f"Aluno {name} cadastrado com ID {nid}!", level="success")
+                        cid = class_opts.get(n_turma)
+                        if isinstance(cid, bytes): cid = int.from_bytes(cid, "little")
+
+                        student_service.create_student(conn, n_nome, n_tel, cid, n_join_date.strftime('%Y-%m-%d'), rg=n_rg, cpf=n_cpf, endereco=n_end, email=n_email)
+                        admin_utils.show_feedback_dialog(f"Aluno {n_nome} cadastrado!", level="success")
+                        st.cache_data.clear()
+                        st.rerun()
                     except Exception as e:
                         admin_utils.show_feedback_dialog(f"Erro: {e}", level="error")
                 else:
@@ -69,11 +78,6 @@ def render_student_management(conn):
             df_students = student_service.get_all_active_students(conn)
             
         if not df_students.empty:
-            # Display readable
-            # Ensure price_per_class exists in DF columns (might be NaN just after migration)
-            if 'price_per_class' not in df_students.columns:
-                 df_students['price_per_class'] = 0.0
-            
             st.dataframe(
                 df_students[['id', 'name', 'phone', 'class_name', 'join_date']], 
                 hide_index=True, 
@@ -96,32 +100,25 @@ def render_student_management(conn):
             with st.expander("Editar / Desativar Aluno"):
                 # Combine active and inactive for editing
                 all_st_df = pd.concat([df_students, student_service.get_all_inactive_students(conn)])
-                st_map = {f"{row['id']} - {row['name']}": row['id'] for _, row in all_st_df.iterrows()}
-                sel_st_label = st.selectbox("Selecione para editar", [""] + list(st_map.keys()))
+                
+                st_labels = {f"{row['id']} - {row['name']}": row['id'] for _, row in all_st_df.iterrows()}
+                sel_st_label = st.selectbox("Selecionar aluno para editar", [""] + list(st_labels.keys()))
                 
                 if sel_st_label:
-                    sid_target = st_map[sel_st_label]
-                    # Filter by ID to be safe
+                    sid_target = st_labels[sel_st_label]
                     row = all_st_df[all_st_df['id'] == sid_target].iloc[0]
                     
-                    # --- Reactive Class Update ---
-                    st.markdown("#### Alterar Turma")
-                    
-                    e_curr_class_id = row['class_id']
-                    curr_cls_name = ""
-                    for name, cid in class_opts.items():
-                         if cid == e_curr_class_id:
-                             curr_cls_name = name
-                             break
-                    
-                    cls_names = [""] + list(class_opts.keys())
+                    # 1. Update Class (Reactive)
+                    st.markdown("#### Turma do Aluno")
+                    curr_cls_name = row['class_name'] if pd.notna(row['class_name']) else ""
+                    cls_selection_opts = [""] + list(class_opts.keys())
                     try:
-                        curr_idx = cls_names.index(curr_cls_name)
+                        curr_idx = cls_selection_opts.index(curr_cls_name)
                     except: curr_idx = 0
                     
                     st.selectbox(
-                        "Turma", 
-                        cls_names, 
+                        "Alterar Turma", 
+                        cls_selection_opts, 
                         index=curr_idx, 
                         key=f"class_sel_{row['id']}", 
                         on_change=on_class_change,
@@ -130,19 +127,60 @@ def render_student_management(conn):
                     
                     st.divider()
                     
-                    # --- Other Details Form ---
-                    with st.form(key=f"edit_student_details_{row['id']}"):
-                        st.markdown("#### Editar Dados Pessoais e Valor")
-                        en = st.text_input("Nome", value=row['name'], key=f"edit_name_{row['id']}")
-                        ep = st.text_input("Telefone", value=row['phone'], key=f"edit_phone_{row['id']}")
+                    # 2. Update Personal Info
+                    with st.form(f"edit_personal_{row['id']}"):
+                        st.markdown("#### Dados Pessoais")
+                        en = st.text_input("Nome", value=row['name'])
+                        ep = st.text_input("Telefone", value=row['phone'])
+                        ee = st.text_input("E-mail", value=row.get('email', ''))
+                        end = st.text_input("Endereço", value=row.get('endereco', ''))
+                        col_d1, col_d2 = st.columns(2)
+                        erg = col_d1.text_input("RG", value=row.get('rg', ''))
+                        ecpf = col_d2.text_input("CPF", value=row.get('cpf', ''))
+                        ea = st.checkbox("Ativo", value=bool(row['active']))
                         
-                        ea = st.checkbox("Ativo", value=bool(row['active']), key=f"edit_active_{row['id']}")
-                        
-                        if st.form_submit_button("Salvar Dados Pessoais"):
+                        if st.form_submit_button("Salvar Alterações"):
                             try:
-                                # Update only personal details and price.
-                                student_service.update_student(conn, row['id'], en, ep, ea)
+                                student_service.update_student(conn, row['id'], en, ep, ea, rg=erg, cpf=ecpf, endereco=end, email=ee)
                                 admin_utils.show_feedback_dialog("Dados atualizados!", level="success")
                                 st.cache_data.clear()
+                                st.rerun()
                             except Exception as e:
-                                admin_utils.show_feedback_dialog(f"Erro ao atualizar: {e}", level="error")
+                                st.error(f"Erro ao atualizar: {e}")
+
+                    # 3. Contract Generation
+                    st.divider()
+                    st.markdown("#### Documentos")
+                    if st.button("📄 Gerar Contrato PDF (Aulas)", key=f"btn_pdf_{row['id']}"):
+                        try:
+                            # Re-fetch class details to get weekday, start/end time
+                            c_id = row['class_id']
+                            if isinstance(c_id, bytes): c_id = int.from_bytes(c_id, "little")
+                            
+                            class_info = classes_df[classes_df['id'] == c_id].iloc[0] if c_id else {}
+                            
+                            from services.reporting import contract_generator
+                            
+                            weekday_map = {0: 'Segunda-feira', 1: 'Terça-feira', 2: 'Quarta-feira', 3: 'Quinta-feira', 4: 'Sexta-feira', 5: 'Sábado', 6: 'Domingo'}
+                            
+                            prep_data = {
+                                "name": en, "rg": erg, "cpf": ecpf, "endereco": end, "phone": ep, "email": ee,
+                                "weekday_name": weekday_map.get(class_info.get('weekday'), "Não definida"),
+                                "start_time": class_info.get('start_time', 'Não inf.'),
+                                "end_time": class_info.get('end_time', 'Não inf.'),
+                                "price_per_class": row.get('price_per_class') or student_service.get_global_price_per_class(conn),
+                                "join_date": row.get('join_date')
+                            }
+                            
+                            pdf_bytes = contract_generator.generate_student_contract_pdf(prep_data)
+                            st.download_button(
+                                label="⬇️ Baixar Contrato",
+                                data=pdf_bytes,
+                                file_name=f"contrato_{en.replace(' ', '_')}.pdf",
+                                mime="application/pdf",
+                                key=f"dl_pdf_{row['id']}"
+                            )
+                        except Exception as e:
+                            st.error(f"Erro ao gerar contrato: {e}")
+        else:
+            st.info("Nenhum aluno ativo encontrado com os filtros aplicados.")
