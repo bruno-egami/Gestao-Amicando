@@ -27,8 +27,6 @@ def get_user_by_id(conn, user_id):
 
 def create_user(conn, username, password, name, role, active):
     """Creates a new user."""
-def create_user(conn, username, password, name, role, active):
-    """Creates a new user."""
     try:
         # Check if username exists
         existing = pd.read_sql("SELECT id FROM users WHERE username=?", conn, params=(username,))
@@ -54,8 +52,6 @@ def create_user(conn, username, password, name, role, active):
 
 def update_user(conn, user_id, name, role, active, password=None):
     """Updates an existing user."""
-def update_user(conn, user_id, name, role, active, password=None):
-    """Updates an existing user."""
     try:
         # Get old data for audit
         old_user = get_user_by_id(conn, user_id)
@@ -79,8 +75,6 @@ def update_user(conn, user_id, name, role, active, password=None):
         log_exception(logger, f"Error updating user {user_id}", e)
         raise
 
-def delete_user(conn, user_id):
-    """Deletes a user."""
 def delete_user(conn, user_id):
     """Deletes a user."""
     try:

@@ -16,6 +16,8 @@ def db_conn():
     Creates an in-memory database with the full schema for testing.
     """
     conn = sqlite3.connect(":memory:")
+    conn.isolation_level = None  # Crucial for safe_transaction's BEGIN IMMEDIATE
+    conn.execute("PRAGMA journal_mode=WAL")
     # Initialize schema
     database_schema.init_db_from_conn(conn)
     yield conn

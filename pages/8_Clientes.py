@@ -3,9 +3,7 @@ import pandas as pd
 import auth
 import database
 import admin_utils
-import audit
 import services.client_service as client_service
-import time
 
 st.set_page_config(page_title="Clientes", page_icon="👥", layout="wide")
 
@@ -132,7 +130,6 @@ with database.db_session() as conn:
                                     with database.db_session() as ctx_conn:
                                         client_service.delete_client(ctx_conn, cid)
                                     st.success(f"Cliente '{cname}' excluído.")
-                                    time.sleep(1)
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Erro: {e}")

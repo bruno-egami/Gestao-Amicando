@@ -1,10 +1,10 @@
 import sqlite3
 import pandas as pd
-import logging
 from typing import List, Optional, Tuple, Dict, Any
 from database import safe_transaction
+from utils.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_all_materials(conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
     """
@@ -113,11 +113,12 @@ def update_stock(conn: sqlite3.Connection, material_id: int, quantity_change: fl
             cursor.execute("UPDATE materials SET stock_level = ? WHERE id = ?", (new_stock, material_id))
             
             # Log movement
-            movement_type = "Entrada" if quantity_change > 0 else "Saída"
+            movement_type = "ENTRADA" if quantity_change > 0 else "SAIDA"
+            date_str = pd.Timestamp.now().isoformat()
             cursor.execute("""
-                INSERT INTO stock_movements (material_id, quantity, movement_type, date, reason)
-                VALUES (?, ?, ?, DATE('now'), ?)
-            """, (material_id, abs(quantity_change), movement_type, reason))
+                INSERT INTO inventory_transactions (material_id, date, type, quantity, cost, notes, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (material_id, date_str, movement_type, abs(quantity_change), 0.0, reason, 1))
     except Exception as e:
         logger.error(f"Erro ao atualizar estoque (material_id={material_id}): {e}")
         raise

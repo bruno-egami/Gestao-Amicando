@@ -217,7 +217,6 @@ with database.db_session() as conn:
                 st.info("Nenhum item em produção no momento.")
         
         # Recent production history
-        # Recent production history
         recent_prod = analytics_service.get_recent_production_history(conn)
         
         if not recent_prod.empty:

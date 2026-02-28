@@ -39,33 +39,31 @@ def setup_db():
     conn.close()
 
 def test_profitability_logic():
-    conn = sqlite3.connect(DB_PATH)
-    
-    print("Fetching Profitability Report...")
-    start_time = time.time()
-    df = analytics_service.get_product_profitability(conn)
-    duration = time.time() - start_time
-    
-    print(df[['Produto', 'Preço Venda', 'Custo Produção']])
-    
-    # Validation
-    # Simple Mug: Cost should be 5.0
-    mug = df[df['Produto'] == 'Simple Mug'].iloc[0]
-    if abs(mug['Custo Produção'] - 5.0) < 0.01:
-        print("✅ Simple Product Cost: Correct (5.0)")
-    else:
-        print(f"❌ Simple Product Cost: Failed (Got {mug['Custo Produção']})")
+    setup_db()
+    try:
+        conn = sqlite3.connect(DB_PATH)
         
-    # Mug Set (Kit): Cost should be 10.0 (2 * 5.0)
-    # CURRENT IMPLEMENTATION likely returns 0 because it only checks product_recipes
-    kit = df[df['Produto'] == 'Mug Set'].iloc[0]
-    
-    if abs(kit['Custo Produção'] - 10.0) < 0.01:
-        print("✅ Kit Cost: Correct (10.0)")
-    else:
-        print(f"❌ Kit Cost: Failed (Got {kit['Custo Produção']}, Expected 10.0)")
+        print("Fetching Profitability Report...")
+        start_time = time.time()
+        df = analytics_service.get_product_profitability(conn)
+        duration = time.time() - start_time
         
-    conn.close()
+        print(df[['Produto', 'Preço Venda', 'Custo Produção']])
+        
+        # Validation
+        # Simple Mug: Cost should be 5.0
+        mug = df[df['Produto'] == 'Simple Mug'].iloc[0]
+        assert abs(mug['Custo Produção'] - 5.0) < 0.01, f"Simple Product Cost Failed (Got {mug['Custo Produção']})"
+            
+        # Mug Set (Kit): Cost should be 10.0 (2 * 5.0)
+        kit = df[df['Produto'] == 'Mug Set'].iloc[0]
+        assert abs(kit['Custo Produção'] - 10.0) < 0.01, f"Kit Cost Failed (Got {kit['Custo Produção']})"
+        
+    finally:
+        if 'conn' in locals():
+            conn.close()
+        if os.path.exists(DB_PATH):
+            os.remove(DB_PATH)
 
 if __name__ == "__main__":
     setup_db()

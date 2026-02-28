@@ -21,10 +21,7 @@ with database.db_session() as conn:
         st.stop()
 
     if not auth.check_page_access("Gestao_Aulas"):
-        user = st.session_state.get('current_user')
-        if user['role'] not in ['admin', 'gerente', 'vendedor']: 
-             st.error("Acesso negado.")
-             st.stop()
+        st.stop()
 
     auth.render_custom_sidebar()
     admin_utils.render_header_logo()

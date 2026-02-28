@@ -49,7 +49,7 @@ def test_complete_sales_transaction_split(db_conn, mock_auth):
         salesperson="Admin", 
         payment_method="Pix", 
         notes="Integração", 
-        delivery_date=(date.today() + timedelta(days=7)).isoformat(), 
+        delivery_days=7, 
         deposit_val=50.0 # R$ 50 deposit
     )
 

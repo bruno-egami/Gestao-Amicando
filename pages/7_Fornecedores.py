@@ -3,9 +3,7 @@ import pandas as pd
 import database
 import admin_utils
 import auth
-import audit
 import services.supplier_service as supplier_service
-import time
 
 st.set_page_config(page_title="Fornecedores", page_icon="🚚", layout="wide")
 
@@ -48,10 +46,10 @@ with database.db_session() as conn:
                 edit_row = supplier_service.get_supplier_by_id(conn, st.session_state.sup_edit_id)
                 if edit_row:
                     def_name = edit_row['name'] or ""
-                def_contact = edit_row['contact'] or ""
-                def_phone = edit_row['phone'] or ""
-                def_email = edit_row['email'] or ""
-                def_notes = edit_row['notes'] or ""
+                    def_contact = edit_row['contact'] or ""
+                    def_phone = edit_row['phone'] or ""
+                    def_email = edit_row['email'] or ""
+                    def_notes = edit_row['notes'] or ""
             except Exception:
                 st.session_state.sup_edit_id = None
                 st.rerun()
@@ -133,7 +131,6 @@ with database.db_session() as conn:
                                     with database.db_session() as ctx_conn:
                                         supplier_service.delete_supplier(ctx_conn, sid)
                                     st.success(f"Fornecedor '{sname}' excluído.")
-                                    time.sleep(1)
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Erro: {e}")

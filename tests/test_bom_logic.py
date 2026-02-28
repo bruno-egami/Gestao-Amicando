@@ -48,52 +48,49 @@ def setup_db():
     conn.close()
 
 def test_bom_calculation():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    print("Testing BOM Calculation for 'Dinner Set' (Kit)...")
-    # Expected:
-    # 2 Mugs * 0.5 Clay = 1.0 Clay
-    # 1 Plate * 1.0 Clay = 1.0 Clay
-    # Kit Self * 0.1 Glaze = 0.1 Glaze
-    # Total Clay: 2.0
-    # Total Glaze: 0.1
-    
-    bom = product_service.get_product_bom(cursor, 3, 1.0)
-    
-    clay_qty = bom.get(1, {}).get('needed', 0)
-    glaze_qty = bom.get(2, {}).get('needed', 0)
-    
-    print(f"Clay Needed: {clay_qty} (Expected 2.0)")
-    print(f"Glaze Needed: {glaze_qty} (Expected 0.1)")
-    
-    if abs(clay_qty - 2.0) < 0.001 and abs(glaze_qty - 0.1) < 0.001:
-        print("✅ BOM Calculation PASSED")
-    else:
-        print("❌ BOM Calculation FAILED")
-        conn.close()
-        return
-
-    print("\nTesting Deduction...")
-    # Deduct 1 Kit
-    product_service.deduct_production_materials_central(cursor, 3, 1.0)
-    conn.commit()
-    
-    # Verify Stock
-    # Initial Clay: 100 - 2.0 = 98.0
-    # Initial Glaze: 50 - 0.1 = 49.9
-    curr_clay = cursor.execute("SELECT stock_level FROM materials WHERE id=1").fetchone()[0]
-    curr_glaze = cursor.execute("SELECT stock_level FROM materials WHERE id=2").fetchone()[0]
-    
-    print(f"Stock Clay: {curr_clay} (Expected 98.0)")
-    print(f"Stock Glaze: {curr_glaze} (Expected 49.9)")
-    
-    if abs(curr_clay - 98.0) < 0.001 and abs(curr_glaze - 49.9) < 0.001:
-         print("✅ Deduction PASSED")
-    else:
-         print("❌ Deduction FAILED")
-         
-    conn.close()
+    setup_db()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        print("Testing BOM Calculation for 'Dinner Set' (Kit)...")
+        # Expected:
+        # 2 Mugs * 0.5 Clay = 1.0 Clay
+        # 1 Plate * 1.0 Clay = 1.0 Clay
+        # Kit Self * 0.1 Glaze = 0.1 Glaze
+        # Total Clay: 2.0
+        # Total Glaze: 0.1
+        
+        bom = product_service.get_product_bom(cursor, 3, 1.0)
+        
+        clay_qty = bom.get(1, {}).get('needed', 0)
+        glaze_qty = bom.get(2, {}).get('needed', 0)
+        
+        print(f"Clay Needed: {clay_qty} (Expected 2.0)")
+        print(f"Glaze Needed: {glaze_qty} (Expected 0.1)")
+        
+        assert abs(clay_qty - 2.0) < 0.001 and abs(glaze_qty - 0.1) < 0.001, "BOM Calculation FAILED"
+        
+        print("\nTesting Deduction...")
+        # Deduct 1 Kit
+        product_service.deduct_production_materials_central(cursor, 3, 1.0)
+        conn.commit()
+        
+        # Verify Stock
+        # Initial Clay: 100 - 2.0 = 98.0
+        # Initial Glaze: 50 - 0.1 = 49.9
+        curr_clay = cursor.execute("SELECT stock_level FROM materials WHERE id=1").fetchone()[0]
+        curr_glaze = cursor.execute("SELECT stock_level FROM materials WHERE id=2").fetchone()[0]
+        
+        print(f"Stock Clay: {curr_clay} (Expected 98.0)")
+        print(f"Stock Glaze: {curr_glaze} (Expected 49.9)")
+        
+        assert abs(curr_clay - 98.0) < 0.001 and abs(curr_glaze - 49.9) < 0.001, "Deduction FAILED"
+    finally:
+        if 'conn' in locals():
+            conn.close()
+        if os.path.exists(DB_PATH):
+            os.remove(DB_PATH)
 
 if __name__ == "__main__":
     setup_db()
