@@ -259,7 +259,8 @@ def export_students(conn):
 def upsert_material(cursor, row, user_id=1):
     """Upserts a material from import row."""
     # 1. Foreign Keys
-    cat_name = str(row['Categoria']).strip()
+    cat_name = str(row.get('Categoria', 'Sem Categoria')).strip()
+    if not cat_name or cat_name == 'nan': cat_name = 'Sem Categoria'
     cursor.execute("SELECT id FROM material_categories WHERE name=?", (cat_name,))
     res = cursor.fetchone()
     if res: cat_id = res[0]
@@ -267,13 +268,27 @@ def upsert_material(cursor, row, user_id=1):
         cursor.execute("INSERT INTO material_categories (name) VALUES (?)", (cat_name,))
         cat_id = cursor.lastrowid
         
-    sup_name = str(row['Fornecedor']).strip()
+    sup_name = str(row.get('Fornecedor', 'Desconhecido')).strip()
+    if not sup_name or sup_name == 'nan': sup_name = 'Desconhecido'
     cursor.execute("SELECT id FROM suppliers WHERE name=?", (sup_name,))
     res = cursor.fetchone()
     if res: sup_id = res[0]
     else:
         cursor.execute("INSERT INTO suppliers (name) VALUES (?)", (sup_name,))
         sup_id = cursor.lastrowid
+
+    # Safe parsing for numbers
+    try: price = float(row.get('Preço', 0.0))
+    except (ValueError, TypeError): price = 0.0
+    
+    try: new_stock = float(row.get('Estoque', 0.0))
+    except (ValueError, TypeError): new_stock = 0.0
+    
+    unit = str(row.get('Unidade', 'un')).strip()
+    if not unit or unit == 'nan': unit = 'un'
+    
+    mat_type = str(row.get('Tipo', 'Material')).strip()
+    if not mat_type or mat_type == 'nan': mat_type = 'Material'
 
     # 2. Check Duplicate
     cursor.execute("SELECT id, stock_level FROM materials WHERE name=?", (row['Nome'],))
@@ -283,13 +298,11 @@ def upsert_material(cursor, row, user_id=1):
         # UPDATE
         target_id = mat_res[0]
         curr_stock = float(mat_res[1]) if mat_res[1] else 0.0
-        new_stock = float(row['Estoque'])
-        
         cursor.execute("""
             UPDATE materials 
             SET price_per_unit=?, unit=?, stock_level=?, type=?, category_id=?, supplier_id=?
             WHERE id=?
-        """, (row['Preço'], row['Unidade'], new_stock, row['Tipo'], cat_id, sup_id, target_id))
+        """, (price, unit, new_stock, mat_type, cat_id, sup_id, target_id))
         
         if abs(new_stock - curr_stock) > 0.001:
             diff = new_stock - curr_stock
@@ -302,7 +315,7 @@ def upsert_material(cursor, row, user_id=1):
         cursor.execute("""
             INSERT INTO materials (name, price_per_unit, unit, stock_level, type, category_id, supplier_id)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (row['Nome'], row['Preço'], row['Unidade'], row['Estoque'], row['Tipo'], cat_id, sup_id))
+        """, (row['Nome'], price, unit, new_stock, mat_type, cat_id, sup_id))
 
 def upsert_product_and_composition(cursor, row, user_id=1, username='system'):
     """Upserts a product and its composition."""
