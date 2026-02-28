@@ -415,7 +415,8 @@ with database.db_session() as conn:
                                         try:
                                             order_service.update_item_quantity(
                                                 conn, order['id'], item['id'], qty_edit, old_qty,
-                                                item['quantity_from_stock'], item['unit_price'], item['product_id']
+                                                item['quantity_from_stock'], item['unit_price'], item['product_id'],
+                                                variant_id=item.get('variant_id')
                                             )
                                             st.rerun()
                                         except Exception as e:
@@ -499,7 +500,8 @@ with database.db_session() as conn:
                             try:
                                 order_service.delete_commission_item(
                                     conn, order['id'], item['id'], item['product_id'],
-                                    item['quantity'], item['quantity_from_stock'], item['unit_price']
+                                    item['quantity'], item['quantity_from_stock'], item['unit_price'],
+                                    variant_id=item.get('variant_id')
                                 )
                                 st.session_state['expanded_order_id'] = order['id']
                                 st.rerun()

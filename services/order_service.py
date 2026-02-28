@@ -560,7 +560,7 @@ def add_commission_item_with_stock(conn, order_id, product_id, quantity, qty_fro
 
 
 def delete_commission_item(conn, order_id, item_id, product_id, quantity, 
-                            quantity_from_stock, unit_price):
+                            quantity_from_stock, unit_price, variant_id=None):
     """
     Removes an item from a commission order, restores stock (including kits), 
     and updates the order total.
@@ -575,23 +575,30 @@ def delete_commission_item(conn, order_id, item_id, product_id, quantity,
                     "SELECT stock_quantity FROM products WHERE id=?", conn, params=(product_id,)
                 ).iloc[0]['stock_quantity']
                 
-                # Kit restore
-                kit_comps = pd.read_sql(
-                    "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
-                    conn, params=(product_id,)
-                )
-                if not kit_comps.empty:
-                    for _, kc in kit_comps.iterrows():
-                        restore_amt = rest_qty * kc['quantity']
+                # Variant restore
+                if variant_id and pd.notna(variant_id):
+                    cursor.execute(
+                        "UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                        (int(rest_qty), int(variant_id))
+                    )
+                else:
+                    # Kit restore
+                    kit_comps = pd.read_sql(
+                        "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
+                        conn, params=(product_id,)
+                    )
+                    if not kit_comps.empty:
+                        for _, kc in kit_comps.iterrows():
+                            restore_amt = rest_qty * kc['quantity']
+                            cursor.execute(
+                                "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                                (int(restore_amt), int(kc['child_product_id']))
+                            )
+                    else:
                         cursor.execute(
                             "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                            (int(restore_amt), int(kc['child_product_id']))
+                            (rest_qty, product_id)
                         )
-                else:
-                    cursor.execute(
-                        "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                        (rest_qty, product_id)
-                    )
                 
                 audit.log_action(conn, 'UPDATE', 'products', product_id, 
                     {'stock_quantity': old_stock}, {'stock_quantity': old_stock + rest_qty}, commit=False)
@@ -617,7 +624,7 @@ def delete_commission_item(conn, order_id, item_id, product_id, quantity,
 
 
 def update_item_quantity(conn, order_id, item_id, new_qty, old_qty, 
-                          quantity_from_stock, unit_price, product_id):
+                          quantity_from_stock, unit_price, product_id, variant_id=None):
     """
     Updates item quantity, adjusts order total, and restores stock if quantity decreased below reserved.
     """
@@ -642,10 +649,28 @@ def update_item_quantity(conn, order_id, item_id, new_qty, old_qty,
             # Return excess stock if new qty < reserved
             if new_qty < quantity_from_stock:
                 to_return = quantity_from_stock - new_qty
-                cursor.execute(
-                    "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                    (to_return, product_id)
-                )
+                if variant_id and pd.notna(variant_id):
+                    cursor.execute(
+                        "UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                        (to_return, int(variant_id))
+                    )
+                else:
+                    kit_comps = pd.read_sql(
+                        "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
+                        conn, params=(product_id,)
+                    )
+                    if not kit_comps.empty:
+                        for _, kc in kit_comps.iterrows():
+                            restore_amt = to_return * kc['quantity']
+                            cursor.execute(
+                                "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                                (int(restore_amt), int(kc['child_product_id']))
+                            )
+                    else:
+                        cursor.execute(
+                            "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                            (to_return, product_id)
+                        )
                 cursor.execute(
                     "UPDATE commission_items SET quantity_from_stock=? WHERE id=?", 
                     (new_qty, item_id)
@@ -778,23 +803,31 @@ def deliver_order(conn, order_id, order_data, items_df, salesperson='Sistema', p
                     continue
                 
                 old_stock = p_row_chk.iloc[0]['stock_quantity']
-                kit_comps = pd.read_sql(
-                    "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
-                    conn, params=(it['product_id'],)
-                )
                 
-                if not kit_comps.empty:
-                    for _, kc in kit_comps.iterrows():
-                        restore_amt = it['quantity'] * kc['quantity']
+                v_id = it.get('variant_id')
+                if pd.notna(v_id) and v_id:
+                    cursor.execute(
+                        "UPDATE product_variants SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                        (it['quantity'], int(v_id))
+                    )
+                else:
+                    kit_comps = pd.read_sql(
+                        "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
+                        conn, params=(it['product_id'],)
+                    )
+                    
+                    if not kit_comps.empty:
+                        for _, kc in kit_comps.iterrows():
+                            restore_amt = it['quantity'] * kc['quantity']
+                            cursor.execute(
+                                "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
+                                (int(restore_amt), int(kc['child_product_id']))
+                            )
+                    else:
                         cursor.execute(
                             "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                            (int(restore_amt), int(kc['child_product_id']))
+                            (it['quantity'], it['product_id'])
                         )
-                else:
-                    cursor.execute(
-                        "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id=?", 
-                        (it['quantity'], it['product_id'])
-                    )
                 
                 audit.log_action(conn, 'UPDATE', 'products', it['product_id'], 
                     {'stock_quantity': old_stock}, {'stock_quantity': old_stock + it['quantity']}, commit=False)
@@ -827,22 +860,30 @@ def deliver_order(conn, order_id, order_data, items_df, salesperson='Sistema', p
                 )
                 if not p_row_chk.empty:
                     old_stock_after = p_row_chk.iloc[0]['stock_quantity']
-                    kit_comps_2 = pd.read_sql(
-                        "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
-                        conn, params=(it['product_id'],)
-                    )
-                    if not kit_comps_2.empty:
-                        for _, kc in kit_comps_2.iterrows():
-                            deduct_amt = it['quantity'] * kc['quantity']
+                    
+                    v_id2 = it.get('variant_id')
+                    if pd.notna(v_id2) and v_id2:
+                        cursor.execute(
+                            "UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id=?", 
+                            (it['quantity'], int(v_id2))
+                        )
+                    else:
+                        kit_comps_2 = pd.read_sql(
+                            "SELECT child_product_id, quantity FROM product_kits WHERE parent_product_id=?", 
+                            conn, params=(it['product_id'],)
+                        )
+                        if not kit_comps_2.empty:
+                            for _, kc in kit_comps_2.iterrows():
+                                deduct_amt = it['quantity'] * kc['quantity']
+                                cursor.execute(
+                                    "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", 
+                                    (int(deduct_amt), int(kc['child_product_id']))
+                                )
+                        else:
                             cursor.execute(
                                 "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", 
-                                (int(deduct_amt), int(kc['child_product_id']))
+                                (it['quantity'], it['product_id'])
                             )
-                    else:
-                        cursor.execute(
-                            "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id=?", 
-                            (it['quantity'], it['product_id'])
-                        )
                     
                     audit.log_action(conn, 'UPDATE', 'products', it['product_id'], 
                         {'stock_quantity': old_stock_after}, {'stock_quantity': old_stock_after - it['quantity']}, commit=False)
