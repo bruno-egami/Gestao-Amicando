@@ -288,8 +288,6 @@ with database.db_session() as conn:
                                 else:
                                     price = p_row['base_price'] + price_mod
                                 
-                                    price = p_row['base_price'] + price_mod
-                                
                                     try:
                                         order_service.add_commission_item_with_stock(
                                             conn, order['id'], int(p_row['id']), new_qty, 
@@ -443,7 +441,6 @@ with database.db_session() as conn:
                         
                             if remaining > 0:
                                 all_complete = False
-                                all_complete = False
                                 # Production Options (Quick vs WIP)
                                 b_quick, b_wip = st.columns(2)
                             
@@ -537,7 +534,7 @@ with database.db_session() as conn:
                         # 1. Salesperson Selection
                         try:
                             # Use active users for salesperson list
-                            u_df = pd.read_sql("SELECT username FROM users WHERE is_active=1", conn)
+                            u_df = pd.read_sql("SELECT username FROM users WHERE active=1", conn)
                             user_list = u_df['username'].tolist()
                         except Exception:
                             user_list = ['admin', 'vendedor']

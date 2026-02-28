@@ -902,7 +902,8 @@ with database.db_session() as conn:
                     
                         # Helper button for suggested
                         if svc3.button("⬇️ Usar Sugerido", key=f"vus_{sel_var['id']}"):
-                             pass
+                             st.session_state[f"vp_{sel_var['id']}"] = float(v_suggested)
+                             st.rerun()
 
                         # Save Button moved to col 4
                         if svc4.button("💾 Salvar", key=f"vsave_{sel_var['id']}", type="primary", use_container_width=True):

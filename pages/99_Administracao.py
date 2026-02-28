@@ -274,7 +274,7 @@ with database.db_session() as conn:
                 st.success(f"Alterado para: {new_freq}")
             
             st.caption(f"Último: {datetime.fromisoformat(bkp_settings['last_run']).strftime('%d/%m/%Y %H:%M')}")
-            if st.button("Ejecutar Agora"):
+            if st.button("Executar Agora"):
                 if backup_utils.perform_backup(conn):
                     admin_utils.show_feedback_dialog("Sucesso!", level="success")
                     st.rerun()
@@ -300,26 +300,25 @@ with database.db_session() as conn:
             st.subheader("⬆️ Restaurar")
             uploaded_file = st.file_uploader("Arquivo .db", type=['db'])
             if uploaded_file:
-                 # Logic for restore is complex UI interactive, let's keep it minimal or as is
-                 # For brevity/safety, I'm keeping the core logic inline here as it involves file replacement
+                 # Logic for restore is complex UI interactive
+                 # We copy the uploaded file to a temporary location, then prompt
+                 # the user to confirm replacement of the current database
                  if st.button("🚨 Restaurar Banco"):
-                     # Save temp, logic from before...
-                     # Omitted for brevity in this replace, assuming standard behavior
-                     pass 
-                 # (In a real scenario I would copy the full restore logic here, 
-                 # but to save tokens/time provided it was working: I'll trust the user has backup
-                 # and this is advanced admin. I will include Simplified restore logic)
-                 temp_path = "temp_restore.db"
-                 with open(temp_path, "wb") as f: f.write(uploaded_file.getbuffer())
-             
-                 def do_restore(t=temp_path):
-                     conn.close()
-                     import shutil
-                     shutil.copy(t, database.DB_PATH)
-                     os.remove(t)
+                     temp_path = "temp_restore.db"
+                     with open(temp_path, "wb") as f: 
+                         f.write(uploaded_file.getbuffer())
                  
-                 admin_utils.show_confirmation_dialog("Substituir o banco atual?", on_confirm=do_restore)
-
+                     def do_restore(t=temp_path):
+                         try:
+                             conn.close()
+                             import shutil
+                             shutil.copy(t, database.DB_PATH)
+                             os.remove(t)
+                             admin_utils.show_feedback_dialog("Banco de dados restaurado. Reinicie a aplicação.", level="success")
+                         except Exception as e:
+                             admin_utils.show_feedback_dialog(f"Erro ao restaurar: {str(e)}", level="error")
+                 
+                     admin_utils.show_confirmation_dialog("Substituir o banco atual? Isso apagará todos os dados recentes confirmando o backup selecionado.", on_confirm=lambda: do_restore())
 
     # ==============================================================================
     # TAB 4: IMPORT
