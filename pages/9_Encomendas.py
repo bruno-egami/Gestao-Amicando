@@ -11,7 +11,6 @@ import auth
 import uuid
 import os
 import json
-import sqlite3
 from utils.logging_config import get_logger, log_exception
 
 logger = get_logger(__name__)

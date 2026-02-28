@@ -70,7 +70,7 @@ def edit_consumption_dialog(cid, sname, current_desc, current_val, current_qty=1
     
     try:
         inferred_unit_price = float(current_val) / (float(current_qty) * float(current_markup)) if float(current_qty) > 0 and float(current_markup) > 0 else 0.0
-    except:
+    except Exception:
         inferred_unit_price = 0.0
         
     c1, c2, c3 = st.columns(3)

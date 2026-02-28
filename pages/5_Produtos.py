@@ -671,7 +671,6 @@ with database.db_session() as conn:
                 st.caption("Gerencie as fotos do produto.")
                 # Reuse logic from expanding section
                 try:
-                    import ast
                     curr_imgs = ast.literal_eval(curr_prod['image_paths']) if curr_prod['image_paths'] else []
                 except Exception: curr_imgs = []
             
@@ -709,7 +708,6 @@ with database.db_session() as conn:
                 
                     for _, cp in comp_prods.iterrows():
                         try:
-                            import ast
                             cp_imgs = ast.literal_eval(cp['image_paths']) if cp['image_paths'] else []
                         except Exception: cp_imgs = []
                         if cp_imgs:
