@@ -692,12 +692,10 @@ with database.db_session() as conn:
                 new_imgs = st.file_uploader("Upload Novas Imagens", accept_multiple_files=True, type=["png", "jpg", "jpeg", "webp"], key="new_imgs_tab")
                 if new_imgs:
                     if st.button("Salvar Imagens"):
-                        save_dir = "assets/product_images"
-                        if not os.path.exists(save_dir): os.makedirs(save_dir)
                         for uf in new_imgs:
-                             path = os.path.join(save_dir, uf.name)
-                             with open(path, "wb") as f: f.write(uf.getbuffer())
-                             curr_imgs.append(path)
+                             path = admin_utils.save_image(uf, "assets/product_images")
+                             if path:
+                                 curr_imgs.append(path)
                         product_service.update_product_images(conn, selected_prod_id, curr_imgs)
                         product_service.get_all_products.clear()
                         admin_utils.show_feedback_dialog("Salvo!", level="success")

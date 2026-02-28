@@ -48,7 +48,7 @@ def pt_date(date_str_or_obj):
         for eng, pt in months.items():
             data_atual = data_atual.replace(eng, pt)
         return data_atual
-    except:
+    except Exception:
         return str(date_str_or_obj)
 
 def numero_por_extenso(valor):
@@ -107,7 +107,7 @@ def numero_por_extenso(valor):
         if not res_reais:
             return res_centavos
         return f"{res_reais} e {res_centavos}"
-    except:
+    except Exception:
         return ""
 
 def generate_student_contract_pdf(student_data):

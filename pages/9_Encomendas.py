@@ -142,7 +142,7 @@ with database.db_session() as conn:
                         import ast
                         l = ast.literal_eval(p_str)
                         return l if l and isinstance(l, list) else []
-                    except: return []
+                    except Exception: return []
             
                 items['image_paths'] = items['image_paths'].apply(get_prod_imgs)
             
@@ -208,10 +208,11 @@ with database.db_session() as conn:
                                 # Create folder for order images
                                 img_folder = f"assets/orders/{order['id']}"
                                 if not os.path.exists(img_folder):
-                                    os.makedirs(img_folder)
+                                    os.makedirs(img_folder, mode=0o755, exist_ok=True)
                             
                                 for photo in new_photos:
-                                    file_path = os.path.join(img_folder, f"{uuid.uuid4().hex[:8]}_{photo.name}")
+                                    ext = os.path.splitext(photo.name)[1]
+                                    file_path = os.path.join(img_folder, f"{uuid.uuid4().hex}{ext}")
                                     with open(file_path, "wb") as f:
                                         f.write(photo.getbuffer())
                                     order_images.append(file_path)

@@ -47,7 +47,7 @@ def get_wip_items(conn, stage=None):
                 p = ast.literal_eval(paths_str)
                 if p and len(p) > 0: return p[0]
                 return None
-            except:
+            except Exception:
                 return None
         df['thumb_path'] = df['image_paths'].apply(get_thumb)
     else:

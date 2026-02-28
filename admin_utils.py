@@ -34,7 +34,7 @@ def save_image(uploaded_file, folder):
 
     if uploaded_file:
         if not os.path.exists(folder):
-            os.makedirs(folder)
+            os.makedirs(folder, mode=0o755, exist_ok=True)
         # Security: Unique filename
 
         ext = os.path.splitext(uploaded_file.name)[1]

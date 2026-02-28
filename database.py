@@ -24,7 +24,7 @@ def initialize():
     """Initializes the database and runs migrations."""
     logger.info("Initializing database...")
     if not os.path.exists(DB_FOLDER):
-        os.makedirs(DB_FOLDER)
+        os.makedirs(DB_FOLDER, mode=0o750, exist_ok=True)
     
     conn = get_connection()
     try:

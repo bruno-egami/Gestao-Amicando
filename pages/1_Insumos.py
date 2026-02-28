@@ -185,12 +185,9 @@ with database.db_session() as conn:
                             # Handle Image
                             final_img_path = curr_img # keep old if no new
                             if new_img_file:
-                                save_dir = "assets/material_images"
-                                if not os.path.exists(save_dir): os.makedirs(save_dir)
-                                file_path = os.path.join(save_dir, new_img_file.name)
-                                with open(file_path, "wb") as f:
-                                    f.write(new_img_file.getbuffer())
-                                final_img_path = file_path
+                                file_path = admin_utils.save_image(new_img_file, "assets/material_images")
+                                if file_path:
+                                    final_img_path = file_path
                             
                             if is_new:
                                 try:

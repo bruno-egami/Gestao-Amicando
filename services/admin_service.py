@@ -494,7 +494,7 @@ def upsert_class(cursor, row):
     notes = str(row['Notas']).strip() if pd.notna(row['Notas']) else ""
     
     try: weekday = int(row['Dia da Semana (0-6)'])
-    except: weekday = None
+    except Exception: weekday = None
     
     if res:
         cursor.execute("""
@@ -534,10 +534,10 @@ def upsert_student(cursor, row):
             logger.debug(f"Error parsing join_date in upsert_student: {e}")
     
     try: price = float(row['Mensalidade Base'])
-    except: price = None
+    except Exception: price = None
     
     try: active = int(row['Ativo'])
-    except: active = 1
+    except Exception: active = 1
     
     if res:
         cursor.execute("""

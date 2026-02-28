@@ -21,7 +21,7 @@ def generate_student_statement(student_data, items, total_due=None, cancellation
             try:
                 # Center the logo
                 self.image('logo-amicando-RGB.jpg', x=85, y=10, w=40)
-            except:
+            except Exception:
                 pass
             
             # Atelier Data (Full)
@@ -130,7 +130,7 @@ def generate_student_statement(student_data, items, total_due=None, cancellation
              c_date = c.get('date', '')
              try:
                  c_date = datetime.strptime(c_date, '%Y-%m-%d').strftime('%d/%m/%y')
-             except: pass
+             except Exception: pass
              
              pdf.cell(30, 7, c_date, 1, 0, 'C')
              pdf.cell(160, 7, c.get('reason', '-'), 1, 1, 'L')

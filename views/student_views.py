@@ -114,7 +114,7 @@ def render_student_management(conn):
                     cls_selection_opts = [""] + list(class_opts.keys())
                     try:
                         curr_idx = cls_selection_opts.index(curr_cls_name)
-                    except: curr_idx = 0
+                    except Exception: curr_idx = 0
                     
                     st.selectbox(
                         "Alterar Turma", 
@@ -143,7 +143,7 @@ def render_student_management(conn):
                         parsed_jd = datetime.today()
                         if jd_str:
                             try: parsed_jd = datetime.strptime(jd_str, '%Y-%m-%d')
-                            except: pass
+                            except Exception: pass
                         ejd = st.date_input("Data de Início", value=parsed_jd)
                         
                         ea = st.checkbox("Ativo", value=bool(row['active']))

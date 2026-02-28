@@ -117,7 +117,7 @@ def get_global_price_per_class(conn):
     try:
         res = conn.execute("SELECT value FROM settings WHERE key='global_price_per_class'").fetchone()
         return float(res[0]) if res else 87.50 # Default if not set
-    except:
+    except Exception:
         return 87.50
 
 def set_global_price_per_class(conn, price):
@@ -829,7 +829,7 @@ def get_student_statement_items(conn, student_id):
         desc = f"Mensalidade {t['month_year']}"
         if 'class_count' in t and pd.notnull(t['class_count']):
             try: desc += f" ({int(t['class_count'])} aulas)"
-            except: pass
+            except Exception: pass
         
         paid = t.get('amount_paid', 0) or 0
         items.append({
@@ -850,7 +850,7 @@ def get_student_statement_items(conn, student_id):
         desc = f"Mensalidade {t['month_year']}"
         if 'class_count' in t and pd.notnull(t['class_count']):
             try: desc += f" ({int(t['class_count'])} aulas)"
-            except: pass
+            except Exception: pass
             
         items.append({
             "id": t['id'],
@@ -886,7 +886,7 @@ def get_student_statement_items(conn, student_id):
         if not d: return ""
         if isinstance(d, str): return d
         try: return d.strftime('%Y-%m-%d')
-        except: return str(d)
+        except Exception: return str(d)
 
     items.sort(key=get_sort_date, reverse=True)
 

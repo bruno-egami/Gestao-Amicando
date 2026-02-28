@@ -227,12 +227,12 @@ with database.db_session() as conn:
                             st.markdown("**Dados Anteriores:**")
                             if row['old_data']:
                                 try: st.json(json.loads(row['old_data']))
-                                except: st.code(row['old_data'])
+                                except Exception: st.code(row['old_data'])
                             else: st.caption("N/A")
                             st.markdown("**Dados Novos:**")
                             if row['new_data']:
                                 try: st.json(json.loads(row['new_data']))
-                                except: st.code(row['new_data'])
+                                except Exception: st.code(row['new_data'])
                             else: st.caption("N/A")
                     with c3:
                         if row['action'] in ['UPDATE', 'DELETE'] and row['old_data']:
