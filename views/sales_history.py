@@ -11,7 +11,7 @@ def render_sales_history(conn, client_opts):
         if "hist_auth_override" not in st.session_state:
             st.session_state.hist_auth_override = False
             
-        authorized = (curr_user and curr_user['role'] == 'admin') or st.session_state.hist_auth_override
+        authorized = (curr_user and curr_user.get('role') in ['admin', 'vendedor']) or st.session_state.hist_auth_override
 
         if authorized:
             st.subheader("Gerenciar Vendas")
