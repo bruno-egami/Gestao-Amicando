@@ -20,7 +20,6 @@ styles.apply_custom_style()
 admin_utils.render_sidebar_logo()
 
 with database.db_session() as conn:
-    cursor = conn.cursor()
 
     # Authentication
     if not auth.require_login(conn):

@@ -76,9 +76,6 @@ def get_audit_log(conn, filters: dict = None, limit: int = 100):
         - action: Filter by action type
         - start_date: Filter from date
         - end_date: Filter to date
-    """
-    import pandas as pd
-    
     query = """
         SELECT al.id, al.timestamp, al.username, al.action, al.table_name, 
                al.record_id, al.old_data, al.new_data

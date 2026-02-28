@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+import ast
 import os
-import time
 import database  # Use centralized DB connection
 import admin_utils
 import auth
@@ -127,7 +126,6 @@ with database.db_session() as conn:
                         c1, c2, c3, c4, c5 = st.columns([1, 2, 1, 0.5, 0.5])
                     
                         # Image
-                        import ast
                         try:
                             imgs = ast.literal_eval(row['image_paths']) if row['image_paths'] else []
                         except Exception: imgs = []
@@ -140,7 +138,6 @@ with database.db_session() as conn:
                             comp_imgs = []
                             for _, ci_row in c_imgs_df.iterrows():
                                 try:
-                                    import ast
                                     ci_list = ast.literal_eval(ci_row['image_paths']) if ci_row['image_paths'] else []
                                 except Exception: ci_list = []
                                 if ci_list:
@@ -1011,7 +1008,6 @@ with database.db_session() as conn:
                             new_qty = st.number_input("Nova Quantidade", value=int(row['quantity']), step=1, key=f"edit_qty_{row['id']}")
                         
                             if st.button("💾 Salvar", key=f"save_qty_{row['id']}"):
-                                diff = new_qty - row['quantity']
                             
                                 product_service.update_production_history_qty(
                                     conn, row['id'], new_qty, row['quantity'], row['product_id']

@@ -58,15 +58,12 @@ with database.db_session() as conn:
         today_str = date.today().isoformat()
         
         # 1. Encomendas (Orders)
-        # 1. Encomendas (Orders)
         orders_df = analytics_service.get_dashboard_active_orders(conn)
         
-        # 2. Alunos e Aulas (Classes)
         # 2. Alunos e Aulas (Classes)
         class_stats = student_service.get_module_summary_stats(conn)
         debts_df = student_service.get_debts_summary(conn)
         
-        # 3. Estoque (Inventory)
         # 3. Estoque (Inventory)
         materials_df = analytics_service.get_low_stock_materials(conn)
         low_stock_materials = materials_df[materials_df['stock_level'] <= materials_df['min_stock_alert']].copy()
@@ -75,7 +72,6 @@ with database.db_session() as conn:
         
         # 4. Produção (Production)
         # Today's production
-        # 4. Produção (Production)
         prod_metrics = analytics_service.get_production_metrics(conn, today_str)
         today_total = prod_metrics['today']
         week_total = prod_metrics['week']
