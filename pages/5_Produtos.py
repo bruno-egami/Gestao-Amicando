@@ -490,14 +490,12 @@ with database.db_session() as conn:
                         if rec_c3.button("💾", key=f"rec_save_{rec_row['id']}", help="Salvar quantidade"):
                             if abs(new_qty - rec_row['quantity']) > 0.0001:
                                 product_service.update_recipe_item_quantity(conn, rec_row['id'], new_qty)
-                                product_service.get_product_recipe.clear() # Clear cache so Base Cost updates
                                 admin_utils.show_feedback_dialog(f"Quantidade de '{rec_row['name']}' atualizada!", level="success")
                                 st.rerun()
                         if rec_c4.button("🗑️", key=f"rec_del_{rec_row['id']}", help="Remover insumo"):
                             def do_del_rec(rid=rec_row['id']):
                                 with database.db_session() as ctx_conn:
                                     product_service.delete_recipe_item(ctx_conn, rid)
-                                product_service.get_product_recipe.clear() # Cache clear on delete too
                             admin_utils.show_confirmation_dialog(
                                 f"Remover '{rec_row['name']}' da receita?",
                                 on_confirm=do_del_rec
