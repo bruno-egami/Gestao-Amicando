@@ -813,8 +813,10 @@ with database.db_session() as conn:
                         analysis_data.append({
                             "id": v_row['id'],
                             "Esmalte": v_row['variant_name'],
+                            "Custo Base": base_cost,
                             "Custo Esmalte": glaze_cost,
                             "Custo Total": total_cost,
+                            "Markup": new_markup,
                             "Preço Sugerido": ideal_price,
                             "Preço Atual": current_final_price,
                         })
@@ -826,8 +828,10 @@ with database.db_session() as conn:
                         column_config={
                             "id": None,
                             "Esmalte": st.column_config.TextColumn(disabled=True),
+                            "Custo Base": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
                             "Custo Esmalte": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
                             "Custo Total": st.column_config.NumberColumn(format="R$ %.2f", disabled=True, help="Base + Esmalte"),
+                            "Markup": st.column_config.NumberColumn(format="%.1fx", disabled=True),
                             "Preço Sugerido": st.column_config.NumberColumn(format="R$ %.2f", disabled=True, help="Custo Total × Markup"),
                             "Preço Atual": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
                         },
@@ -840,13 +844,16 @@ with database.db_session() as conn:
                     
                     # Apply Suggested to All
                     if ac1.button("⬇️ Aplicar Sugerido a Todos", use_container_width=True, help="Define o preço de cada esmalte como (Custo Total × Markup)"):
-                        base_p = float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0
+                        # IMPORTANT: Save base_price FIRST, then compute adders with the new value
+                        new_base_price = base_cost * new_markup
+                        product_service.save_product_pricing(conn, selected_prod_id, new_markup, new_base_price)
+                        
+                        # Now compute adders relative to the NEW base_price
                         for _, ad in pd.DataFrame(analysis_data).iterrows():
-                            new_adder = ad['Preço Sugerido'] - base_p
+                            new_adder = ad['Preço Sugerido'] - new_base_price
                             if new_adder < 0: new_adder = 0
                             product_service.update_variant_price(conn, int(ad['id']), new_adder)
-                        # Also save base price as suggested for the first variant (or base_cost * markup)
-                        product_service.save_product_pricing(conn, selected_prod_id, new_markup, base_cost * new_markup)
+                        
                         product_service.get_all_products.clear()
                         admin_utils.show_feedback_dialog("Preços atualizados para todos os esmaltes!", level="success")
                         st.rerun()
