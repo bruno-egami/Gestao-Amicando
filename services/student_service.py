@@ -86,7 +86,7 @@ def create_student(conn, name, phone, class_id=None, join_date=None, rg=None, cp
         logger.error(f"Erro ao criar aluno '{name}': {e}")
         raise
 
-def update_student(conn, student_id, name, phone, active, rg=None, cpf=None, endereco=None, email=None):
+def update_student(conn, student_id, name, phone, active, rg=None, cpf=None, endereco=None, email=None, join_date=None):
     """Updates student info (Name, Phone, Active, etc). Class is handled separately."""
     student_id = int(student_id)
     # Get old data
@@ -96,9 +96,9 @@ def update_student(conn, student_id, name, phone, active, rg=None, cpf=None, end
         with safe_transaction(conn):
             cursor = conn.cursor()
             cursor.execute("""
-                UPDATE students SET name=?, phone=?, active=?, rg=?, cpf=?, endereco=?, email=? 
+                UPDATE students SET name=?, phone=?, active=?, rg=?, cpf=?, endereco=?, email=?, join_date=? 
                 WHERE id=?
-            """, (name, phone, int(active), rg, cpf, endereco, email, student_id))
+            """, (name, phone, int(active), rg, cpf, endereco, email, join_date, student_id))
             
             audit.log_action(conn, 'UPDATE', 'students', student_id, old, {'name': name, 'phone': phone, 'active': active}, commit=False)
     except Exception as e:
