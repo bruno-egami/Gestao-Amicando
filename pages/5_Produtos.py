@@ -490,12 +490,14 @@ with database.db_session() as conn:
                         if rec_c3.button("💾", key=f"rec_save_{rec_row['id']}", help="Salvar quantidade"):
                             if abs(new_qty - rec_row['quantity']) > 0.0001:
                                 product_service.update_recipe_item_quantity(conn, rec_row['id'], new_qty)
+                                product_service.get_product_recipe.clear() # Clear cache so Base Cost updates
                                 admin_utils.show_feedback_dialog(f"Quantidade de '{rec_row['name']}' atualizada!", level="success")
                                 st.rerun()
                         if rec_c4.button("🗑️", key=f"rec_del_{rec_row['id']}", help="Remover insumo"):
                             def do_del_rec(rid=rec_row['id']):
                                 with database.db_session() as ctx_conn:
                                     product_service.delete_recipe_item(ctx_conn, rid)
+                                product_service.get_product_recipe.clear() # Cache clear on delete too
                             admin_utils.show_confirmation_dialog(
                                 f"Remover '{rec_row['name']}' da receita?",
                                 on_confirm=do_del_rec
@@ -899,13 +901,13 @@ with database.db_session() as conn:
                         v_suggested = v_total_cost * new_markup
                         svc2.metric("Preço Sugerido", f"R$ {v_suggested:.2f}")
                     
-                        v_final_price = svc3.number_input("Preço Final (Venda)", value=float(v_curr_price), step=1.0, key=f"vp_{sel_var['id']}")
-                    
-                        # Helper button for suggested
+                        # Helper button for suggested MUST be before number_input to update session_state
                         if svc2.button("⬇️ Usar Sugerido", key=f"vus_{sel_var['id']}"):
                              st.session_state[f"vp_{sel_var['id']}"] = float(v_suggested)
-                             st.rerun()
+                             # No need to rerun here, the widget below will pick up the new state
 
+                        v_final_price = svc3.number_input("Preço Final (Venda)", value=float(v_curr_price), step=1.0, key=f"vp_{sel_var['id']}")
+                    
                         if svc3.button("💾 Salvar", key=f"vsave_{sel_var['id']}", type="primary", use_container_width=True):
                              base_p = float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0
                              new_adder = v_final_price - base_p
