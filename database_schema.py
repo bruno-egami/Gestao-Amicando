@@ -97,11 +97,16 @@ def _migrate_v4(cursor):
         try: cursor.execute(f"ALTER TABLE classes ADD COLUMN {col} TEXT")
         except sqlite3.OperationalError: pass
 
+def _migrate_v5(cursor):
+    """Migration v5: Rename unit 'L' to 'Litros' in materials."""
+    cursor.execute("UPDATE materials SET unit = 'Litros' WHERE unit = 'L'")
+
 MIGRATIONS = {
     1: _migrate_v1,
     2: _migrate_v2,
     3: _migrate_v3,
-    4: _migrate_v4
+    4: _migrate_v4,
+    5: _migrate_v5
 }
 
 def run_migrations(conn):

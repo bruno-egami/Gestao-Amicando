@@ -156,7 +156,7 @@ with database.db_session() as conn:
                     # Calc Fields
                     c5, c6, c7 = st.columns(3)
                     price = c5.number_input("Preço Unit. (R$)", value=float(target_data.get('price_per_unit', 0.0)), step=0.01)
-                    unit = c6.selectbox("Unidade", ["kg", "L", "unidade", "hora (mão de obra)", "fornada"], index=["kg", "L", "unidade", "hora (mão de obra)", "fornada"].index(target_data.get('unit', 'kg')) if not is_new else 0)
+                    unit = c6.selectbox("Unidade", ["kg", "Litros", "unidade", "hora (mão de obra)", "fornada"], index=["kg", "Litros", "unidade", "hora (mão de obra)", "fornada"].index(target_data.get('unit', 'kg')) if not is_new else 0)
                     
                     # Safe Key Generation
                     safe_id = target_data.get('id', 'new')

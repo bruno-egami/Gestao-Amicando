@@ -453,14 +453,14 @@ with database.db_session() as conn:
                         admin_utils.show_feedback_dialog("Detalhes atualizados!", level="success")
 
             # TABS INTERFACE
-            tab_recipe, tab_variants, tab_comp, tab_pricing, tab_images = st.tabs(["📜 Receita", "🎨 Variações", "📦 Composição (Kit)", "💰 Precificação", "📷 Imagens"])
+            tab_recipe, tab_variants, tab_comp, tab_pricing, tab_images = st.tabs(["📜 Receita Base", "🎨 Esmaltes", "📦 Composição (Kit)", "💰 Precificação", "📷 Imagens"])
 
             # --- TAB 1: RECEITA (INSUMOS) ---
             with tab_recipe:
-                st.caption("Adicione matérias-primas (argila, esmaltes) usadas para criar este produto.")
+                st.caption("Componentes básicos: argilas, mão de obra e queimas.")
                 with st.form("add_ingredient"):
                     c1, c2 = st.columns([3, 1])
-                    materials = product_service.get_materials_list(conn)
+                    materials = product_service.get_materials_for_base_recipe(conn)
                     mat_dict = {f"{row['name']} ({row['unit']}) - R$ {row['price_per_unit']:.2f}": row['id'] for _, row in materials.iterrows()}
                 
                     mat_choice = c1.selectbox("Material/Mão de Obra", [""] + list(mat_dict.keys()))
@@ -494,10 +494,27 @@ with database.db_session() as conn:
 
             # --- TAB VARIANTS: VARIAÇÕES ---
             with tab_variants:
-                st.caption("Gerencie variações deste produto (Ex: Cores, Acabamentos/Esmaltes). O estoque pode ser controlado por variação.")
+                st.caption("Gerencie os esmaltes deste produto. O estoque pode ser controlado por esmalte.")
             
+                # --- AUTO-GENERATION BLOCK ---
+                curr_markup_val = curr_prod['markup'] if curr_prod['markup'] else 2.0
+                with st.expander("⚡ Gerar Esmaltes Automaticamente", expanded=False):
+                    st.info("Cria uma variação para cada esmalte cadastrado na categoria **Esmaltes** que ainda não esteja vinculado a este produto.")
+                    ag_c1, ag_c2 = st.columns(2)
+                    ag_qty_kg = ag_c1.number_input("Qtd padrão (kg)", min_value=0.0, step=0.001, value=0.050, format="%.3f", help="Consumo padrão para esmaltes em pó")
+                    ag_qty_l = ag_c2.number_input("Qtd padrão (Litros)", min_value=0.0, step=0.001, value=0.030, format="%.3f", help="Consumo padrão para esmaltes líquidos")
+                    if st.button("⚡ Gerar Variações", type="primary"):
+                        count = product_service.auto_generate_glaze_variants(conn, selected_prod_id, ag_qty_kg, ag_qty_l, float(curr_markup_val))
+                        if count > 0:
+                            admin_utils.show_feedback_dialog(f"{count} esmalte(s) adicionado(s)!", level="success")
+                            st.rerun()
+                        else:
+                            admin_utils.show_feedback_dialog("Nenhum esmalte novo para adicionar (todos já estão cadastrados ou a categoria 'Esmaltes' está vazia).", level="warning")
+
+                st.markdown("---")
+
                 # Form to Add Variant (Dynamic - No st.form to allow calc)
-                st.markdown("##### ➕ Nova Variação")
+                st.markdown("##### ➕ Novo Esmalte (Manual)")
             
                 # Container for inputs
                 vc_add = st.container(border=True)
@@ -594,7 +611,7 @@ with database.db_session() as conn:
                 # List Variants
                 variants_df = product_service.get_product_variants(conn, selected_prod_id)
                 if not variants_df.empty:
-                    st.write("📋 Variações Cadastradas:")
+                    st.write("📋 Esmaltes Cadastrados:")
                 
                     # Custom Table display
                     for _, var_row in variants_df.iterrows():
@@ -724,117 +741,82 @@ with database.db_session() as conn:
             with tab_pricing:
                 st.subheader("💰 Cálculo de Preço")
             
-                # 1. Calculate Cost (Recipe vs Kit)
-                total_cost = 0.0
+                # ==============================================================
+                # SECTION 1: CUSTO BASE
+                # ==============================================================
+                st.markdown("#### 📜 Custo Base")
+                
+                base_cost = 0.0
                 cost_breakdown = []
             
                 # Check Kit
                 kit_components = product_service.get_pricing_kit_components(conn, selected_prod_id)
             
                 if not kit_components.empty:
-                    st.info("ℹ️ Custo baseado na soma dos produtos componentes (Kit).")
+                    st.caption("Custo baseado nos produtos componentes (Kit).")
                     for _, row in kit_components.iterrows():
                         subtotal = row['quantity'] * row['base_price']
-                        total_cost += subtotal
+                        base_cost += subtotal
                         cost_breakdown.append({"Item": row['name'], "Qtd": row['quantity'], "Unit": f"R$ {row['base_price']:.2f}", "Total": f"R$ {subtotal:.2f}"})
                 else:
                     # Check Recipe
                     recipe_items = product_service.get_pricing_recipe_items(conn, selected_prod_id)
                 
                     if not recipe_items.empty:
-                        st.info("ℹ️ Custo baseado na receita de insumos.")
+                        st.caption("Custo baseado na receita de insumos (sem esmaltes).")
                         for _, row in recipe_items.iterrows():
-                            # Simple calc (assuming price is per unit matching recipe unit)
                             subtotal = row['quantity'] * row['price_per_unit']
-                            total_cost += subtotal
+                            base_cost += subtotal
                             cost_breakdown.append({"Item": row['name'], "Qtd": f"{row['quantity']} {row['unit']}", "Unit": f"R$ {row['price_per_unit']:.2f}", "Total": f"R$ {subtotal:.2f}"})
                     else:
-                        st.warning("⚠️ Sem receita ou composição definida. Custo calculado é zero.")
+                        st.warning("⚠️ Sem receita ou composição definida. Custo base é zero.")
             
-                # Show Breakdown
                 if cost_breakdown:
-                    with st.expander("Ver Detalhes do Custo"):
-                        st.dataframe(pd.DataFrame(cost_breakdown))
-            
-                col_cost, col_markup, col_sug, col_final = st.columns(4)
-            
-                col_cost.metric("Custo Total", f"R$ {total_cost:.2f}")
-            
-                # Markup
-                curr_markup = curr_prod['markup'] if curr_prod['markup'] else 2.0
-                new_markup = col_markup.number_input("Markup (Mult.)", value=float(curr_markup), step=0.1)
-            
-                # Suggested
-                suggested = total_cost * new_markup
-                col_sug.metric("Preço Sugerido", f"R$ {suggested:.2f}")
+                    st.dataframe(pd.DataFrame(cost_breakdown), hide_index=True, use_container_width=True)
+                
+                st.metric("Subtotal Base", f"R$ {base_cost:.2f}")
 
-                # Helper to apply suggestion (Top)
-                if col_sug.button("⬇️ Usar Sugerido", help="Preenche o Preço Final com o valor sugerido"):
-                    st.session_state[f"final_price_{selected_prod_id}"] = float(suggested)
-                    st.rerun()
-
-                # Final Price Input (Top)
-                curr_price = float(curr_prod['base_price']) if (curr_prod['base_price'] is not None and curr_prod['base_price'] != '') else 0.0
-            
-                # Logic: Default to DB value. If 0, default to Suggested.
-                default_val = curr_price if curr_price > 0.01 else suggested
-            
-                # Use 'key' to allow programmatic setting
-                if f"final_price_{selected_prod_id}" not in st.session_state:
-                    st.session_state[f"final_price_{selected_prod_id}"] = float(default_val)
-            
-                new_price = col_final.number_input("Preço Final (Venda)", step=1.0, key=f"final_price_{selected_prod_id}")
-            
-                # Save Button (Top)
-                if col_final.button("💾 Salvar", type="primary", use_container_width=True, help="Salvar Preço Base e Markup"):
-                    product_service.save_product_pricing(conn, selected_prod_id, new_markup, new_price)
-                    product_service.get_all_products.clear()
-                    admin_utils.show_feedback_dialog("Preço Base Salvo!", level="success")
-            
-                # 2. Variation Cost Analysis (NEW)
+                # ==============================================================
+                # SECTION 2: MARKUP & PREÇO FINAL
+                # ==============================================================
                 st.divider()
-                st.markdown("#### 📊 Análise de Custos por Variação")
-            
-                # Fetch variants
+                st.markdown("#### 💰 Markup & Preços Finais")
+
+                # Markup Input
+                curr_markup = curr_prod['markup'] if curr_prod['markup'] else 2.0
+                new_markup = st.number_input("Markup (Multiplicador)", value=float(curr_markup), step=0.1, help="Aplicado sobre (Custo Base + Custo Esmalte)")
+
+                # Fetch variants for analysis
                 vars_analysis = product_service.get_product_variants(conn, selected_prod_id)
-            
+
                 if not vars_analysis.empty:
+                    st.markdown("##### 🎨 Preço por Esmalte")
+
                     analysis_data = []
                     for _, v_row in vars_analysis.iterrows():
-                        # Calculate Extra Cost
-                        extra_cost = 0.0
-                        mat_info = ""
-                    
+                        # Calculate glaze cost
+                        glaze_cost = 0.0
                         if v_row['material_id'] and v_row['material_quantity']:
-                            # Fetch material price
                             try:
-                                # Optimization: Could cache materials price, but single query per row is acceptable for small scale
                                 mat_p = product_service.get_material_price(conn, v_row['material_id']).iloc[0]
-                                extra_cost = v_row['material_quantity'] * mat_p['price_per_unit']
-                                mat_info = f"{v_row['material_name']} ({v_row['material_quantity']} {mat_p['unit']})"
+                                glaze_cost = v_row['material_quantity'] * mat_p['price_per_unit']
                             except Exception:
                                 pass
-                            
-                        total_var_cost = total_cost + extra_cost
-                    
-                        # Ideal Price (Cost * Markup)
-                        curr_markup = curr_prod['markup'] if curr_prod['markup'] else 2.0
-                        ideal_price = total_var_cost * curr_markup
-                    
+                        
+                        total_cost = base_cost + glaze_cost
+                        ideal_price = total_cost * new_markup
+                        
                         # Current Price (Base Price + Adder)
                         base_p = float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0
                         current_final_price = base_p + v_row['price_adder']
-                    
-                        diff = current_final_price - ideal_price
-                    
+
                         analysis_data.append({
-                            "id": v_row['id'], # For updates
-                            "Variação": v_row['variant_name'],
-                            "Custo Extra": extra_cost,
-                            "Custo Total": total_var_cost,
-                            "Preço Ideal (Markup)": ideal_price,
+                            "id": v_row['id'],
+                            "Esmalte": v_row['variant_name'],
+                            "Custo Esmalte": glaze_cost,
+                            "Custo Total": total_cost,
+                            "Preço Sugerido": ideal_price,
                             "Preço Atual": current_final_price,
-                            "Diferença": diff
                         })
                 
                     df_analysis = pd.DataFrame(analysis_data)
@@ -842,24 +824,39 @@ with database.db_session() as conn:
                     st.dataframe(
                         df_analysis,
                         column_config={
-                            "id": None, # Hide ID
-                            "Variação": st.column_config.TextColumn(disabled=True),
-                            "Custo Extra": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
-                            "Custo Total": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
-                            "Preço Ideal (Markup)": st.column_config.NumberColumn(format="R$ %.2f", disabled=True, help="Custo Total x Markup do Produto"),
+                            "id": None,
+                            "Esmalte": st.column_config.TextColumn(disabled=True),
+                            "Custo Esmalte": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+                            "Custo Total": st.column_config.NumberColumn(format="R$ %.2f", disabled=True, help="Base + Esmalte"),
+                            "Preço Sugerido": st.column_config.NumberColumn(format="R$ %.2f", disabled=True, help="Custo Total × Markup"),
                             "Preço Atual": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
-                            "Diferença": st.column_config.NumberColumn(format="R$ %.2f", disabled=True)
                         },
                         hide_index=True,
                         use_container_width=True
                     )
                 
+                    # --- Quick Actions ---
+                    ac1, ac2 = st.columns(2)
+                    
+                    # Apply Suggested to All
+                    if ac1.button("⬇️ Aplicar Sugerido a Todos", use_container_width=True, help="Define o preço de cada esmalte como (Custo Total × Markup)"):
+                        base_p = float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0
+                        for _, ad in pd.DataFrame(analysis_data).iterrows():
+                            new_adder = ad['Preço Sugerido'] - base_p
+                            if new_adder < 0: new_adder = 0
+                            product_service.update_variant_price(conn, int(ad['id']), new_adder)
+                        # Also save base price as suggested for the first variant (or base_cost * markup)
+                        product_service.save_product_pricing(conn, selected_prod_id, new_markup, base_cost * new_markup)
+                        product_service.get_all_products.clear()
+                        admin_utils.show_feedback_dialog("Preços atualizados para todos os esmaltes!", level="success")
+                        st.rerun()
+
+                    # --- Individual Edit ---
                     st.divider()
-                    st.markdown("#### 🛠️ Personalizar Preço por Variação")
+                    st.markdown("##### 🛠️ Editar Preço Individual")
                 
-                    # Select Variant to Edit
                     var_opts = {r['variant_name']: r for _, r in vars_analysis.iterrows()}
-                    sel_var_name = st.selectbox("Selecione a Variação", list(var_opts.keys()))
+                    sel_var_name = st.selectbox("Selecione o Esmalte", list(var_opts.keys()))
                 
                     if sel_var_name:
                         sel_var = var_opts[sel_var_name]
@@ -872,35 +869,23 @@ with database.db_session() as conn:
                                  v_mat_price = mp * sel_var['material_quantity']
                              except Exception as e: logger.warning(f"Erro ao buscar preço do material da variação: {e}")
                     
-                        v_total_cost = total_cost + v_mat_price
+                        v_total_cost = base_cost + v_mat_price
                         v_curr_price = (float(curr_prod['base_price']) if curr_prod['base_price'] else 0) + sel_var['price_adder']
                     
-                        # Layout similar to Base Cost
-                        svc1, svc2, svc3, svc4 = st.columns(4)
+                        svc1, svc2, svc3 = st.columns(3)
                     
-                        svc1.metric("Custo Total (Base + Var)", f"R$ {v_total_cost:.2f}")
+                        svc1.metric("Custo Total (Base + Esmalte)", f"R$ {v_total_cost:.2f}")
+                        v_suggested = v_total_cost * new_markup
+                        svc2.metric("Preço Sugerido", f"R$ {v_suggested:.2f}")
                     
-                        # Infer current markup logic
-                        v_current_markup = v_curr_price / v_total_cost if v_total_cost > 0 else 0
-                    
-                        # Markup Input
-                        v_new_markup = svc2.number_input("Markup Variação", value=float(v_current_markup) if v_current_markup > 0 else float(curr_markup), step=0.1, key=f"vm_{sel_var['id']}")
-                    
-                        # Suggested
-                        v_suggested = v_total_cost * v_new_markup
-                        svc3.metric("Preço Sugerido", f"R$ {v_suggested:.2f}")
-                    
-                        # Final Price Input
-                        v_final_price = svc4.number_input("Preço Final (Venda)", value=float(v_curr_price), step=1.0, key=f"vp_{sel_var['id']}")
+                        v_final_price = svc3.number_input("Preço Final (Venda)", value=float(v_curr_price), step=1.0, key=f"vp_{sel_var['id']}")
                     
                         # Helper button for suggested
-                        if svc3.button("⬇️ Usar Sugerido", key=f"vus_{sel_var['id']}"):
+                        if svc2.button("⬇️ Usar Sugerido", key=f"vus_{sel_var['id']}"):
                              st.session_state[f"vp_{sel_var['id']}"] = float(v_suggested)
                              st.rerun()
 
-                        # Save Button moved to col 4
-                        if svc4.button("💾 Salvar", key=f"vsave_{sel_var['id']}", type="primary", use_container_width=True):
-                             # Calculate new Adder
+                        if svc3.button("💾 Salvar", key=f"vsave_{sel_var['id']}", type="primary", use_container_width=True):
                              base_p = float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0
                              new_adder = v_final_price - base_p
                              if new_adder < 0: new_adder = 0
@@ -908,7 +893,35 @@ with database.db_session() as conn:
                              product_service.update_variant_price(conn, sel_var['id'], new_adder)
                              admin_utils.show_feedback_dialog(f"Preço de '{sel_var_name}' atualizado!", level="success")
                 else:
-                    st.info("Nenhuma variação para analisar.")
+                    # No variants - simple pricing
+                    st.caption("Sem esmaltes cadastrados. Preço calculado apenas com a receita base.")
+                    
+                    col_sug, col_final = st.columns(2)
+                    suggested = base_cost * new_markup
+                    col_sug.metric("Preço Sugerido", f"R$ {suggested:.2f}")
+                    
+                    curr_price = float(curr_prod['base_price']) if (curr_prod['base_price'] is not None and curr_prod['base_price'] != '') else 0.0
+                    default_val = curr_price if curr_price > 0.01 else suggested
+                    
+                    if f"final_price_{selected_prod_id}" not in st.session_state:
+                        st.session_state[f"final_price_{selected_prod_id}"] = float(default_val)
+                    
+                    new_price = col_final.number_input("Preço Final (Venda)", step=1.0, key=f"final_price_{selected_prod_id}")
+                    
+                    if col_sug.button("⬇️ Usar Sugerido"):
+                        st.session_state[f"final_price_{selected_prod_id}"] = float(suggested)
+                        st.rerun()
+
+                    if col_final.button("💾 Salvar", type="primary", use_container_width=True):
+                        product_service.save_product_pricing(conn, selected_prod_id, new_markup, new_price)
+                        product_service.get_all_products.clear()
+                        admin_utils.show_feedback_dialog("Preço Base Salvo!", level="success")
+
+                # Save Markup (always, regardless of variants)
+                if st.button("💾 Salvar Markup", help="Salvar apenas o multiplicador de markup"):
+                    product_service.save_product_pricing(conn, selected_prod_id, new_markup, float(curr_prod['base_price']) if curr_prod['base_price'] else 0.0)
+                    product_service.get_all_products.clear()
+                    admin_utils.show_feedback_dialog("Markup salvo!", level="success")
 
             st.markdown("---")
             with st.expander("🚫 Zona de Perigo"):

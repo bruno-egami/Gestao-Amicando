@@ -684,11 +684,71 @@ def get_materials_list(conn):
     return pd.read_sql("SELECT id, name, unit, price_per_unit FROM materials ORDER BY name", conn)
 
 
+def get_materials_for_base_recipe(conn):
+    """Returns materials excluding the 'Esmaltes' category, for the base recipe tab."""
+    return pd.read_sql("""
+        SELECT m.id, m.name, m.unit, m.price_per_unit
+        FROM materials m
+        LEFT JOIN material_categories mc ON m.category_id = mc.id
+        WHERE (mc.name IS NULL OR mc.name != 'Esmaltes')
+        ORDER BY m.name
+    """, conn)
+
+
 def get_materials_for_variants(conn):
-    """Returns materials excluding labor type for variant dropdowns."""
-    return pd.read_sql(
-        "SELECT id, name, unit, price_per_unit FROM materials WHERE type != 'Mão de Obra' ORDER BY name", conn
+    """Returns only materials in the 'Esmaltes' category for the glaze/variant tab."""
+    return pd.read_sql("""
+        SELECT m.id, m.name, m.unit, m.price_per_unit
+        FROM materials m
+        LEFT JOIN material_categories mc ON m.category_id = mc.id
+        WHERE mc.name = 'Esmaltes'
+        ORDER BY m.name
+    """, conn)
+
+
+def auto_generate_glaze_variants(conn, product_id, qty_kg, qty_litros, markup):
+    """
+    Auto-generates product variants from all materials in the 'Esmaltes' category.
+    Uses qty_kg for kg-based glazes and qty_litros for Litros-based glazes.
+    Skips glazes that already have a variant linked to this product.
+    Returns count of variants created.
+    """
+    glazes = get_materials_for_variants(conn)
+    if glazes.empty:
+        return 0
+
+    # Get existing variant material_ids for this product
+    existing = pd.read_sql(
+        "SELECT material_id FROM product_variants WHERE product_id = ? AND material_id IS NOT NULL",
+        conn, params=(int(product_id),)
     )
+    existing_mat_ids = set(existing['material_id'].tolist()) if not existing.empty else set()
+
+    created = 0
+    for _, glaze in glazes.iterrows():
+        if glaze['id'] in existing_mat_ids:
+            continue
+
+        # Determine quantity based on unit
+        if glaze['unit'] == 'kg':
+            qty = qty_kg
+        else:
+            qty = qty_litros
+
+        if qty <= 0:
+            continue
+
+        # Calculate price adder
+        price_adder = glaze['price_per_unit'] * qty * markup
+
+        success = create_variant(
+            conn, product_id, glaze['name'], 0, price_adder,
+            material_id=glaze['id'], material_quantity=qty
+        )
+        if success:
+            created += 1
+
+    return created
 
 
 def add_recipe_item(conn, product_id, material_id, quantity):
