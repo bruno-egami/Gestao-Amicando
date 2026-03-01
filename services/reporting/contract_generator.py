@@ -148,7 +148,7 @@ def generate_student_contract_pdf(student_data):
         pdf.ln(5)
 
     # CLÁUSULA 1ª
-    c1_txt = "O presente contrato tem como objeto a prestação de serviços de aulas de cerâmica (o \"Serviço\"), a serem realizadas pela CONTRATADA em favor da CONTRATANTE, visando o aprendizado prático e teórico da arte cerâmica."
+    c1_txt = "O presente contrato tem como objeto a prestação de serviços de aulas de cerâmica, a serem realizadas pela CONTRATADA em favor da CONTRATANTE, visando o aprendizado prático e teórico da arte cerâmica."
     print_clause(1, c1_txt)
 
     # CLÁUSULA 2ª
