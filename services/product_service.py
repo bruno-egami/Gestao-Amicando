@@ -685,23 +685,23 @@ def get_materials_list(conn):
 
 
 def get_materials_for_base_recipe(conn):
-    """Returns materials excluding the 'Esmaltes' category, for the base recipe tab."""
+    """Returns materials excluding the 'Esmalte(s)' category, for the base recipe tab."""
     return pd.read_sql("""
         SELECT m.id, m.name, m.unit, m.price_per_unit
         FROM materials m
         LEFT JOIN material_categories mc ON m.category_id = mc.id
-        WHERE (mc.name IS NULL OR mc.name != 'Esmaltes')
+        WHERE (mc.name IS NULL OR mc.name NOT LIKE 'Esmalte%')
         ORDER BY m.name
     """, conn)
 
 
 def get_materials_for_variants(conn):
-    """Returns only materials in the 'Esmaltes' category for the glaze/variant tab."""
+    """Returns only materials in the 'Esmalte(s)' category for the glaze/variant tab."""
     return pd.read_sql("""
         SELECT m.id, m.name, m.unit, m.price_per_unit
         FROM materials m
         LEFT JOIN material_categories mc ON m.category_id = mc.id
-        WHERE mc.name = 'Esmaltes'
+        WHERE mc.name LIKE 'Esmalte%'
         ORDER BY m.name
     """, conn)
 
