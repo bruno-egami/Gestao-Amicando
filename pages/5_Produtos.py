@@ -475,21 +475,29 @@ with database.db_session() as conn:
                             product_service.add_recipe_item(conn, selected_prod_id, mat_id, qty_needed)
                             st.rerun()
 
-                # List Ingredients
+                # List Ingredients (Editable)
                 current_recipe = product_service.get_product_recipe(conn, selected_prod_id)
             
                 if not current_recipe.empty:
-                    st.dataframe(current_recipe, hide_index=True, use_container_width=True)
-                    # Remove
-                    del_id = st.selectbox("Remover Insumo ID", [""] + current_recipe['id'].astype(str).tolist())
-                    if st.button("🗑️ Remover Insumo selecionado", use_container_width=True):
-                        if del_id:
-                            def do_del_rec(rid=del_id):
+                    st.markdown("##### 📋 Insumos da Receita")
+                    for _, rec_row in current_recipe.iterrows():
+                        rec_c1, rec_c2, rec_c3, rec_c4 = st.columns([3, 1.5, 0.8, 0.8])
+                        rec_c1.text(f"{rec_row['name']} ({rec_row['unit']} — R$ {rec_row['price_per_unit']:.2f})")
+                        new_qty = rec_c2.number_input(
+                            "Qtd", value=float(rec_row['quantity']), min_value=0.001, step=0.001, format="%.3f",
+                            key=f"rec_qty_{rec_row['id']}", label_visibility="collapsed"
+                        )
+                        if rec_c3.button("💾", key=f"rec_save_{rec_row['id']}", help="Salvar quantidade"):
+                            if abs(new_qty - rec_row['quantity']) > 0.0001:
+                                product_service.update_recipe_item_quantity(conn, rec_row['id'], new_qty)
+                                admin_utils.show_feedback_dialog(f"Quantidade de '{rec_row['name']}' atualizada!", level="success")
+                                st.rerun()
+                        if rec_c4.button("🗑️", key=f"rec_del_{rec_row['id']}", help="Remover insumo"):
+                            def do_del_rec(rid=rec_row['id']):
                                 with database.db_session() as ctx_conn:
                                     product_service.delete_recipe_item(ctx_conn, rid)
-                        
                             admin_utils.show_confirmation_dialog(
-                                "Remover este insumo da receita do produto?",
+                                f"Remover '{rec_row['name']}' da receita?",
                                 on_confirm=do_del_rec
                             )
                 else:
@@ -507,12 +515,15 @@ with database.db_session() as conn:
                     ag_qty_kg = ag_c1.number_input("Qtd padrão (kg)", min_value=0.0, step=0.001, value=0.050, format="%.3f", help="Consumo padrão para esmaltes em pó")
                     ag_qty_l = ag_c2.number_input("Qtd padrão (Litros)", min_value=0.0, step=0.001, value=0.030, format="%.3f", help="Consumo padrão para esmaltes líquidos")
                     if st.button("⚡ Gerar Variações", type="primary"):
-                        count = product_service.auto_generate_glaze_variants(conn, selected_prod_id, ag_qty_kg, ag_qty_l, float(curr_markup_val))
-                        if count > 0:
-                            admin_utils.show_feedback_dialog(f"{count} esmalte(s) adicionado(s)!", level="success")
+                        created, updated = product_service.auto_generate_glaze_variants(conn, selected_prod_id, ag_qty_kg, ag_qty_l, float(curr_markup_val))
+                        if created > 0 or updated > 0:
+                            msg_parts = []
+                            if created > 0: msg_parts.append(f"{created} novo(s)")
+                            if updated > 0: msg_parts.append(f"{updated} atualizado(s)")
+                            admin_utils.show_feedback_dialog(f"Esmaltes: {', '.join(msg_parts)}!", level="success")
                             st.rerun()
                         else:
-                            admin_utils.show_feedback_dialog("Nenhum esmalte novo para adicionar (todos já estão cadastrados ou a categoria 'Esmaltes' está vazia).", level="warning")
+                            admin_utils.show_feedback_dialog("Nenhum esmalte para adicionar ou atualizar (categoria 'Esmalte' vazia).", level="warning")
 
                 st.markdown("---")
 

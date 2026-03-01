@@ -710,25 +710,26 @@ def auto_generate_glaze_variants(conn, product_id, qty_kg, qty_litros, markup):
     """
     Auto-generates product variants from all materials in the 'Esmaltes' category.
     Uses qty_kg for kg-based glazes and qty_litros for Litros-based glazes.
-    Skips glazes that already have a variant linked to this product.
-    Returns count of variants created.
+    Creates new variants or updates quantities for existing ones.
+    Returns tuple (created, updated).
     """
     glazes = get_materials_for_variants(conn)
     if glazes.empty:
-        return 0
+        return 0, 0
 
     # Get existing variant material_ids for this product
     existing = pd.read_sql(
-        "SELECT material_id FROM product_variants WHERE product_id = ? AND material_id IS NOT NULL",
+        "SELECT id, material_id, material_quantity FROM product_variants WHERE product_id = ? AND material_id IS NOT NULL",
         conn, params=(int(product_id),)
     )
-    existing_mat_ids = set(existing['material_id'].tolist()) if not existing.empty else set()
+    existing_map = {}
+    if not existing.empty:
+        for _, row in existing.iterrows():
+            existing_map[row['material_id']] = row
 
     created = 0
+    updated = 0
     for _, glaze in glazes.iterrows():
-        if glaze['id'] in existing_mat_ids:
-            continue
-
         # Determine quantity based on unit
         if glaze['unit'] == 'kg':
             qty = qty_kg
@@ -741,14 +742,29 @@ def auto_generate_glaze_variants(conn, product_id, qty_kg, qty_litros, markup):
         # Calculate price adder
         price_adder = glaze['price_per_unit'] * qty * markup
 
-        success = create_variant(
-            conn, product_id, glaze['name'], 0, price_adder,
-            material_id=glaze['id'], material_quantity=qty
-        )
-        if success:
-            created += 1
+        if glaze['id'] in existing_map:
+            # Update existing variant quantity and price
+            existing_var = existing_map[glaze['id']]
+            try:
+                with safe_transaction(conn):
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE product_variants SET material_quantity = ?, price_adder = ? WHERE id = ?",
+                        (qty, price_adder, int(existing_var['id']))
+                    )
+                updated += 1
+            except Exception as e:
+                log_exception(logger, f"Error updating variant {existing_var['id']}", e)
+        else:
+            # Create new variant
+            success = create_variant(
+                conn, product_id, glaze['name'], 0, price_adder,
+                material_id=glaze['id'], material_quantity=qty
+            )
+            if success:
+                created += 1
 
-    return created
+    return created, updated
 
 
 def add_recipe_item(conn, product_id, material_id, quantity):
@@ -785,6 +801,18 @@ def delete_recipe_item(conn, recipe_id):
         return True
     except Exception as e:
         log_exception(logger, f"Error deleting recipe item {recipe_id}", e)
+        raise
+
+
+def update_recipe_item_quantity(conn, recipe_id, new_quantity):
+    """Updates the quantity of a recipe item."""
+    try:
+        with safe_transaction(conn):
+            cursor = conn.cursor()
+            cursor.execute("UPDATE product_recipes SET quantity = ? WHERE id = ?", (new_quantity, int(recipe_id)))
+        return True
+    except Exception as e:
+        log_exception(logger, f"Error updating recipe item {recipe_id}", e)
         raise
 
 
