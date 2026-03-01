@@ -38,13 +38,16 @@ def render_catalog(conn, products_df):
                             # Variant Logic (Visual Badges)
                             vars_df = product_service.get_product_variants(conn, product.id)
                             if not vars_df.empty:
-                                st.markdown("<div style='margin-top: 5px; margin-bottom: 5px; font-size: 0.8em; color: #aaa;'>Variações:</div>", unsafe_allow_html=True)
-                                badges = ""
-                                for _, vr in vars_df.iterrows():
-                                    s_qty = vr['stock_quantity']
-                                    s_color = "#66ff66" if s_qty > 0 else "#ff6666"
-                                    badges += f"<div style='display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; margin-bottom: 2px; align-items: center; font-size: 0.8em;'><span style='color: #e0e0e0;'>{vr['variant_name']}</span><span style='font-weight: bold; color: {s_color}; font-family: monospace;'>{s_qty}</span></div>"
-                                st.markdown(badges, unsafe_allow_html=True)
+                                vars_in_stock = vars_df[vars_df['stock_quantity'] > 0]
+                                if not vars_in_stock.empty:
+                                    st.markdown("<div style='margin-top: 5px; margin-bottom: 5px; font-size: 0.8em; color: #aaa;'>Esmaltes em Estoque:</div>", unsafe_allow_html=True)
+                                    badges = ""
+                                    for _, vr in vars_in_stock.iterrows():
+                                        s_qty = vr['stock_quantity']
+                                        badges += f"<div style='display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; margin-bottom: 2px; align-items: center; font-size: 0.8em;'><span style='color: #e0e0e0;'>{vr['variant_name']}</span><span style='font-weight: bold; color: #66ff66; font-family: monospace;'>{s_qty}</span></div>"
+                                    st.markdown(badges, unsafe_allow_html=True)
+                                else:
+                                    st.caption(f"🎨 {len(vars_df)} esmaltes — sem estoque")
 
                             stock_txt = f"📦 Kit: {display_stock}" if is_kit else f"Est. Base: {product.stock_quantity}"
                             st.caption(f"ID: {product.id} | {stock_txt}")
